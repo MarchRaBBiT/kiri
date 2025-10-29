@@ -63,9 +63,10 @@ describe("snippets.get", () => {
     const snippet = await snippetsGet(context, { path: "src/main.ts", start_line: 5 });
     expect(snippet.path).toBe("src/main.ts");
     expect(snippet.startLine).toBe(5);
-    expect(snippet.endLine).toBeGreaterThanOrEqual(5);
-    expect(snippet.endLine).toBeLessThanOrEqual(snippet.totalLines);
-    expect(snippet.content.split("\n")[0]).toContain("beta");
+    expect(snippet.endLine).toBe(7);
+    expect(snippet.content.split("\n").length).toBe(3);
+    expect(snippet.symbolName).toBe("beta");
+    expect(snippet.symbolKind).toBe("function");
   });
 
   it("respects explicit start and end lines", async () => {
@@ -95,5 +96,7 @@ describe("snippets.get", () => {
     expect(snippet.endLine).toBe(3);
     expect(snippet.content).toContain("second");
     expect(snippet.content).toContain("third");
+    expect(snippet.symbolName).toBeNull();
+    expect(snippet.symbolKind).toBeNull();
   });
 });

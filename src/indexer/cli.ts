@@ -7,6 +7,7 @@ import { detectLanguage } from "./language";
 import { ensureBaseSchema } from "./schema";
 import { getDefaultBranch, getHeadCommit, gitLsFiles } from "./git";
 import { DuckDBClient } from "../shared/duckdb";
+import { analyzeSource, buildFallbackSnippet } from "./codeintel";
 
 interface IndexerOptions {
   repoRoot: string;
@@ -29,6 +30,32 @@ interface FileRecord {
   lang: string | null;
   isBinary: boolean;
   mtimeIso: string;
+}
+
+interface SymbolRow {
+  path: string;
+  symbolId: number;
+  name: string;
+  kind: string;
+  rangeStartLine: number;
+  rangeEndLine: number;
+  signature: string | null;
+  doc: string | null;
+}
+
+interface SnippetRow {
+  path: string;
+  snippetId: number;
+  startLine: number;
+  endLine: number;
+  symbolId: number | null;
+}
+
+interface DependencyRow {
+  srcPath: string;
+  dstKind: string;
+  dst: string;
+  rel: string;
 }
 
 const MAX_SAMPLE_BYTES = 32_768;
@@ -158,6 +185,160 @@ async function persistFiles(
   await db.run(sql, params);
 }
 
+async function persistSymbols(
+  db: DuckDBClient,
+  repoId: number,
+  records: SymbolRow[]
+): Promise<void> {
+  if (records.length === 0) return;
+
+  const placeholders = records.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
+  const sql = `
+    INSERT OR REPLACE INTO symbol (
+      repo_id, path, symbol_id, name, kind, range_start_line, range_end_line, signature, doc
+    ) VALUES ${placeholders}
+  `;
+
+  const params: unknown[] = [];
+  for (const record of records) {
+    params.push(
+      repoId,
+      record.path,
+      record.symbolId,
+      record.name,
+      record.kind,
+      record.rangeStartLine,
+      record.rangeEndLine,
+      record.signature,
+      record.doc,
+    );
+  }
+
+  await db.run(sql, params);
+}
+
+async function persistSnippets(
+  db: DuckDBClient,
+  repoId: number,
+  records: SnippetRow[]
+): Promise<void> {
+  if (records.length === 0) return;
+
+  const placeholders = records.map(() => "(?, ?, ?, ?, ?, ?)").join(", ");
+  const sql = `
+    INSERT OR REPLACE INTO snippet (
+      repo_id, path, snippet_id, start_line, end_line, symbol_id
+    ) VALUES ${placeholders}
+  `;
+
+  const params: unknown[] = [];
+  for (const record of records) {
+    params.push(
+      repoId,
+      record.path,
+      record.snippetId,
+      record.startLine,
+      record.endLine,
+      record.symbolId,
+    );
+  }
+
+  await db.run(sql, params);
+}
+
+async function persistDependencies(
+  db: DuckDBClient,
+  repoId: number,
+  records: DependencyRow[]
+): Promise<void> {
+  if (records.length === 0) return;
+
+  const placeholders = records.map(() => "(?, ?, ?, ?, ?)").join(", ");
+  const sql = `
+    INSERT OR REPLACE INTO dependency (
+      repo_id, src_path, dst_kind, dst, rel
+    ) VALUES ${placeholders}
+  `;
+
+  const params: unknown[] = [];
+  for (const record of records) {
+    params.push(repoId, record.srcPath, record.dstKind, record.dst, record.rel);
+  }
+
+  await db.run(sql, params);
+}
+
+function buildCodeIntel(
+  files: FileRecord[],
+  blobs: Map<string, BlobRecord>
+): { symbols: SymbolRow[]; snippets: SnippetRow[]; dependencies: DependencyRow[] } {
+  const fileSet = new Set<string>(files.map((file) => file.path));
+  const symbols: SymbolRow[] = [];
+  const snippets: SnippetRow[] = [];
+  const dependencies = new Map<string, DependencyRow>();
+
+  for (const file of files) {
+    if (file.isBinary) {
+      continue;
+    }
+
+    const blob = blobs.get(file.blobHash);
+    if (!blob || blob.content === null) {
+      continue;
+    }
+
+    const analysis = analyzeSource(file.path, file.lang, blob.content, fileSet);
+
+    for (const symbol of analysis.symbols) {
+      symbols.push({
+        path: file.path,
+        symbolId: symbol.symbolId,
+        name: symbol.name,
+        kind: symbol.kind,
+        rangeStartLine: symbol.rangeStartLine,
+        rangeEndLine: symbol.rangeEndLine,
+        signature: symbol.signature,
+        doc: symbol.doc,
+      });
+    }
+
+    if (analysis.snippets.length > 0) {
+      analysis.snippets.forEach((snippet, index) => {
+        snippets.push({
+          path: file.path,
+          snippetId: index + 1,
+          startLine: snippet.startLine,
+          endLine: snippet.endLine,
+          symbolId: snippet.symbolId,
+        });
+      });
+    } else if (blob.lineCount !== null) {
+      const fallback = buildFallbackSnippet(blob.lineCount);
+      snippets.push({
+        path: file.path,
+        snippetId: 1,
+        startLine: fallback.startLine,
+        endLine: fallback.endLine,
+        symbolId: fallback.symbolId,
+      });
+    }
+
+    for (const dependency of analysis.dependencies) {
+      const key = `${file.path}::${dependency.dstKind}::${dependency.dst}::${dependency.rel}`;
+      if (!dependencies.has(key)) {
+        dependencies.set(key, {
+          srcPath: file.path,
+          dstKind: dependency.dstKind,
+          dst: dependency.dst,
+          rel: dependency.rel,
+        });
+      }
+    }
+  }
+
+  return { symbols, snippets, dependencies: Array.from(dependencies.values()) };
+}
+
 async function scanFiles(
   repoRoot: string,
   paths: string[]
@@ -238,6 +419,7 @@ export async function runIndexer(options: IndexerOptions): Promise<void> {
   ]);
 
   const { blobs, files } = await scanFiles(repoRoot, paths);
+  const codeIntel = buildCodeIntel(files, blobs);
 
   const db = await DuckDBClient.connect({ databasePath, ensureDirectory: true });
   try {
@@ -246,9 +428,15 @@ export async function runIndexer(options: IndexerOptions): Promise<void> {
     await db.transaction(async () => {
       await db.run("DELETE FROM tree WHERE repo_id = ?", [repoId]);
       await db.run("DELETE FROM file WHERE repo_id = ?", [repoId]);
+      await db.run("DELETE FROM symbol WHERE repo_id = ?", [repoId]);
+      await db.run("DELETE FROM snippet WHERE repo_id = ?", [repoId]);
+      await db.run("DELETE FROM dependency WHERE repo_id = ?", [repoId]);
       await persistBlobs(db, blobs);
       await persistTrees(db, repoId, headCommit, files);
       await persistFiles(db, repoId, files);
+      await persistSymbols(db, repoId, codeIntel.symbols);
+      await persistSnippets(db, repoId, codeIntel.snippets);
+      await persistDependencies(db, repoId, codeIntel.dependencies);
 
       // Update timestamp inside transaction to ensure atomicity
       if (defaultBranch) {

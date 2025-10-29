@@ -22,7 +22,18 @@ describe("runIndexer", () => {
 
   it("indexes tracked files into DuckDB", async () => {
     const repo = await createTempRepo({
-      "src/main.ts": "export const answer = 42;\n",
+      "src/main.ts": [
+        "import { helper } from './util';",
+        "",
+        "export function answer() {",
+        "  return helper();",
+        "}",
+      ].join("\n"),
+      "src/util.ts": [
+        "export function helper() {",
+        "  return 'util';",
+        "}",
+      ].join("\n"),
       "README.md": "# Sample\n\nThis is a repo.\n",
     });
     cleanupTargets.push({ dispose: repo.cleanup });
@@ -45,8 +56,8 @@ describe("runIndexer", () => {
       "SELECT path, is_binary FROM file WHERE repo_id = ? ORDER BY path",
       [repoId]
     );
-    expect(fileRows).toHaveLength(2);
-    expect(fileRows.map((row) => row.path)).toEqual(["README.md", "src/main.ts"]);
+    expect(fileRows).toHaveLength(3);
+    expect(fileRows.map((row) => row.path)).toEqual(["README.md", "src/main.ts", "src/util.ts"]);
     expect(fileRows.every((row) => row.is_binary === false)).toBe(true);
 
     const blobRows = await db.all<{ hash: string; content: string | null }>(
@@ -54,5 +65,83 @@ describe("runIndexer", () => {
     );
     expect(blobRows.length).toBeGreaterThanOrEqual(2);
     expect(blobRows.every((row) => row.content !== null)).toBe(true);
+
+    const symbolRows = await db.all<{
+      path: string;
+      name: string;
+      kind: string;
+      range_start_line: number;
+      range_end_line: number;
+    }>(
+      `
+        SELECT path, name, kind, range_start_line, range_end_line
+        FROM symbol
+        WHERE repo_id = ?
+        ORDER BY path, symbol_id
+      `,
+      [repoId]
+    );
+    expect(symbolRows).toEqual([
+      {
+        path: "src/main.ts",
+        name: "answer",
+        kind: "function",
+        range_start_line: 3,
+        range_end_line: 5,
+      },
+      {
+        path: "src/util.ts",
+        name: "helper",
+        kind: "function",
+        range_start_line: 1,
+        range_end_line: 3,
+      },
+    ]);
+
+    const rawSnippetRows = await db.all<{
+      path: string;
+      snippet_id: bigint;
+      start_line: number;
+      end_line: number;
+      symbol_id: bigint | null;
+    }>(
+      `
+        SELECT path, snippet_id, start_line, end_line, symbol_id
+        FROM snippet
+        WHERE repo_id = ?
+        ORDER BY path, snippet_id
+      `,
+      [repoId]
+    );
+    const snippetRows = rawSnippetRows.map((row) => ({
+      path: row.path,
+      snippet_id: Number(row.snippet_id),
+      start_line: row.start_line,
+      end_line: row.end_line,
+      symbol_id: row.symbol_id === null ? null : Number(row.symbol_id),
+    }));
+    expect(snippetRows).toEqual([
+      { path: "README.md", snippet_id: 1, start_line: 1, end_line: 4, symbol_id: null },
+      { path: "src/main.ts", snippet_id: 1, start_line: 3, end_line: 5, symbol_id: 1 },
+      { path: "src/util.ts", snippet_id: 1, start_line: 1, end_line: 3, symbol_id: 1 },
+    ]);
+
+    const dependencyRows = await db.all<{
+      src_path: string;
+      dst_kind: string;
+      dst: string;
+      rel: string;
+    }>(
+      `
+        SELECT src_path, dst_kind, dst, rel
+        FROM dependency
+        WHERE repo_id = ?
+        ORDER BY src_path, dst
+      `,
+      [repoId]
+    );
+    expect(dependencyRows).toEqual([
+      { src_path: "src/main.ts", dst_kind: "path", dst: "src/util.ts", rel: "import" },
+    ]);
   });
 });

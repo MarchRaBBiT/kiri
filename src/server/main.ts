@@ -6,8 +6,10 @@ import process from "node:process";
 import { DuckDBClient } from "../shared/duckdb";
 import { ServerContext } from "./context";
 import {
+  DepsClosureParams,
   FilesSearchParams,
   SnippetsGetParams,
+  depsClosure,
   filesSearch,
   resolveRepoId,
   snippetsGet,
@@ -84,6 +86,34 @@ function parseSnippetsGetParams(input: unknown): SnippetsGetParams {
     path: typeof record.path === "string" ? record.path : "",
     start_line: toNumber(record.start_line),
     end_line: toNumber(record.end_line),
+  };
+}
+
+function parseDepsClosureParams(input: unknown): DepsClosureParams {
+  if (!input || typeof input !== "object") {
+    return { path: "" };
+  }
+  const record = input as Record<string, unknown>;
+  const toNumber = (value: unknown): number | undefined => {
+    if (typeof value === "number") {
+      return value;
+    }
+    if (typeof value === "string") {
+      const parsed = Number(value);
+      return Number.isNaN(parsed) ? undefined : parsed;
+    }
+    return undefined;
+  };
+  const direction = record.direction === "inbound" || record.direction === "outbound"
+    ? (record.direction as "inbound" | "outbound")
+    : undefined;
+  const includePackages =
+    typeof record.include_packages === "boolean" ? record.include_packages : undefined;
+  return {
+    path: typeof record.path === "string" ? record.path : "",
+    max_depth: toNumber(record.max_depth),
+    direction,
+    include_packages: includePackages,
   };
 }
 
@@ -192,12 +222,17 @@ export async function startServer(options: ServerOptions): Promise<Server> {
             result = await snippetsGet(context, params);
             break;
           }
+          case "deps.closure": {
+            const params = parseDepsClosureParams(payload.params);
+            result = await depsClosure(context, params);
+            break;
+          }
           default: {
             res.statusCode = 404;
             res.end(
               errorResponse(
                 payload.id ?? null,
-                "Requested method is not available. Use files.search or snippets.get."
+                "Requested method is not available. Use files.search, snippets.get, or deps.closure."
               )
             );
             return;

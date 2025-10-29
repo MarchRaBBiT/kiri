@@ -49,4 +49,50 @@ export async function ensureBaseSchema(db: DuckDBClient): Promise<void> {
   await db.run(`
     CREATE INDEX IF NOT EXISTS idx_file_lang ON file(repo_id, lang)
   `);
+
+  await db.run(`
+    CREATE TABLE IF NOT EXISTS symbol (
+      repo_id INTEGER,
+      path TEXT,
+      symbol_id BIGINT,
+      name TEXT,
+      kind TEXT,
+      range_start_line INTEGER,
+      range_end_line INTEGER,
+      signature TEXT,
+      doc TEXT,
+      PRIMARY KEY (repo_id, path, symbol_id)
+    )
+  `);
+
+  await db.run(`
+    CREATE INDEX IF NOT EXISTS idx_symbol_name ON symbol(repo_id, name)
+  `);
+
+  await db.run(`
+    CREATE TABLE IF NOT EXISTS snippet (
+      repo_id INTEGER,
+      path TEXT,
+      snippet_id BIGINT,
+      start_line INTEGER,
+      end_line INTEGER,
+      symbol_id BIGINT NULL,
+      PRIMARY KEY (repo_id, path, snippet_id)
+    )
+  `);
+
+  await db.run(`
+    CREATE TABLE IF NOT EXISTS dependency (
+      repo_id INTEGER,
+      src_path TEXT,
+      dst_kind TEXT,
+      dst TEXT,
+      rel TEXT,
+      PRIMARY KEY (repo_id, src_path, dst_kind, dst, rel)
+    )
+  `);
+
+  await db.run(`
+    CREATE INDEX IF NOT EXISTS idx_dep_src ON dependency(repo_id, src_path)
+  `);
 }

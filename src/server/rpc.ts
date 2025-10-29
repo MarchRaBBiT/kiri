@@ -69,31 +69,31 @@ const SERVER_INFO = {
 const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: "context.bundle",
-    description: "対話ゴールから関連コードコンテキストを抽出します。",
+    description: "Extract relevant code context based on task goals. Use this first when starting new tasks, fixing bugs, or understanding features - it minimizes token usage by returning only relevant snippets.",
     inputSchema: {
       type: "object",
       required: ["goal"],
       additionalProperties: true,
       properties: {
-        goal: { type: "string", description: "解決したいタスクやゴールの説明。" },
+        goal: { type: "string", description: "Description of the task or goal to accomplish." },
         limit: {
           type: "number",
           minimum: 1,
           maximum: 20,
-          description: "返却するスニペット数の上限。既定は12。",
+          description: "Maximum number of snippets to return. Default is 12.",
         },
-        profile: { type: "string", description: "評価プロファイル名。" },
+        profile: { type: "string", description: "Evaluation profile name." },
         artifacts: {
           type: "object",
           additionalProperties: true,
           properties: {
-            editing_path: { type: "string", description: "現在編集中のファイルパス。" },
+            editing_path: { type: "string", description: "Path to the file currently being edited." },
             failing_tests: {
               type: "array",
               items: { type: "string" },
-              description: "失敗しているテストケース名。",
+              description: "Names of failing test cases.",
             },
-            last_diff: { type: "string", description: "直近の差分内容。" },
+            last_diff: { type: "string", description: "Recent diff content." },
           },
         },
       },
@@ -101,13 +101,13 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   },
   {
     name: "semantic.rerank",
-    description: "事前候補に対してセマンティック類似度で再ランキングします。",
+    description: "Re-rank candidates by semantic similarity. Use this to refine search results or prioritize files by relevance to a query.",
     inputSchema: {
       type: "object",
       required: ["text", "candidates"],
       additionalProperties: true,
       properties: {
-        text: { type: "string", description: "クエリやゴールの本文。" },
+        text: { type: "string", description: "Query or goal text for similarity comparison." },
         candidates: {
           type: "array",
           items: {
@@ -120,14 +120,14 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
             },
           },
         },
-        k: { type: "number", minimum: 1, description: "上位何件を返すか。" },
+        k: { type: "number", minimum: 1, description: "Number of top results to return." },
         profile: { type: "string" },
       },
     },
   },
   {
     name: "files.search",
-    description: "全文検索インデックスからファイルを検索します。",
+    description: "Search files by keyword using full-text index. Use this to find implementation patterns, specific functions, or explore unfamiliar code areas.",
     inputSchema: {
       type: "object",
       required: ["query"],
@@ -143,7 +143,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   },
   {
     name: "snippets.get",
-    description: "指定ファイルのコードスニペットを取得します。",
+    description: "Retrieve code snippets from a specific file. Use this to read only the necessary parts instead of entire files, reducing token usage.",
     inputSchema: {
       type: "object",
       required: ["path"],
@@ -157,7 +157,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   },
   {
     name: "deps.closure",
-    description: "依存関係グラフから近傍ノードを取得します。",
+    description: "Get dependency graph neighbors. Use this to understand impact scope when refactoring, or to trace call chains and module relationships.",
     inputSchema: {
       type: "object",
       required: ["path"],

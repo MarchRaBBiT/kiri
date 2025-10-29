@@ -5,13 +5,15 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { runIndexer } from "../../src/indexer/cli";
 import { DuckDBClient } from "../../src/shared/duckdb";
+import { filesSearch, resolveRepoId } from "../../src/server/handlers";
+import { ServerContext } from "../../src/server/context";
 import { createTempRepo } from "../helpers/test-repo";
 
 interface CleanupTarget {
   dispose: () => Promise<void>;
 }
 
-describe("runIndexer", () => {
+describe("files.search", () => {
   const cleanupTargets: CleanupTarget[] = [];
 
   afterEach(async () => {
@@ -20,10 +22,10 @@ describe("runIndexer", () => {
     }
   });
 
-  it("indexes tracked files into DuckDB", async () => {
+  it("returns matches filtered by substring", async () => {
     const repo = await createTempRepo({
-      "src/main.ts": "export const answer = 42;\n",
-      "README.md": "# Sample\n\nThis is a repo.\n",
+      "src/main.ts": "export function meaning() {\n  return 42;\n}\n",
+      "docs/readme.md": "The meaning of life is context.\n",
     });
     cleanupTargets.push({ dispose: repo.cleanup });
 
@@ -36,23 +38,14 @@ describe("runIndexer", () => {
     const db = await DuckDBClient.connect({ databasePath: dbPath });
     cleanupTargets.push({ dispose: async () => await db.close() });
 
-    const repoRows = await db.all<{ id: number; root: string }>("SELECT id, root FROM repo");
-    expect(repoRows).toHaveLength(1);
-    const repoId = repoRows[0].id;
-    expect(repoRows[0].root).toBe(repo.path);
+    const repoId = await resolveRepoId(db, repo.path);
+    const context: ServerContext = { db, repoId };
 
-    const fileRows = await db.all<{ path: string; is_binary: boolean }>(
-      "SELECT path, is_binary FROM file WHERE repo_id = ? ORDER BY path",
-      [repoId]
-    );
-    expect(fileRows).toHaveLength(2);
-    expect(fileRows.map((row) => row.path)).toEqual(["README.md", "src/main.ts"]);
-    expect(fileRows.every((row) => row.is_binary === false)).toBe(true);
-
-    const blobRows = await db.all<{ hash: string; content: string | null }>(
-      "SELECT hash, content FROM blob ORDER BY hash"
-    );
-    expect(blobRows.length).toBeGreaterThanOrEqual(2);
-    expect(blobRows.every((row) => row.content !== null)).toBe(true);
+    const results = await filesSearch(context, { query: "meaning" });
+    expect(results.length).toBeGreaterThan(0);
+    const paths = results.map((item) => item.path);
+    expect(paths).toContain("src/main.ts");
+    expect(paths).toContain("docs/readme.md");
+    expect(results.every((item) => item.preview.toLowerCase().includes("meaning"))).toBe(true);
   });
 });

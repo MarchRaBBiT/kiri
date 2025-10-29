@@ -1,0 +1,5 @@
+# Paths that must never be indexed or surfaced
+patterns:
+  - secrets/**
+  - "*.pem"
+  - .env*

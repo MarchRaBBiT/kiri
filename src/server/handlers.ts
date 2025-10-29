@@ -1,9 +1,8 @@
 import path from "node:path";
 
-import { encode as encodeGPT } from "gpt-tokenizer";
-
 import { DuckDBClient } from "../shared/duckdb.js";
 import { generateEmbedding, structuralSimilarity } from "../shared/embedding.js";
+import { encode as encodeGPT } from "../shared/tokenizer.js";
 
 import { ServerContext } from "./context.js";
 import { coerceProfileName, loadScoringProfile } from "./scoring.js";

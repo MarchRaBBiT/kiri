@@ -1,6 +1,9 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
+import { evaluateSecurityStatus } from "../../src/shared/security/config.js";
+import { maskValue } from "../../src/shared/security/masker.js";
+
 export interface AuditEntry {
   path: string;
   range: [number, number];
@@ -8,11 +11,13 @@ export interface AuditEntry {
 }
 
 export function exportAuditLog(entries: AuditEntry[], outputPath: string): string {
+  const { config } = evaluateSecurityStatus();
+  const masked = maskValue(entries, { tokens: config.sensitive_tokens });
   const absolute = resolve(process.cwd(), outputPath);
   mkdirSync(dirname(absolute), { recursive: true });
   writeFileSync(
     absolute,
-    JSON.stringify({ exportedAt: new Date().toISOString(), entries }, null, 2)
+    JSON.stringify({ exportedAt: new Date().toISOString(), entries: masked.masked }, null, 2)
   );
   return absolute;
 }

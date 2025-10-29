@@ -1,0 +1,10 @@
+# Security baseline for KIRI MCP deployment
+allowed_paths:
+  - ./
+  - ../shared
+allow_network_egress: false
+allow_subprocess: false
+sensitive_tokens:
+  - "sk-"
+  - "ghp_"
+  - "-----BEGIN"

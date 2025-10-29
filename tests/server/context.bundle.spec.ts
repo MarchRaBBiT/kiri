@@ -9,6 +9,7 @@ import { ServerContext } from "../../src/server/context.js";
 import { contextBundle, resolveRepoId, semanticRerank } from "../../src/server/handlers.js";
 import { startServer } from "../../src/server/main.js";
 import { DuckDBClient } from "../../src/shared/duckdb.js";
+import { loadSecurityConfig, updateSecurityLock } from "../../src/shared/security/config.js";
 import { createTempRepo } from "../helpers/test-repo.js";
 
 interface CleanupTarget {
@@ -19,10 +20,18 @@ describe("startServer", () => {
   it("fails fast when repository index is missing", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "kiri-server-"));
     const dbPath = join(tempDir, "index.duckdb");
+    const lockPath = join(tempDir, "security.lock");
+    const { hash } = loadSecurityConfig();
+    updateSecurityLock(hash, lockPath);
 
-    await expect(startServer({ port: 0, repoRoot: tempDir, databasePath: dbPath })).rejects.toThrow(
-      /Target repository is missing/
-    );
+    await expect(
+      startServer({
+        port: 0,
+        repoRoot: tempDir,
+        databasePath: dbPath,
+        securityLockPath: lockPath,
+      })
+    ).rejects.toThrow(/Target repository is missing/);
 
     await rm(tempDir, { recursive: true, force: true });
   });

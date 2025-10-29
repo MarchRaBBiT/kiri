@@ -1,5 +1,7 @@
 import path from "node:path";
 
+import { encode as encodeGPT } from "gpt-tokenizer";
+
 import { DuckDBClient } from "../shared/duckdb.js";
 import { cosineSimilarity, generateEmbedding } from "../shared/embedding.js";
 
@@ -443,7 +445,7 @@ function estimateTokens(startLine: number, endLine: number): number {
 
 /**
  * トークン数を推定（コンテンツベース）
- * GPT-style: ~4 chars per token for code
+ * 実際のGPTトークナイザーを使用して正確にカウント
  *
  * @param content - ファイル全体のコンテンツ
  * @param startLine - 開始行（1-indexed）
@@ -455,9 +457,16 @@ function estimateTokensFromContent(content: string, startLine: number, endLine: 
   const startIndex = Math.max(0, startLine - 1);
   const endIndex = Math.min(endLine, lines.length);
   const selectedLines = lines.slice(startIndex, endIndex);
-  const charCount = selectedLines.reduce((sum, line) => sum + line.length, 0);
-  // GPT-style: 約4文字で1トークン
-  return Math.max(1, Math.ceil(charCount / 4));
+  const text = selectedLines.join("\n");
+
+  try {
+    // 実際のGPTトークナイザーを使用
+    return encodeGPT(text).length;
+  } catch (error) {
+    // フォールバック: 文字ベース推定
+    console.warn("Token encoding failed, using character-based fallback", error);
+    return Math.max(1, Math.ceil(text.length / 4));
+  }
 }
 
 export async function filesSearch(
@@ -727,14 +736,26 @@ export async function contextBundle(
     editingCandidate.matchLine ??= 1;
   }
 
+  // SQL injection防御: ファイルパスの検証パターン
+  const SAFE_PATH_PATTERN = /^[a-zA-Z0-9_.\-/]+$/;
+
   const dependencySeeds = new Set<string>();
   for (const pathSeed of stringMatchSeeds) {
+    if (!SAFE_PATH_PATTERN.test(pathSeed)) {
+      console.warn(`Skipping potentially unsafe path in dependency seeds: ${pathSeed}`);
+      continue;
+    }
     dependencySeeds.add(pathSeed);
     if (dependencySeeds.size >= MAX_DEPENDENCY_SEEDS) {
       break;
     }
   }
   if (artifacts.editing_path) {
+    if (!SAFE_PATH_PATTERN.test(artifacts.editing_path)) {
+      throw new Error(
+        `Invalid editing_path format. Path must contain only alphanumeric characters, underscores, dots, hyphens, and forward slashes.`
+      );
+    }
     dependencySeeds.add(artifacts.editing_path);
   }
 
@@ -962,9 +983,8 @@ export async function semanticRerank(
   }
 
   const scored: SemanticRerankItem[] = uniqueCandidates.map((candidate) => {
-    const base = typeof candidate.score === "number" && Number.isFinite(candidate.score)
-      ? candidate.score
-      : 0;
+    const base =
+      typeof candidate.score === "number" && Number.isFinite(candidate.score) ? candidate.score : 0;
     let semantic = 0;
     if (queryEmbedding && semanticWeight > 0) {
       const embedding = embeddingMap.get(candidate.path);

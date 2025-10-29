@@ -11,9 +11,18 @@ importers:
       duckdb:
         specifier: ^1.1.0
         version: 1.4.1(encoding@0.1.13)
+      gpt-tokenizer:
+        specifier: ^3.2.0
+        version: 3.2.0
       tree-sitter:
         specifier: ^0.22.0
         version: 0.22.4
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      yaml:
+        specifier: ^2.8.1
+        version: 2.8.1
     devDependencies:
       '@types/node':
         specifier: ^22.7.4
@@ -42,9 +51,6 @@ importers:
       tsx:
         specifier: ^4.16.5
         version: 4.20.6
-      typescript:
-        specifier: ^5.6.3
-        version: 5.9.3
       vitest:
         specifier: ^2.0.5
         version: 2.1.9(@types/node@22.18.13)
@@ -1232,6 +1238,9 @@ packages:
     resolution: {integrity: sha512-ZUKRh6/kUFoAiTAtTYPZJ3hw9wNxx+BIBOijnlG9PnrJsCcSjs1wyyD6vJpaYtgnzDrKYRSqf3OO6Rfa93xsRg==}
     engines: {node: '>= 0.4'}
 
+  gpt-tokenizer@3.2.0:
+    resolution: {integrity: sha512-QRRhzJIHcGbbdzhMGNCHhF+98RVaBaVD5+NYgyPOamqRBEqG5yN9p5j4udnY5FJnkesjdUPsikG/DO4OfJdhpQ==}
+
   graceful-fs@4.2.11:
     resolution: {integrity: sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==}
 
@@ -2182,6 +2191,11 @@ packages:
   yallist@5.0.0:
     resolution: {integrity: sha512-YgvUTfwqyc7UXVMrB+SImsVYSmTS8X/tSrtdNZMImM+n7+QTriRXyXim0mBrTXNeqzVF0KWGgHPeiyViFFrNDw==}
     engines: {node: '>=18'}
+
+  yaml@2.8.1:
+    resolution: {integrity: sha512-lcYcMxX2PO9XMGvAJkJ3OsNMw+/7FKes7/hgerGUYWIoWu5j/+YQqcZr5JnPZWzOsEBgMbSbiSTn/dv/69Mkpw==}
+    engines: {node: '>= 14.6'}
+    hasBin: true
 
   yocto-queue@0.1.0:
     resolution: {integrity: sha512-rVksvsnNCdJ/ohGc6xgPwyN8eheCxsiLM8mxuE/t/mOVqJewPuO1miLpTHQiRgTKCLexL4MeAFVagts7HmNZ2Q==}
@@ -3424,6 +3438,8 @@ snapshots:
 
   gopd@1.2.0: {}
 
+  gpt-tokenizer@3.2.0: {}
+
   graceful-fs@4.2.11: {}
 
   graphemer@1.4.0: {}
@@ -4484,5 +4500,7 @@ snapshots:
   yallist@4.0.0: {}
 
   yallist@5.0.0: {}
+
+  yaml@2.8.1: {}
 
   yocto-queue@0.1.0: {}

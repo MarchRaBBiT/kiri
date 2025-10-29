@@ -256,4 +256,61 @@ describe("context.bundle", () => {
       semanticRerank(context, { text: "", candidates: [{ path: "src/sample.ts", score: 0.1 }] })
     ).rejects.toThrow(/non-empty text/);
   });
+
+  it("rejects malicious file paths with SQL injection attempts", async () => {
+    const repo = await createTempRepo({
+      "src/safe.ts": "export const value = 1;\n",
+    });
+    cleanupTargets.push({ dispose: repo.cleanup });
+
+    const dbDir = await mkdtemp(join(tmpdir(), "kiri-db-"));
+    const dbPath = join(dbDir, "index.duckdb");
+    cleanupTargets.push({ dispose: async () => await rm(dbDir, { recursive: true, force: true }) });
+
+    await runIndexer({ repoRoot: repo.path, databasePath: dbPath, full: true });
+
+    const db = await DuckDBClient.connect({ databasePath: dbPath });
+    cleanupTargets.push({ dispose: async () => await db.close() });
+
+    const repoId = await resolveRepoId(db, repo.path);
+    const context: ServerContext = { db, repoId };
+
+    // 悪意のあるパスを含むeditingPathをテスト
+    await expect(
+      contextBundle(context, {
+        goal: "test",
+        artifacts: {
+          editing_path: "src/file'; DROP TABLE file; --",
+        },
+      })
+    ).rejects.toThrow(/Invalid editing_path format/);
+  });
+
+  it("handles empty files gracefully", async () => {
+    const repo = await createTempRepo({
+      "empty.txt": "",
+      "src/code.ts": "export const x = 1;\n",
+    });
+    cleanupTargets.push({ dispose: repo.cleanup });
+
+    const dbDir = await mkdtemp(join(tmpdir(), "kiri-db-"));
+    const dbPath = join(dbDir, "index.duckdb");
+    cleanupTargets.push({ dispose: async () => await rm(dbDir, { recursive: true, force: true }) });
+
+    await runIndexer({ repoRoot: repo.path, databasePath: dbPath, full: true });
+
+    const db = await DuckDBClient.connect({ databasePath: dbPath });
+    cleanupTargets.push({ dispose: async () => await db.close() });
+
+    const repoId = await resolveRepoId(db, repo.path);
+    const context: ServerContext = { db, repoId };
+
+    const bundle = await contextBundle(context, {
+      goal: "find code",
+      limit: 5,
+    });
+
+    expect(bundle.context).toBeDefined();
+    expect(Array.isArray(bundle.context)).toBe(true);
+  });
 });

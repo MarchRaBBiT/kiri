@@ -16,11 +16,9 @@ function tokenize(text: string): string[] {
 }
 
 function hashToken(token: string): number {
-  const digest = createHash("sha1").update(token).digest();
+  const digest = createHash("sha256").update(token).digest();
   // Use the first four bytes to build a deterministic integer hash
-  return (
-    ((digest[0] << 24) | (digest[1] << 16) | (digest[2] << 8) | digest[3]) >>> 0
-  );
+  return ((digest[0] << 24) | (digest[1] << 16) | (digest[2] << 8) | digest[3]) >>> 0;
 }
 
 function applyToken(vector: number[], token: string): void {

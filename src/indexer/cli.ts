@@ -68,6 +68,7 @@ interface EmbeddingRow {
 
 const MAX_SAMPLE_BYTES = 32_768;
 const MAX_FILE_BYTES = 32 * 1024 * 1024; // 32MB limit to prevent memory exhaustion
+const SCAN_BATCH_SIZE = 100; // Process files in batches to limit memory usage
 
 function countLines(content: string): number {
   if (content.length === 0) {
@@ -372,6 +373,38 @@ function buildCodeIntel(
   return { symbols, snippets, dependencies: Array.from(dependencies.values()) };
 }
 
+/**
+ * scanFilesのバッチ処理版
+ * メモリ枯渇を防ぐため、ファイルをバッチで処理する
+ */
+async function scanFilesInBatches(
+  repoRoot: string,
+  paths: string[]
+): Promise<{ blobs: Map<string, BlobRecord>; files: FileRecord[]; embeddings: EmbeddingRow[] }> {
+  const allBlobs = new Map<string, BlobRecord>();
+  const allFiles: FileRecord[] = [];
+  const allEmbeddings: EmbeddingRow[] = [];
+
+  for (let i = 0; i < paths.length; i += SCAN_BATCH_SIZE) {
+    const batch = paths.slice(i, i + SCAN_BATCH_SIZE);
+    const { blobs, files, embeddings } = await scanFiles(repoRoot, batch);
+
+    // マージ: blobはhashでユニークなので重複排除
+    for (const [hash, blob] of blobs) {
+      if (!allBlobs.has(hash)) {
+        allBlobs.set(hash, blob);
+      }
+    }
+    allFiles.push(...files);
+    allEmbeddings.push(...embeddings);
+
+    // バッチデータを明示的にクリアしてGCを促す
+    blobs.clear();
+  }
+
+  return { blobs: allBlobs, files: allFiles, embeddings: allEmbeddings };
+}
+
 async function scanFiles(
   repoRoot: string,
   paths: string[]
@@ -459,7 +492,7 @@ export async function runIndexer(options: IndexerOptions): Promise<void> {
     getDefaultBranch(repoRoot),
   ]);
 
-  const { blobs, files, embeddings } = await scanFiles(repoRoot, paths);
+  const { blobs, files, embeddings } = await scanFilesInBatches(repoRoot, paths);
   const codeIntel = buildCodeIntel(files, blobs);
 
   const db = await DuckDBClient.connect({ databasePath, ensureDirectory: true });

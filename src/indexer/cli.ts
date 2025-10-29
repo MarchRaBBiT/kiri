@@ -112,9 +112,7 @@ async function ensureRepo(
   }
   const row = rows[0];
   if (!row) {
-    throw new Error(
-      "Failed to retrieve repository record. Database returned empty result."
-    );
+    throw new Error("Failed to retrieve repository record. Database returned empty result.");
   }
   return row.id;
 }

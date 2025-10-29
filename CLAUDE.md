@@ -2,38 +2,9 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## KIRI MCP Tools Usage
+## Use KIRI MCP Tools
 
-**Always prioritize KIRI tools** when exploring or understanding this codebase.
-
-### Primary Tool: `context.bundle`
-
-Use this **first** for any task:
-- New feature implementation
-- Bug fixing
-- Code refactoring
-- Understanding features
-
-It automatically extracts relevant code context and minimizes token usage.
-
-### Supporting Tools
-
-- `files.search` - Find implementation patterns or specific functions
-- `snippets.get` - Read only necessary file sections
-- `deps.closure` - Analyze dependencies and refactoring impact
-
-### Example
-
-```javascript
-// Instead of reading entire files, use:
-context.bundle({
-  goal: "fix authentication bug",
-  artifacts: { editing_path: "src/auth/token.ts" }
-})
-// Returns only relevant snippets with dependencies
-```
-
-**Remember**: KIRI tools provide token-efficient, context-aware code exploration.
+**This project has KIRI MCP server configured**. Use KIRI tools when exploring this codebase.
 
 ---
 

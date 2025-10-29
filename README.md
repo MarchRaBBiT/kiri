@@ -22,8 +22,22 @@
 
 ### Installation
 
+#### For End Users (after npm publication)
+
 ```bash
-# Install dependencies
+# Global installation (recommended)
+npm install -g kiri-mcp-server
+
+# Or use npx (no installation required)
+npx kiri-mcp-server --repo . --db .kiri/index.duckdb
+```
+
+#### For Development
+
+```bash
+# Clone and install dependencies
+git clone https://github.com/CAPHTECH/kiri.git
+cd kiri
 pnpm install
 
 # Build the project
@@ -109,19 +123,61 @@ node dist/src/server/main.js --repo . --db var/index.duckdb --port 8765 --watch
 
 **Note**: Watch mode runs in parallel with the MCP server. File changes trigger reindexing in the background without interrupting ongoing queries.
 
-### Codex Integration
+### MCP Client Integration
 
-Create `~/.config/codex/mcp.json`:
+#### Option 1: Global Installation (Recommended)
+
+```bash
+npm install -g kiri-mcp-server
+```
+
+Create `~/.config/codex/mcp.json` or `.claude/mcp.json`:
 
 ```json
 {
   "mcpServers": {
     "kiri": {
-      "command": "kiri",
+      "command": "kiri-mcp-server",
       "args": [
         "--repo", "/path/to/your/project",
         "--db", "/path/to/your/project/.kiri/index.duckdb",
         "--watch"
+      ]
+    }
+  }
+}
+```
+
+#### Option 2: npx (No Installation Required)
+
+```json
+{
+  "mcpServers": {
+    "kiri": {
+      "command": "npx",
+      "args": [
+        "kiri-mcp-server",
+        "--repo", "/path/to/your/project",
+        "--db", "/path/to/your/project/.kiri/index.duckdb"
+      ]
+    }
+  }
+}
+```
+
+**Note**: `npx` automatically downloads and caches the package on first use. Subsequent starts are faster.
+
+#### Option 3: Local Development
+
+```json
+{
+  "mcpServers": {
+    "kiri": {
+      "command": "node",
+      "args": [
+        "/absolute/path/to/kiri/dist/src/server/main.js",
+        "--repo", "/path/to/your/project",
+        "--db", "/path/to/your/project/.kiri/index.duckdb"
       ]
     }
   }

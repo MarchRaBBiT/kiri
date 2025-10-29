@@ -14,3 +14,27 @@
 secrets/**, **/*.pem, **/*.key, **/.env*, **/config/*.prod.*, **/node_modules/**,
 **/build/**, **/dist/**, **/.git/**, **/*.sqlite, **/*.duckdb, **/*.db
 ```
+
+## セキュリティ設定と検証フロー
+
+- 運用時の権限境界は `config/security.yml` に定義する。`allowed_paths`、`allow_network_egress`、`allow_subprocess` を明示し、
+  `sensitive_tokens` にはマスキング対象のトークン接頭辞を列挙する。
+- 設定ファイルの改ざんを検知するため、`var/security.lock` に SHA-256 ハッシュを保存する。差分がある場合はサーバー起動前に
+  ブロックされる。
+- CLI から `pnpm exec tsx src/client/cli.ts security verify --write-lock` を実行すると現在の設定を検証し、ロックファイルが存在しな
+  ければ生成する。
+- CI では `pnpm exec tsx src/client/cli.ts security verify` を最初のステップとして実行し、差分がないことを保証する。
+
+## MCP 応答のマスキング
+
+- `src/shared/security/masker.ts` でマスキングユーティリティを提供し、`context.bundle` などサーバー側で返却するすべてのペイロード
+  に対して `***` へ置換する。
+- マスキング件数はメトリクス (`/metrics`) に `kiri_mask_applied_total` として公開され、運用監視で確認できる。
+- 監査ログ (`scripts/audit/export-log.ts`) からエクスポートされる JSON もマスキング済みフィールドのみを含む。
+
+## Degrade 発生時の運用ポリシー
+
+- DuckDB/VSS が利用できない場合、`--allow-degrade` フラグを付けてサーバーを起動するとファイル検索のみ許可するセーフモードに
+  移行する。その他ツールは 503 を返す。
+- Degrade 状態は `/metrics` のレスポンスタイム増加と監査ログのイベントで検知できる。復旧後はサーバーを再起動して通常モードに
+  戻す。

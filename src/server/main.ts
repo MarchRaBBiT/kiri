@@ -1,11 +1,15 @@
 import { createServer, IncomingMessage, Server } from "node:http";
 import { resolve } from "node:path";
+import { performance } from "node:perf_hooks";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 
 import { DuckDBClient } from "../shared/duckdb.js";
+import { maskValue } from "../shared/security/masker.js";
 
+import { bootstrapServer } from "./bootstrap.js";
 import { ServerContext } from "./context.js";
+import { DegradeController } from "./fallbacks/degradeController.js";
 import {
   ContextBundleParams,
   DepsClosureParams,
@@ -19,11 +23,16 @@ import {
   semanticRerank,
   snippetsGet,
 } from "./handlers.js";
+import { MetricsRegistry, writeMetricsResponse } from "./observability/metrics.js";
+import { withSpan } from "./observability/tracing.js";
 
 export interface ServerOptions {
   port: number;
   databasePath: string;
   repoRoot: string;
+  allowDegrade?: boolean;
+  securityConfigPath?: string;
+  securityLockPath?: string;
 }
 
 interface JsonRpcRequest {
@@ -249,6 +258,10 @@ function errorResponse(id: unknown, message: string, code = -32603): JsonRpcErro
 }
 
 export async function startServer(options: ServerOptions): Promise<Server> {
+  const bootstrap = bootstrapServer({
+    securityConfigPath: options.securityConfigPath,
+    securityLockPath: options.securityLockPath,
+  });
   const databasePath = resolve(options.databasePath);
   const repoRoot = resolve(options.repoRoot);
   let db: DuckDBClient | null = null;
@@ -256,8 +269,17 @@ export async function startServer(options: ServerOptions): Promise<Server> {
     db = await DuckDBClient.connect({ databasePath, ensureDirectory: true });
     const repoId = await resolveRepoId(db, repoRoot);
     const context: ServerContext = { db, repoId };
+    const degrade = new DegradeController(repoRoot);
+    const metrics = new MetricsRegistry();
+    const allowDegrade = options.allowDegrade ?? false;
+    const tokens = bootstrap.security.config.sensitive_tokens;
 
     const server = createServer(async (req, res) => {
+      if (req.method === "GET" && req.url === "/metrics") {
+        writeMetricsResponse(res, metrics);
+        return;
+      }
+
       if (req.method !== "POST") {
         res.statusCode = 405;
         res.setHeader("Content-Type", "application/json");
@@ -316,32 +338,57 @@ export async function startServer(options: ServerOptions): Promise<Server> {
 
       res.setHeader("Content-Type", "application/json");
 
+      const start = performance.now();
       try {
         let result: unknown;
         switch (payload.method) {
           case "context.bundle": {
             const params = parseContextBundleParams(payload.params);
-            result = await contextBundle(context, params);
+            const handler = async () =>
+              await withSpan("context.bundle", async () => await contextBundle(context, params));
+            result = await degrade.withResource(handler, "duckdb:context.bundle");
             break;
           }
           case "semantic.rerank": {
             const params = parseSemanticRerankParams(payload.params);
-            result = await semanticRerank(context, params);
+            const handler = async () =>
+              await withSpan("semantic.rerank", async () => await semanticRerank(context, params));
+            result = await degrade.withResource(handler, "duckdb:semantic.rerank");
             break;
           }
           case "files.search": {
             const params = parseFilesSearchParams(payload.params);
-            result = await filesSearch(context, params);
+            if (degrade.current.active && allowDegrade) {
+              result = {
+                hits: degrade.search(params.query, params.limit ?? 20).map((hit) => ({
+                  path: hit.path,
+                  preview: hit.preview,
+                  matchLine: hit.matchLine,
+                  lang: null,
+                  ext: null,
+                  score: 0,
+                })),
+                degrade: true,
+              };
+            } else {
+              const handler = async () =>
+                await withSpan("files.search", async () => await filesSearch(context, params));
+              result = await degrade.withResource(handler, "duckdb:files.search");
+            }
             break;
           }
           case "snippets.get": {
             const params = parseSnippetsGetParams(payload.params);
-            result = await snippetsGet(context, params);
+            const handler = async () =>
+              await withSpan("snippets.get", async () => await snippetsGet(context, params));
+            result = await degrade.withResource(handler, "duckdb:snippets.get");
             break;
           }
           case "deps.closure": {
             const params = parseDepsClosureParams(payload.params);
-            result = await depsClosure(context, params);
+            const handler = async () =>
+              await withSpan("deps.closure", async () => await depsClosure(context, params));
+            result = await degrade.withResource(handler, "duckdb:deps.closure");
             break;
           }
           default: {
@@ -355,16 +402,49 @@ export async function startServer(options: ServerOptions): Promise<Server> {
             return;
           }
         }
-        const response = successResponse(payload.id ?? null, result);
+        const masked = maskValue(result, { tokens });
+        if (masked.applied > 0) {
+          metrics.recordMask(masked.applied);
+        }
+        const response = successResponse(payload.id ?? null, masked.masked);
         res.statusCode = 200;
         res.end(JSON.stringify(response));
       } catch (error) {
+        if (degrade.current.active && !allowDegrade) {
+          res.statusCode = 503;
+          res.end(
+            JSON.stringify(
+              errorResponse(
+                payload.id ?? null,
+                "Backend degraded and --allow-degrade not set. Restore DuckDB availability or restart server."
+              )
+            )
+          );
+          return;
+        }
+        if (degrade.current.active && allowDegrade) {
+          res.statusCode = 503;
+          res.end(
+            JSON.stringify(
+              errorResponse(
+                payload.id ?? null,
+                degrade.current.reason
+                  ? `Backend degraded due to ${degrade.current.reason}. Only files.search is operational.`
+                  : "Backend degraded. Only files.search is operational."
+              )
+            )
+          );
+          return;
+        }
         const message =
           error instanceof Error
             ? error.message
             : "Unknown error occurred. Inspect server logs and retry the request.";
         res.statusCode = 500;
         res.end(JSON.stringify(errorResponse(payload.id ?? null, message)));
+      } finally {
+        const elapsed = performance.now() - start;
+        metrics.recordRequest(elapsed);
       }
     });
 
@@ -398,6 +478,10 @@ function parseArg(flag: string): string | undefined {
   return undefined;
 }
 
+function hasFlag(flag: string): boolean {
+  return process.argv.includes(flag);
+}
+
 function parsePort(argv: string[]): number {
   const index = argv.indexOf("--port");
   if (index >= 0 && argv[index + 1]) {
@@ -414,7 +498,14 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   const repoRoot = resolve(parseArg("--repo") ?? ".");
   const databasePath = resolve(parseArg("--db") ?? "var/index.duckdb");
 
-  startServer({ port, repoRoot, databasePath }).catch((error) => {
+  startServer({
+    port,
+    repoRoot,
+    databasePath,
+    allowDegrade: hasFlag("--allow-degrade"),
+    securityConfigPath: parseArg("--security-config"),
+    securityLockPath: parseArg("--security-lock"),
+  }).catch((error) => {
     console.error("Failed to start MCP server. Check DuckDB path and repo index before retrying.");
     console.error(error);
     process.exitCode = 1;

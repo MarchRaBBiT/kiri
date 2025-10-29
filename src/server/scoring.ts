@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { parse as parseYAML } from "yaml";
+import { parseSimpleYaml } from "../shared/utils/simpleYaml.js";
 
 /**
  * スコアリングウェイトの設定
@@ -62,7 +62,7 @@ function loadProfilesFromConfig(): Record<ScoringProfileName, ScoringWeights> {
       join(fileURLToPath(import.meta.url), "../../../config/scoring-profiles.yml");
 
     const configContent = readFileSync(configPath, "utf-8");
-    const parsed = parseYAML(configContent) as Record<string, ScoringWeights>;
+    const parsed = parseSimpleYaml(configContent) as Record<string, ScoringWeights>;
 
     // 必須プロファイルの検証とウェイトのバリデーション
     const requiredProfiles: ScoringProfileName[] = [

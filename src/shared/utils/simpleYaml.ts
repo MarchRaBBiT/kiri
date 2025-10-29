@@ -1,10 +1,14 @@
+export interface SimpleYamlObject {
+  [key: string]: SimpleYamlValue;
+}
+
 export type SimpleYamlValue =
   | string
   | number
   | boolean
   | null
   | SimpleYamlValue[]
-  | Record<string, SimpleYamlValue>;
+  | SimpleYamlObject;
 
 function parseScalar(value: string): SimpleYamlValue {
   let trimmed = value.trim();
@@ -46,16 +50,25 @@ export function parseSimpleYaml(content: string): Record<string, SimpleYamlValue
 
   for (let index = 0; index < lines.length; index++) {
     const rawLine = lines[index];
-    if (/^\s*$/.test(rawLine) || /^\s*#/.test(rawLine)) {
+    if (!rawLine || /^\s*$/.test(rawLine) || /^\s*#/.test(rawLine)) {
       continue;
     }
-    const indent = rawLine.match(/^\s*/)?.[0].length ?? 0;
+    const indentMatch = rawLine.match(/^\s*/);
+    const indent = indentMatch?.[0]?.length ?? 0;
     const line = rawLine.trim();
 
-    while (stack.length > 0 && indent <= stack[stack.length - 1].indent) {
-      stack.pop();
+    while (stack.length > 0) {
+      const last = stack[stack.length - 1];
+      if (!last || indent <= last.indent) {
+        stack.pop();
+      } else {
+        break;
+      }
     }
     const parent = stack[stack.length - 1];
+    if (!parent) {
+      throw new Error("Invalid YAML structure: no parent context");
+    }
     const container = parent.value;
 
     if (line.startsWith("- ")) {

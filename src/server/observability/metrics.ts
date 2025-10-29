@@ -26,6 +26,16 @@ export class MetricsRegistry {
     this.denylistHitsTotal += count;
   }
 
+  /**
+   * メトリクスをリセット（テスト用、またはメトリクスローテーション用）
+   */
+  reset(): void {
+    this.httpRequestsTotal = 0;
+    this.maskAppliedTotal = 0;
+    this.denylistHitsTotal = 0;
+    this.requestDurationMs = 0;
+  }
+
   snapshot(): MetricSnapshot {
     return {
       httpRequestsTotal: this.httpRequestsTotal,

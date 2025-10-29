@@ -12,7 +12,18 @@ export interface DenylistFilter {
   diff(): string[];
 }
 
+/**
+ * Globパターンを正規表現に変換（ReDoS対策済み）
+ * @param pattern Globパターン文字列
+ * @returns コンパイル済み正規表現
+ * @throws パターンが長すぎる、または複雑すぎる場合
+ */
 function toRegex(pattern: string): RegExp {
+  // ReDoS対策: パターン長の制限
+  if (pattern.length > 500) {
+    throw new Error("Denylist pattern exceeds maximum length. Simplify the pattern.");
+  }
+
   const normalized = pattern.endsWith("/") ? pattern.slice(0, -1) : pattern;
   const escaped = normalized
     .replace(/[.+^${}()|[\]\\]/g, "\\$&")
@@ -22,7 +33,14 @@ function toRegex(pattern: string): RegExp {
     .replace(/\*/g, "[^/]*")
     .replace(/\?/g, ".");
   const suffix = pattern.endsWith("/") ? "(?:/.*)?" : "";
-  return new RegExp(`^${withWildcards}${suffix}$`);
+
+  // ReDoS対策: 最終パターンの複雑度チェック（ネストした量指定子）
+  const finalPattern = `^${withWildcards}${suffix}$`;
+  if (/(\*|\+|\{).*(\*|\+|\{).*(\*|\+|\{)/.test(finalPattern)) {
+    throw new Error("Denylist pattern is too complex. Use simpler glob patterns.");
+  }
+
+  return new RegExp(finalPattern);
 }
 
 function loadGitignore(repoRoot: string): string[] {

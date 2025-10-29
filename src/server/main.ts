@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 import { DuckDBClient } from "../shared/duckdb.js";
 import { maskValue } from "../shared/security/masker.js";
 
-import { bootstrapServer } from "./bootstrap.js";
+import { bootstrapServer, type BootstrapOptions } from "./bootstrap.js";
 import { ServerContext } from "./context.js";
 import { DegradeController } from "./fallbacks/degradeController.js";
 import {
@@ -258,10 +258,14 @@ function errorResponse(id: unknown, message: string, code = -32603): JsonRpcErro
 }
 
 export async function startServer(options: ServerOptions): Promise<Server> {
-  const bootstrap = bootstrapServer({
-    securityConfigPath: options.securityConfigPath,
-    securityLockPath: options.securityLockPath,
-  });
+  const bootstrapOptions: BootstrapOptions = {};
+  if (options.securityConfigPath) {
+    bootstrapOptions.securityConfigPath = options.securityConfigPath;
+  }
+  if (options.securityLockPath) {
+    bootstrapOptions.securityLockPath = options.securityLockPath;
+  }
+  const bootstrap = bootstrapServer(bootstrapOptions);
   const databasePath = resolve(options.databasePath);
   const repoRoot = resolve(options.repoRoot);
   let db: DuckDBClient | null = null;
@@ -497,15 +501,23 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   const port = parsePort(process.argv);
   const repoRoot = resolve(parseArg("--repo") ?? ".");
   const databasePath = resolve(parseArg("--db") ?? "var/index.duckdb");
+  const securityConfigPath = parseArg("--security-config");
+  const securityLockPath = parseArg("--security-lock");
 
-  startServer({
+  const options: ServerOptions = {
     port,
     repoRoot,
     databasePath,
     allowDegrade: hasFlag("--allow-degrade"),
-    securityConfigPath: parseArg("--security-config"),
-    securityLockPath: parseArg("--security-lock"),
-  }).catch((error) => {
+  };
+  if (securityConfigPath) {
+    options.securityConfigPath = securityConfigPath;
+  }
+  if (securityLockPath) {
+    options.securityLockPath = securityLockPath;
+  }
+
+  startServer(options).catch((error) => {
     console.error("Failed to start MCP server. Check DuckDB path and repo index before retrying.");
     console.error(error);
     process.exitCode = 1;

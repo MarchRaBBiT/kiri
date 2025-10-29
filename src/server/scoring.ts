@@ -62,7 +62,7 @@ function loadProfilesFromConfig(): Record<ScoringProfileName, ScoringWeights> {
       join(fileURLToPath(import.meta.url), "../../../config/scoring-profiles.yml");
 
     const configContent = readFileSync(configPath, "utf-8");
-    const parsed = parseSimpleYaml(configContent) as Record<string, ScoringWeights>;
+    const parsed = parseSimpleYaml(configContent) as unknown as Record<string, ScoringWeights>;
 
     // 必須プロファイルの検証とウェイトのバリデーション
     const requiredProfiles: ScoringProfileName[] = [

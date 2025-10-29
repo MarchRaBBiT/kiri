@@ -8,12 +8,29 @@ export interface MaskResult<T> {
   applied: number;
 }
 
+/**
+ * トークンパターンの妥当性を検証してReDoS攻撃を防ぐ
+ * @param token 検証対象のトークン文字列
+ * @throws パターンが長すぎる、またはネストした量指定子を含む場合
+ */
+function validateTokenPattern(token: string): void {
+  if (token.length > 100) {
+    throw new Error("Token pattern exceeds maximum length. Use shorter patterns.");
+  }
+  // ネストした量指定子による壊滅的バックトラッキングを防ぐ
+  if (/(\*|\+|\{)\s*(\*|\+|\{)/.test(token)) {
+    throw new Error("Invalid pattern contains nested quantifiers. Simplify the pattern.");
+  }
+}
+
 function maskString(input: string, tokens: string[], replacement: string): MaskResult<string> {
   let applied = 0;
   let output = input;
   for (const token of tokens) {
     if (!token) continue;
-    const pattern = new RegExp(token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g");
+    validateTokenPattern(token); // ReDoS対策の検証を追加
+    const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const pattern = new RegExp(escaped, "g");
     const matches = output.match(pattern);
     if (matches && matches.length > 0) {
       applied += matches.length;

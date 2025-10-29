@@ -34,8 +34,27 @@ export async function withSpan<T>(name: string, fn: (span: Span | null) => Promi
     return await fn(null);
   }
   const result = await tracer.startActiveSpan(name, async (span) => {
-    const output = await fn(span);
-    return output;
+    try {
+      const output = await fn(span);
+      // 成功時はOKステータスを設定
+      span.setStatus({ code: 1 }); // SpanStatusCode.OK
+      return output;
+    } catch (error) {
+      // エラー詳細をキャプチャしてデバッグ可能にする
+      span.setStatus({
+        code: 2, // SpanStatusCode.ERROR
+        message: error instanceof Error ? error.message : String(error),
+      });
+      span.setAttribute("error", true);
+      if (error instanceof Error) {
+        span.setAttribute("error.type", error.constructor.name);
+        span.setAttribute("error.message", error.message);
+        if (error.stack) {
+          span.setAttribute("error.stack", error.stack);
+        }
+      }
+      throw error; // エラーを記録後に再スロー
+    }
   });
   return result as T;
 }

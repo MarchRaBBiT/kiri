@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
+import { z } from "zod";
+
 import { parseSimpleYaml } from "../utils/simpleYaml.js";
 
 export interface SecurityConfig {
@@ -20,34 +22,30 @@ export interface SecurityStatus {
   matches: boolean;
 }
 
-function assertStringArray(value: unknown, field: string): string[] {
-  if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) {
-    throw new Error(`${field} must be an array of strings`);
-  }
-  return value;
-}
-
-function assertBoolean(value: unknown, field: string): boolean {
-  if (typeof value !== "boolean") {
-    throw new Error(`${field} must be a boolean`);
-  }
-  return value;
-}
+/**
+ * セキュリティ設定のスキーマ定義（Zodによる型安全な検証）
+ */
+const SecurityConfigSchema = z.object({
+  allowed_paths: z.array(z.string()).min(1, "At least one allowed path required"),
+  allow_network_egress: z.boolean(),
+  allow_subprocess: z.boolean(),
+  sensitive_tokens: z.array(z.string()),
+});
 
 export function loadSecurityConfig(configPath?: string): { config: SecurityConfig; hash: string } {
   const path = resolve(configPath ?? "config/security.yml");
   const content = readFileSync(path, "utf8");
-  const parsed = parseSimpleYaml(content) as Record<string, unknown>;
+  const parsed = parseSimpleYaml(content);
 
-  const config: SecurityConfig = {
-    allowed_paths: assertStringArray(parsed.allowed_paths, "allowed_paths"),
-    allow_network_egress: assertBoolean(parsed.allow_network_egress, "allow_network_egress"),
-    allow_subprocess: assertBoolean(parsed.allow_subprocess, "allow_subprocess"),
-    sensitive_tokens: assertStringArray(parsed.sensitive_tokens, "sensitive_tokens"),
-  };
+  // Zodによるスキーマ検証（手動アサーションを置き換え）
+  const result = SecurityConfigSchema.safeParse(parsed);
+  if (!result.success) {
+    const errors = result.error.issues.map((i) => i.message).join(", ");
+    throw new Error(`Security configuration is invalid. Fix the following errors: ${errors}`);
+  }
 
   const hash = createHash("sha256").update(content).digest("hex");
-  return { config, hash };
+  return { config: result.data, hash };
 }
 
 export function readSecurityLock(lockPath?: string): string | null {
@@ -75,12 +73,12 @@ export function assertSecurityBaseline(configPath?: string, lockPath?: string): 
   const status = evaluateSecurityStatus(configPath, lockPath);
   if (!status.lockHash) {
     throw new Error(
-      `Security lock is missing at ${status.lockPath}. Run 'pnpm exec tsx src/client/cli.ts security verify --write-lock' to establish baseline.`
+      `Security lock is missing at ${status.lockPath}. Establish baseline by running 'pnpm exec tsx src/client/cli.ts security verify --write-lock'.`
     );
   }
   if (!status.matches) {
     throw new Error(
-      `Security configuration at ${status.configPath} does not match lock. Investigate differences before proceeding.`
+      `Security configuration at ${status.configPath} does not match lock hash. Review configuration changes before proceeding.`
     );
   }
   return status;

@@ -1,7 +1,13 @@
 declare module "@opentelemetry/api" {
+  export interface SpanStatus {
+    code: number;
+    message?: string;
+  }
+
   export interface Span {
     setAttribute(key: string, value: unknown): void;
     recordException(error: unknown): void;
+    setStatus(status: SpanStatus): void;
     end(): void;
   }
 

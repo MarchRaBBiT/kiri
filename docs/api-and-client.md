@@ -71,6 +71,7 @@ KIRI は CLI バイナリ `kiri` を通じて MCP 標準の `stdio` トランス
 ```
 
 **オプション**:
+
 - `--reindex`: データベースが存在する場合でも強制的に再インデックス化
 - `--port 8765`: HTTP モードで起動（stdio の代わりに）
 - `--watch`: ファイル変更の監視を有効化し、変更時に自動的に再インデックス化
@@ -83,6 +84,7 @@ KIRI は CLI バイナリ `kiri` を通じて MCP 標準の `stdio` トランス
 ウォッチモード（`--watch`）を有効にすると、リポジトリのファイル変更を監視し、変更検出時に自動的に再インデックス化を実行します。
 
 **機能**:
+
 - **デバウンス**: 短時間に連続した変更を集約し、再インデックス回数を最小化（デフォルト: 500ms）
 - **除外リスト統合**: `denylist.yml` と `.gitignore` の両方のパターンを尊重
 - **ロック管理**: ロックファイルを使用して並行インデックス化を防止
@@ -90,32 +92,33 @@ KIRI は CLI バイナリ `kiri` を通じて MCP 標準の `stdio` トランス
 - **統計情報**: 再インデックス回数、処理時間、キュー深度を追跡
 
 **設定例（Codex）**:
+
 ```json
 {
   "mcpServers": {
     "kiri": {
       "command": "kiri",
-      "args": [
-        "--repo", "/abs/path/repo",
-        "--db", "/abs/path/index.duckdb",
-        "--watch"
-      ]
+      "args": ["--repo", "/abs/path/repo", "--db", "/abs/path/index.duckdb", "--watch"]
     }
   }
 }
 ```
 
 **カスタムデバウンス時間の設定**（低速ハードウェアやネットワークファイルシステム向け）:
+
 ```json
 {
   "mcpServers": {
     "kiri": {
       "command": "kiri",
       "args": [
-        "--repo", "/abs/path/repo",
-        "--db", "/abs/path/index.duckdb",
+        "--repo",
+        "/abs/path/repo",
+        "--db",
+        "/abs/path/index.duckdb",
         "--watch",
-        "--debounce", "1000"
+        "--debounce",
+        "1000"
       ]
     }
   }

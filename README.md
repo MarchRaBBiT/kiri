@@ -90,13 +90,13 @@ node dist/src/server/main.js --repo . --db var/index.duckdb --port 8765 --watch
 
 KIRI provides 5 MCP tools for code exploration:
 
-| Tool | Description |
-|------|-------------|
-| **context.bundle** | Extract relevant code context based on task goals |
-| **semantic.rerank** | Re-rank candidates by semantic similarity |
-| **files.search** | Full-text search across indexed files |
-| **snippets.get** | Retrieve code snippets with symbol boundaries |
-| **deps.closure** | Get dependency graph neighborhood |
+| Tool                | Description                                       |
+| ------------------- | ------------------------------------------------- |
+| **context.bundle**  | Extract relevant code context based on task goals |
+| **semantic.rerank** | Re-rank candidates by semantic similarity         |
+| **files.search**    | Full-text search across indexed files             |
+| **snippets.get**    | Retrieve code snippets with symbol boundaries     |
+| **deps.closure**    | Get dependency graph neighborhood                 |
 
 ## 🔧 Configuration
 
@@ -139,8 +139,10 @@ Create `~/.config/codex/mcp.json` or `.claude/mcp.json`:
     "kiri": {
       "command": "kiri-mcp-server",
       "args": [
-        "--repo", "/path/to/your/project",
-        "--db", "/path/to/your/project/.kiri/index.duckdb",
+        "--repo",
+        "/path/to/your/project",
+        "--db",
+        "/path/to/your/project/.kiri/index.duckdb",
         "--watch"
       ]
     }
@@ -157,8 +159,10 @@ Create `~/.config/codex/mcp.json` or `.claude/mcp.json`:
       "command": "npx",
       "args": [
         "kiri-mcp-server",
-        "--repo", "/path/to/your/project",
-        "--db", "/path/to/your/project/.kiri/index.duckdb"
+        "--repo",
+        "/path/to/your/project",
+        "--db",
+        "/path/to/your/project/.kiri/index.duckdb"
       ]
     }
   }
@@ -176,8 +180,10 @@ Create `~/.config/codex/mcp.json` or `.claude/mcp.json`:
       "command": "node",
       "args": [
         "/absolute/path/to/kiri/dist/src/server/main.js",
-        "--repo", "/path/to/your/project",
-        "--db", "/path/to/your/project/.kiri/index.duckdb"
+        "--repo",
+        "/path/to/your/project",
+        "--db",
+        "/path/to/your/project/.kiri/index.duckdb"
       ]
     }
   }
@@ -274,12 +280,12 @@ kiri/
 
 ## 🎯 Performance Targets
 
-| Metric | Target | Description |
-|--------|--------|-------------|
-| **P@10** | ≥ 0.7 | Precision at 10 - Top 10 snippets relevance |
-| **TTFU** | ≤ 1.0s | Time to first useful result |
-| **Token Reduction** | ≥ 40% | Compared to naive copy-paste approach |
-| **Coverage** | ≥ 80% | Statement and line coverage for tests |
+| Metric              | Target | Description                                 |
+| ------------------- | ------ | ------------------------------------------- |
+| **P@10**            | ≥ 0.7  | Precision at 10 - Top 10 snippets relevance |
+| **TTFU**            | ≤ 1.0s | Time to first useful result                 |
+| **Token Reduction** | ≥ 40%  | Compared to naive copy-paste approach       |
+| **Coverage**        | ≥ 80%  | Statement and line coverage for tests       |
 
 ## 🔐 Security
 
@@ -329,6 +335,7 @@ MIT License - See [LICENSE](LICENSE) for details.
 ## 🙏 Acknowledgments
 
 Built with:
+
 - [DuckDB](https://duckdb.org/) - Embedded analytical database
 - [tree-sitter](https://tree-sitter.github.io/) - Parser generator for AST extraction
 - [MCP](https://modelcontextprotocol.io/) - Model Context Protocol

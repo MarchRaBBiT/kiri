@@ -1,5 +1,5 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { existsSync, unlinkSync } from "node:fs";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -23,13 +23,11 @@ describe("IndexWatcher", () => {
     }
   });
 
-  it(
-    "starts and stops without errors",
-    async () => {
-      const repo = await createTempRepo({
-        "src/test.ts": "export const test = 42;",
-      });
-      cleanupTargets.push({ dispose: repo.cleanup });
+  it("starts and stops without errors", async () => {
+    const repo = await createTempRepo({
+      "src/test.ts": "export const test = 42;",
+    });
+    cleanupTargets.push({ dispose: repo.cleanup });
 
     // Use unique test ID to avoid lock file conflicts
     const testId = Math.random().toString(36).substring(7);
@@ -69,12 +67,10 @@ describe("IndexWatcher", () => {
     expect(stats.reindexCount).toBe(0);
     expect(stats.queueDepth).toBe(0);
 
-      abortController.abort();
-      await watcher.stop();
-      expect(watcher.isRunning()).toBe(false);
-    },
-    10000
-  ); // 10 second timeout for DB initialization
+    abortController.abort();
+    await watcher.stop();
+    expect(watcher.isRunning()).toBe(false);
+  }, 10000); // 10 second timeout for DB initialization
 
   it("triggers reindex on file change", async () => {
     const repo = await createTempRepo({

@@ -1,5 +1,5 @@
-import { access, constants } from "node:fs/promises";
 import { existsSync, unlinkSync } from "node:fs";
+import { access, constants } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
 import { runIndexer } from "../indexer/cli.js";
@@ -39,9 +39,7 @@ export async function ensureDatabaseIndexed(
     if (error instanceof LockfileError) {
       const ownerPid = error.ownerPid ?? getLockOwner(lockfilePath);
       const ownerInfo = ownerPid ? ` (PID: ${ownerPid})` : "";
-      process.stderr.write(
-        `⚠️  Another indexing process${ownerInfo} is already running.\n`
-      );
+      process.stderr.write(`⚠️  Another indexing process${ownerInfo} is already running.\n`);
       process.stderr.write(`   Please wait for it to complete and try again.\n`);
       process.exit(1);
     }
@@ -94,9 +92,7 @@ export async function ensureDatabaseIndexed(
 
     // Handle degraded mode
     if (allowDegrade) {
-      process.stderr.write(
-        `⚠️  Continuing in degraded mode (--allow-degrade is set)\n`
-      );
+      process.stderr.write(`⚠️  Continuing in degraded mode (--allow-degrade is set)\n`);
       process.stderr.write(
         `   The server will start but indexing features will not be available.\n`
       );

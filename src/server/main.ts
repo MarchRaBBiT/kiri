@@ -6,6 +6,7 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 
 import { IndexWatcher } from "../indexer/watch.js";
+
 import { ensureDatabaseIndexed } from "./indexBootstrap.js";
 import { writeMetricsResponse } from "./observability/metrics.js";
 import { JsonRpcRequest, createRpcHandler, errorResponse, validateJsonRpcRequest } from "./rpc.js";

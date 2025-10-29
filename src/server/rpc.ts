@@ -69,7 +69,8 @@ const SERVER_INFO = {
 const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: "context.bundle",
-    description: "Extract relevant code context based on task goals. Use this first when starting new tasks, fixing bugs, or understanding features - it minimizes token usage by returning only relevant snippets.",
+    description:
+      "Extract relevant code context based on task goals. Use this first when starting new tasks, fixing bugs, or understanding features - it minimizes token usage by returning only relevant snippets.",
     inputSchema: {
       type: "object",
       required: ["goal"],
@@ -87,7 +88,10 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
           type: "object",
           additionalProperties: true,
           properties: {
-            editing_path: { type: "string", description: "Path to the file currently being edited." },
+            editing_path: {
+              type: "string",
+              description: "Path to the file currently being edited.",
+            },
             failing_tests: {
               type: "array",
               items: { type: "string" },
@@ -101,7 +105,8 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   },
   {
     name: "semantic.rerank",
-    description: "Re-rank candidates by semantic similarity. Use this to refine search results or prioritize files by relevance to a query.",
+    description:
+      "Re-rank candidates by semantic similarity. Use this to refine search results or prioritize files by relevance to a query.",
     inputSchema: {
       type: "object",
       required: ["text", "candidates"],
@@ -127,7 +132,8 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   },
   {
     name: "files.search",
-    description: "Search files by keyword using full-text index. Use this to find implementation patterns, specific functions, or explore unfamiliar code areas.",
+    description:
+      "Search files by keyword using full-text index. Use this to find implementation patterns, specific functions, or explore unfamiliar code areas.",
     inputSchema: {
       type: "object",
       required: ["query"],
@@ -143,7 +149,8 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   },
   {
     name: "snippets.get",
-    description: "Retrieve code snippets from a specific file. Use this to read only the necessary parts instead of entire files, reducing token usage.",
+    description:
+      "Retrieve code snippets from a specific file. Use this to read only the necessary parts instead of entire files, reducing token usage.",
     inputSchema: {
       type: "object",
       required: ["path"],
@@ -157,7 +164,8 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   },
   {
     name: "deps.closure",
-    description: "Get dependency graph neighbors. Use this to understand impact scope when refactoring, or to trace call chains and module relationships.",
+    description:
+      "Get dependency graph neighbors. Use this to understand impact scope when refactoring, or to trace call chains and module relationships.",
     inputSchema: {
       type: "object",
       required: ["path"],

@@ -1,10 +1,12 @@
-import { watch, type FSWatcher } from "chokidar";
-import { performance } from "node:perf_hooks";
 import { resolve } from "node:path";
+import { performance } from "node:perf_hooks";
+
+import { watch, type FSWatcher } from "chokidar";
+
+import { acquireLock, releaseLock, getLockOwner, LockfileError } from "../shared/utils/lockfile.js";
 
 import { runIndexer } from "./cli.js";
 import { createDenylistFilter } from "./pipeline/filters/denylist.js";
-import { acquireLock, releaseLock, getLockOwner, LockfileError } from "../shared/utils/lockfile.js";
 
 /**
  * Configuration options for IndexWatcher.
@@ -198,7 +200,9 @@ export class IndexWatcher {
   private async executeReindex(): Promise<void> {
     // Check if already reindexing
     if (this.isReindexing) {
-      process.stderr.write(`⏳ Reindex already in progress. Will reindex again after completion.\n`);
+      process.stderr.write(
+        `⏳ Reindex already in progress. Will reindex again after completion.\n`
+      );
       this.pendingReindex = true;
       return;
     }
@@ -261,7 +265,9 @@ export class IndexWatcher {
 
         // If more changes occurred during reindex, schedule another one
         if (this.pendingReindex) {
-          process.stderr.write(`🔁 New changes detected during reindex. Scheduling another reindex...\n`);
+          process.stderr.write(
+            `🔁 New changes detected during reindex. Scheduling another reindex...\n`
+          );
           this.scheduleReindex("batch", "(multiple files)");
         }
       }
@@ -301,7 +307,9 @@ export class IndexWatcher {
 
     // Print final statistics
     const uptime = Math.round((performance.now() - this.stats.watcherStartTime) / 1000);
-    process.stderr.write(`📊 Final stats: ${this.stats.reindexCount} reindexes, ${uptime}s uptime\n`);
+    process.stderr.write(
+      `📊 Final stats: ${this.stats.reindexCount} reindexes, ${uptime}s uptime\n`
+    );
     process.stderr.write(`✅ Watch mode stopped.\n`);
   }
 

@@ -32,7 +32,7 @@ function isProcessRunning(pid: number): boolean {
     // Signal 0 doesn't kill the process, just checks if it exists
     process.kill(pid, 0);
     return true;
-  } catch (error) {
+  } catch {
     // ESRCH means process doesn't exist
     return false;
   }
@@ -59,9 +59,7 @@ export function acquireLock(lockfilePath: string): void {
 
         if (!isNaN(existingPid) && !isProcessRunning(existingPid)) {
           // Stale lock detected - remove it and retry
-          process.stderr.write(
-            `⚠️  Removing stale lock file (PID ${existingPid} not running)\n`
-          );
+          process.stderr.write(`⚠️  Removing stale lock file (PID ${existingPid} not running)\n`);
           unlinkSync(lockfilePath);
 
           // Retry acquisition (should succeed now)
@@ -103,7 +101,7 @@ export function releaseLock(lockfilePath: string): void {
     if (existsSync(lockfilePath)) {
       unlinkSync(lockfilePath);
     }
-  } catch (error) {
+  } catch {
     // Ignore errors during cleanup - lock may have been manually removed
     // or process killed before lock was created
   }

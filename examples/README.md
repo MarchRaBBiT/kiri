@@ -14,8 +14,10 @@
     "kiri": {
       "command": "kiri",
       "args": [
-        "--repo", "/path/to/your/project",
-        "--db", "/path/to/your/project/.kiri/index.duckdb"
+        "--repo",
+        "/path/to/your/project",
+        "--db",
+        "/path/to/your/project/.kiri/index.duckdb"
       ]
     }
   }
@@ -23,6 +25,7 @@
 ```
 
 **設定ファイルのコピー**:
+
 ```bash
 cp examples/codex-mcp-config.json ~/.config/codex/mcp.json
 # パスを実際のプロジェクトに合わせて編集してください
@@ -50,11 +53,13 @@ kiri --repo /path/to/your/project --db /path/to/your/project/.kiri/index.duckdb 
 **ユーザー**: "authentication 関連のコードを検索して"
 
 **Codex の動作**:
+
 1. KIRI の `files.search` ツールを使用
 2. "authentication" をキーワードに全文検索
 3. 関連ファイルのリストを返却
 
 **期待される結果**:
+
 ```
 見つかったファイル:
 - src/auth/token.ts (認証トークン検証)
@@ -69,24 +74,28 @@ kiri --repo /path/to/your/project --db /path/to/your/project/.kiri/index.duckdb 
 **ユーザー**: "トークン検証の実装を理解したい"
 
 **Codex の動作**:
+
 1. `context.bundle` ツールでゴールに基づいてコンテキスト抽出
 2. 関連するコードスニペットを収集
 3. 依存関係も含めて提示
 
 **期待される結果**:
+
 ```markdown
 ## トークン検証の実装
 
 ### メインロジック (src/auth/token.ts)
+
 \`\`\`typescript
 export function verifyToken(token: string): boolean {
-  if (!token) return false;
-  const expires = calculateExpiry(token);
-  return Date.now() < expires;
+if (!token) return false;
+const expires = calculateExpiry(token);
+return Date.now() < expires;
 }
 \`\`\`
 
 ### 依存関係
+
 - src/utils/helper.ts: `calculateExpiry` 関数
 - src/auth/token.spec.ts: テストコード
 ```
@@ -98,11 +107,13 @@ export function verifyToken(token: string): boolean {
 **ユーザー**: "src/main.ts が依存しているファイルを教えて"
 
 **Codex の動作**:
+
 1. `deps.closure` ツールで依存グラフを取得
 2. outbound 方向（依存先）を取得
 3. ツリー構造で表示
 
 **期待される結果**:
+
 ```
 src/main.ts の依存関係:
 ├── src/server/main.ts
@@ -120,11 +131,13 @@ src/main.ts の依存関係:
 **ユーザー**: "src/auth/token.ts の verifyToken 関数だけ見せて"
 
 **Codex の動作**:
+
 1. `snippets.get` ツールでファイル取得
 2. シンボル（関数）境界を検出
 3. 該当部分のみ抽出
 
 **期待される結果**:
+
 ```typescript
 // src/auth/token.ts:3-9
 export function verifyToken(token: string): boolean {
@@ -143,11 +156,13 @@ export function verifyToken(token: string): boolean {
 **ユーザー**: "ユーザー認証に関連するファイルを重要度順に並べて"
 
 **Codex の動作**:
+
 1. まず `files.search` で候補を取得
 2. `semantic.rerank` で類似度計算
 3. スコア順にソート
 
 **期待される結果**:
+
 ```
 関連度順:
 1. src/auth/token.ts (スコア: 0.92)
@@ -205,8 +220,10 @@ Codex:
     "kiri": {
       "command": "kiri",
       "args": [
-        "--repo", "/path/to/large/project",
-        "--db", "/path/to/index.duckdb",
+        "--repo",
+        "/path/to/large/project",
+        "--db",
+        "/path/to/index.duckdb",
         "--allow-degrade"
       ]
     }
@@ -230,12 +247,14 @@ Codex:
 ### よくある問題
 
 **Q: ツールが見つからない**
+
 ```
 /mcp tools kiri
 → エラー: サーバー未接続
 ```
 
 **A**: 設定ファイルのパスを確認
+
 ```bash
 cat ~/.config/codex/mcp.json
 # パスが絶対パスになっているか確認
@@ -244,12 +263,14 @@ cat ~/.config/codex/mcp.json
 ---
 
 **Q: 検索結果が空**
+
 ```
 files.search { query: "test" }
 → 0 results
 ```
 
 **A**: インデックスを確認
+
 ```bash
 # インデックスサイズを確認
 ls -lh /path/to/index.duckdb
@@ -263,6 +284,7 @@ kiri-index --repo /path/to/project --db /path/to/index.duckdb --full
 **Q: レスポンスが遅い**
 
 **A**: 以下を確認
+
 1. データベースサイズ（大きすぎる場合は分割）
 2. 除外設定（node_modules など）
 3. `--allow-degrade` オプションの利用

@@ -3,8 +3,10 @@
     "kiri": {
       "command": "kiri",
       "args": [
-        "--repo", "/path/to/your/project",
-        "--db", "/path/to/your/project/.kiri/index.duckdb"
+        "--repo",
+        "/path/to/your/project",
+        "--db",
+        "/path/to/your/project/.kiri/index.duckdb"
       ]
     }
   }

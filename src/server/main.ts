@@ -5,6 +5,7 @@ import { performance } from "node:perf_hooks";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 
+import { ensureDatabaseIndexed } from "./indexBootstrap.js";
 import { writeMetricsResponse } from "./observability/metrics.js";
 import { JsonRpcRequest, createRpcHandler, errorResponse, validateJsonRpcRequest } from "./rpc.js";
 import { createServerRuntime, type CommonServerOptions } from "./runtime.js";
@@ -149,6 +150,10 @@ async function startHttpOrStdio(): Promise<void> {
   const securityConfigPath = parseArg("--security-config");
   const securityLockPath = parseArg("--security-lock");
   const allowDegrade = hasFlag("--allow-degrade");
+  const forceReindex = hasFlag("--reindex");
+
+  // Ensure database is indexed before starting server
+  await ensureDatabaseIndexed(repoRoot, databasePath, allowDegrade, forceReindex);
 
   if (hasFlag("--port")) {
     const port = parsePort(process.argv);

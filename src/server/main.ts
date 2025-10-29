@@ -10,11 +10,13 @@ import {
   ContextBundleParams,
   DepsClosureParams,
   FilesSearchParams,
+  SemanticRerankParams,
   SnippetsGetParams,
+  contextBundle,
   depsClosure,
   filesSearch,
-  contextBundle,
   resolveRepoId,
+  semanticRerank,
   snippetsGet,
 } from "./handlers.js";
 
@@ -168,6 +170,57 @@ function parseContextBundleParams(input: unknown): ContextBundleParams {
     }
   }
 
+  if (typeof record.profile === "string") {
+    params.profile = record.profile;
+  }
+
+  return params;
+}
+
+function parseSemanticRerankParams(input: unknown): SemanticRerankParams {
+  if (!input || typeof input !== "object") {
+    return { text: "", candidates: [] };
+  }
+  const record = input as Record<string, unknown>;
+  const params: SemanticRerankParams = {
+    text: typeof record.text === "string" ? record.text : "",
+    candidates: [],
+  };
+
+  const candidatesValue = record.candidates;
+  if (Array.isArray(candidatesValue)) {
+    for (const candidate of candidatesValue) {
+      if (!candidate || typeof candidate !== "object") {
+        continue;
+      }
+      const candidateRecord = candidate as Record<string, unknown>;
+      if (typeof candidateRecord.path !== "string" || candidateRecord.path.length === 0) {
+        continue;
+      }
+      const candidateInput: SemanticRerankParams["candidates"][number] = {
+        path: candidateRecord.path,
+      };
+      if (typeof candidateRecord.score === "number" && Number.isFinite(candidateRecord.score)) {
+        candidateInput.score = candidateRecord.score;
+      }
+      params.candidates.push(candidateInput);
+    }
+  }
+
+  const limitValue = record.k;
+  if (typeof limitValue === "number" && Number.isFinite(limitValue)) {
+    params.k = limitValue;
+  } else if (typeof limitValue === "string") {
+    const parsed = Number(limitValue);
+    if (!Number.isNaN(parsed)) {
+      params.k = parsed;
+    }
+  }
+
+  if (typeof record.profile === "string") {
+    params.profile = record.profile;
+  }
+
   return params;
 }
 
@@ -271,6 +324,11 @@ export async function startServer(options: ServerOptions): Promise<Server> {
             result = await contextBundle(context, params);
             break;
           }
+          case "semantic.rerank": {
+            const params = parseSemanticRerankParams(payload.params);
+            result = await semanticRerank(context, params);
+            break;
+          }
           case "files.search": {
             const params = parseFilesSearchParams(payload.params);
             result = await filesSearch(context, params);
@@ -291,7 +349,7 @@ export async function startServer(options: ServerOptions): Promise<Server> {
             res.end(
               errorResponse(
                 payload.id ?? null,
-                "Requested method is not available. Use context.bundle, files.search, snippets.get, or deps.closure."
+                "Requested method is not available. Use context.bundle, semantic.rerank, files.search, snippets.get, or deps.closure."
               )
             );
             return;

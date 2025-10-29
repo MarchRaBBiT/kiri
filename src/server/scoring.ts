@@ -11,32 +11,61 @@ export interface ScoringWeights {
   dependency: number;
   /** 近接ファイル（同一ディレクトリ）の重み */
   proximity: number;
+  /** セマンティック類似度の重み */
+  semantic: number;
 }
 
-/**
- * デフォルトのスコアリング重み
- * - textMatch: 1.0 (基準値)
- * - editingPath: 2.0 (ユーザーが編集中のファイルは高優先度)
- * - dependency: 0.5 (依存関係は重要だが直接マッチより低い)
- * - proximity: 0.25 (近接ファイルは関連性が高い可能性がある)
- */
-export const DEFAULT_WEIGHTS: ScoringWeights = {
-  textMatch: 1.0,
-  editingPath: 2.0,
-  dependency: 0.5,
-  proximity: 0.25,
+export type ScoringProfileName = "default" | "bugfix" | "testfail" | "typeerror" | "feature";
+
+const PROFILE_WEIGHTS: Record<ScoringProfileName, ScoringWeights> = {
+  default: {
+    textMatch: 1.0,
+    editingPath: 2.0,
+    dependency: 0.5,
+    proximity: 0.25,
+    semantic: 0.75,
+  },
+  bugfix: {
+    textMatch: 1.0,
+    editingPath: 1.8,
+    dependency: 0.7,
+    proximity: 0.35,
+    semantic: 0.9,
+  },
+  testfail: {
+    textMatch: 1.0,
+    editingPath: 1.6,
+    dependency: 0.85,
+    proximity: 0.3,
+    semantic: 0.8,
+  },
+  typeerror: {
+    textMatch: 1.0,
+    editingPath: 1.4,
+    dependency: 0.6,
+    proximity: 0.4,
+    semantic: 0.6,
+  },
+  feature: {
+    textMatch: 1.0,
+    editingPath: 1.5,
+    dependency: 0.45,
+    proximity: 0.5,
+    semantic: 0.7,
+  },
 };
 
-/**
- * スコアリングプロファイルをロード
- * 将来的にはYAML設定や環境変数からロード可能にする予定
- *
- * @param _profileName - プロファイル名（現在未使用、将来の拡張用）
- * @returns スコアリング重み設定
- */
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-export function loadScoringProfile(_profileName?: string): ScoringWeights {
-  // TODO: 将来的にはconfig/scoring.yamlから読み込み
-  // TODO: 評価メトリクス（P@k, TTFU）を使った自動チューニング
-  return DEFAULT_WEIGHTS;
+export function coerceProfileName(name?: string | null): ScoringProfileName | null {
+  if (!name) {
+    return null;
+  }
+  const normalized = name.toLowerCase() as ScoringProfileName;
+  return normalized in PROFILE_WEIGHTS ? normalized : null;
+}
+
+export function loadScoringProfile(profileName?: ScoringProfileName | null): ScoringWeights {
+  if (profileName && profileName in PROFILE_WEIGHTS) {
+    return PROFILE_WEIGHTS[profileName];
+  }
+  return PROFILE_WEIGHTS.default;
 }

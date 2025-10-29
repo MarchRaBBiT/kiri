@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { runIndexer } from "../../src/indexer/cli.js";
 import { ServerContext } from "../../src/server/context.js";
-import { contextBundle, resolveRepoId } from "../../src/server/handlers.js";
+import { contextBundle, resolveRepoId, semanticRerank } from "../../src/server/handlers.js";
 import { startServer } from "../../src/server/main.js";
 import { DuckDBClient } from "../../src/shared/duckdb.js";
 import { createTempRepo } from "../helpers/test-repo.js";
@@ -72,6 +72,7 @@ describe("context.bundle", () => {
     const editing = bundle.context.find((item) => item.path === "src/auth/token.ts");
     expect(editing).toBeDefined();
     expect(editing?.why).toContain("artifact:editing_path");
+    expect(editing?.why.some((reason) => reason.startsWith("semantic:"))).toBe(true);
 
     const helper = bundle.context.find((item) => item.path === "src/utils/helper.ts");
     expect(helper).toBeDefined();
@@ -196,5 +197,63 @@ describe("context.bundle", () => {
     expect(bundle.context).toBeDefined();
     // エラーが発生せず正常に完了することを確認
     expect(bundle.context.length).toBeGreaterThan(0);
+  });
+
+  it("reorders candidates using semantic similarity weights", async () => {
+    const repo = await createTempRepo({
+      "src/auth/login.ts": `export function loginUser(user: string, password: string) {\n  const authenticated = password === "secret";\n  if (!authenticated) {\n    throw new Error("authentication failed");\n  }\n  return { status: "ok", user };\n}\n`,
+      "src/ui/dashboard.ts": `export function renderDashboard() {\n  return "dashboard";\n}\n`,
+    });
+    cleanupTargets.push({ dispose: repo.cleanup });
+
+    const dbDir = await mkdtemp(join(tmpdir(), "kiri-db-"));
+    const dbPath = join(dbDir, "index.duckdb");
+    cleanupTargets.push({ dispose: async () => await rm(dbDir, { recursive: true, force: true }) });
+
+    await runIndexer({ repoRoot: repo.path, databasePath: dbPath, full: true });
+
+    const db = await DuckDBClient.connect({ databasePath: dbPath });
+    cleanupTargets.push({ dispose: async () => await db.close() });
+
+    const repoId = await resolveRepoId(db, repo.path);
+    const context: ServerContext = { db, repoId };
+
+    const reranked = await semanticRerank(context, {
+      text: "investigate login authentication failure",
+      candidates: [
+        { path: "src/ui/dashboard.ts", score: 0.4 },
+        { path: "src/auth/login.ts", score: 0.4 },
+      ],
+    });
+
+    expect(reranked.candidates.length).toBeGreaterThan(0);
+    expect(reranked.candidates[0]?.path).toBe("src/auth/login.ts");
+    expect(reranked.candidates[0]?.semantic ?? 0).toBeGreaterThan(
+      reranked.candidates[1]?.semantic ?? 0
+    );
+    expect(reranked.candidates[0]?.combined ?? 0).toBeGreaterThan(0.4);
+  });
+
+  it("rejects semantic rerank without text", async () => {
+    const repo = await createTempRepo({
+      "src/sample.ts": "export const value = 1;\n",
+    });
+    cleanupTargets.push({ dispose: repo.cleanup });
+
+    const dbDir = await mkdtemp(join(tmpdir(), "kiri-db-"));
+    const dbPath = join(dbDir, "index.duckdb");
+    cleanupTargets.push({ dispose: async () => await rm(dbDir, { recursive: true, force: true }) });
+
+    await runIndexer({ repoRoot: repo.path, databasePath: dbPath, full: true });
+
+    const db = await DuckDBClient.connect({ databasePath: dbPath });
+    cleanupTargets.push({ dispose: async () => await db.close() });
+
+    const repoId = await resolveRepoId(db, repo.path);
+    const context: ServerContext = { db, repoId };
+
+    await expect(
+      semanticRerank(context, { text: "", candidates: [{ path: "src/sample.ts", score: 0.1 }] })
+    ).rejects.toThrow(/non-empty text/);
   });
 });

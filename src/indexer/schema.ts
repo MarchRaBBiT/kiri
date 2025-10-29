@@ -99,4 +99,15 @@ export async function ensureBaseSchema(db: DuckDBClient): Promise<void> {
   await db.run(`
     CREATE INDEX IF NOT EXISTS idx_dep_src ON dependency(repo_id, src_path)
   `);
+
+  await db.run(`
+    CREATE TABLE IF NOT EXISTS file_embedding (
+      repo_id INTEGER,
+      path TEXT,
+      dims INTEGER NOT NULL,
+      vector_json TEXT NOT NULL,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (repo_id, path)
+    )
+  `);
 }

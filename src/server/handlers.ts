@@ -1,9 +1,12 @@
 import path from "node:path";
 
+import { encode as encodeGPT } from "gpt-tokenizer";
+
 import { DuckDBClient } from "../shared/duckdb.js";
+import { generateEmbedding, structuralSimilarity } from "../shared/embedding.js";
 
 import { ServerContext } from "./context.js";
-import { loadScoringProfile } from "./scoring.js";
+import { coerceProfileName, loadScoringProfile } from "./scoring.js";
 
 export interface FilesSearchParams {
   query: string;
@@ -48,6 +51,7 @@ export interface ContextBundleParams {
   goal: string;
   artifacts?: ContextBundleArtifacts;
   limit?: number;
+  profile?: string;
 }
 
 export interface ContextBundleItem {
@@ -63,6 +67,29 @@ export interface ContextBundleResult {
   tokens_estimate: number;
 }
 
+export interface SemanticRerankCandidateInput {
+  path: string;
+  score?: number;
+}
+
+export interface SemanticRerankParams {
+  text: string;
+  candidates: SemanticRerankCandidateInput[];
+  k?: number;
+  profile?: string;
+}
+
+export interface SemanticRerankItem {
+  path: string;
+  semantic: number;
+  base: number;
+  combined: number;
+}
+
+export interface SemanticRerankResult {
+  candidates: SemanticRerankItem[];
+}
+
 const DEFAULT_SEARCH_LIMIT = 50;
 const DEFAULT_SNIPPET_WINDOW = 150;
 const DEFAULT_BUNDLE_LIMIT = 12;
@@ -73,6 +100,7 @@ const MAX_DEPENDENCY_SEEDS = 8;
 const MAX_DEPENDENCY_SEEDS_QUERY_LIMIT = 100; // SQL injection防御用の上限
 const NEARBY_LIMIT = 6;
 const FALLBACK_SNIPPET_WINDOW = 120;
+const MAX_RERANK_LIMIT = 50;
 
 const STOP_WORDS = new Set([
   "the",
@@ -147,6 +175,11 @@ interface FileWithBinaryRow extends FileRow {
   is_binary: boolean;
 }
 
+interface FileWithEmbeddingRow extends FileWithBinaryRow {
+  vector_json: string | null;
+  vector_dims: number | null;
+}
+
 interface SnippetRow {
   snippet_id: number;
   start_line: number;
@@ -198,6 +231,8 @@ interface CandidateInfo {
   totalLines: number | null;
   lang: string | null;
   ext: string | null;
+  embedding: number[] | null;
+  semanticSimilarity: number | null;
 }
 
 interface FileContentCacheEntry {
@@ -205,6 +240,7 @@ interface FileContentCacheEntry {
   lang: string | null;
   ext: string | null;
   totalLines: number;
+  embedding: number[] | null;
 }
 
 function normalizeBundleLimit(limit?: number): number {
@@ -244,10 +280,90 @@ function ensureCandidate(map: Map<string, CandidateInfo>, filePath: string): Can
       totalLines: null,
       lang: null,
       ext: null,
+      embedding: null,
+      semanticSimilarity: null,
     };
     map.set(filePath, candidate);
   }
   return candidate;
+}
+
+function parseEmbedding(vectorJson: string | null, vectorDims: number | null): number[] | null {
+  if (!vectorJson || !vectorDims || vectorDims <= 0) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(vectorJson) as unknown;
+    if (!Array.isArray(parsed)) {
+      return null;
+    }
+    const values: number[] = [];
+    for (let i = 0; i < parsed.length && i < vectorDims; i += 1) {
+      const raw = parsed[i];
+      const num = typeof raw === "number" ? raw : Number(raw);
+      if (!Number.isFinite(num)) {
+        return null;
+      }
+      values.push(num);
+    }
+    return values.length === vectorDims ? values : null;
+  } catch {
+    return null;
+  }
+}
+
+function applyStructuralScores(
+  candidates: CandidateInfo[],
+  queryEmbedding: number[] | null,
+  structuralWeight: number
+): void {
+  if (!queryEmbedding || structuralWeight <= 0) {
+    return;
+  }
+  for (const candidate of candidates) {
+    if (!candidate.embedding) {
+      continue;
+    }
+    const similarity = structuralSimilarity(queryEmbedding, candidate.embedding);
+    if (!Number.isFinite(similarity) || similarity <= 0) {
+      continue;
+    }
+    candidate.semanticSimilarity = similarity;
+    candidate.score += structuralWeight * similarity;
+    candidate.reasons.add(`structural:${similarity.toFixed(2)}`);
+  }
+}
+
+async function fetchEmbeddingMap(
+  db: DuckDBClient,
+  repoId: number,
+  paths: string[]
+): Promise<Map<string, number[]>> {
+  const map = new Map<string, number[]>();
+  if (paths.length === 0) {
+    return map;
+  }
+  const placeholders = paths.map(() => "?").join(", ");
+  const rows = await db.all<{
+    path: string;
+    vector_json: string | null;
+    vector_dims: number | null;
+  }>(
+    `
+      SELECT path, vector_json, dims AS vector_dims
+      FROM file_embedding
+      WHERE repo_id = ? AND path IN (${placeholders})
+    `,
+    [repoId, ...paths]
+  );
+
+  for (const row of rows) {
+    const embedding = parseEmbedding(row.vector_json, row.vector_dims);
+    if (embedding) {
+      map.set(row.path, embedding);
+    }
+  }
+  return map;
 }
 
 async function loadFileContent(
@@ -255,11 +371,14 @@ async function loadFileContent(
   repoId: number,
   filePath: string
 ): Promise<FileContentCacheEntry | null> {
-  const rows = await db.all<FileWithBinaryRow>(
+  const rows = await db.all<FileWithEmbeddingRow>(
     `
-      SELECT f.path, f.lang, f.ext, f.is_binary, b.content
+      SELECT f.path, f.lang, f.ext, f.is_binary, b.content, fe.vector_json, fe.dims AS vector_dims
       FROM file f
       JOIN blob b ON b.hash = f.blob_hash
+      LEFT JOIN file_embedding fe
+        ON fe.repo_id = f.repo_id
+       AND fe.path = f.path
       WHERE f.repo_id = ? AND f.path = ?
       LIMIT 1
     `,
@@ -275,6 +394,7 @@ async function loadFileContent(
     lang: row.lang,
     ext: row.ext,
     totalLines,
+    embedding: parseEmbedding(row.vector_json ?? null, row.vector_dims ?? null),
   };
 }
 
@@ -311,21 +431,8 @@ function buildSnippetPreview(content: string, startLine: number, endLine: number
 }
 
 /**
- * トークン数を推定（行ベース）
- * 後方互換性のため、コンテンツなしでも動作する
- *
- * @param startLine - 開始行
- * @param endLine - 終了行
- * @returns 推定トークン数
- */
-function estimateTokens(startLine: number, endLine: number): number {
-  const lineCount = Math.max(1, endLine - startLine + 1);
-  return lineCount * 4;
-}
-
-/**
  * トークン数を推定（コンテンツベース）
- * GPT-style: ~4 chars per token for code
+ * 実際のGPTトークナイザーを使用して正確にカウント
  *
  * @param content - ファイル全体のコンテンツ
  * @param startLine - 開始行（1-indexed）
@@ -337,9 +444,16 @@ function estimateTokensFromContent(content: string, startLine: number, endLine: 
   const startIndex = Math.max(0, startLine - 1);
   const endIndex = Math.min(endLine, lines.length);
   const selectedLines = lines.slice(startIndex, endIndex);
-  const charCount = selectedLines.reduce((sum, line) => sum + line.length, 0);
-  // GPT-style: 約4文字で1トークン
-  return Math.max(1, Math.ceil(charCount / 4));
+  const text = selectedLines.join("\n");
+
+  try {
+    // 実際のGPTトークナイザーを使用
+    return encodeGPT(text).length;
+  } catch (error) {
+    // フォールバック: 平均的な英語テキストで4文字 ≈ 1トークン
+    console.warn("Token encoding failed, using character-based fallback", error);
+    return Math.max(1, Math.ceil(text.length / 4));
+  }
 }
 
 export async function filesSearch(
@@ -526,7 +640,8 @@ export async function contextBundle(
   const artifacts = params.artifacts ?? {};
 
   // スコアリング重みをロード（将来的には設定ファイルや引数から）
-  const weights = loadScoringProfile();
+  const profileName = coerceProfileName(params.profile ?? null);
+  const weights = loadScoringProfile(profileName);
 
   const keywordSources: string[] = [goal];
   if (artifacts.failing_tests && artifacts.failing_tests.length > 0) {
@@ -535,8 +650,13 @@ export async function contextBundle(
   if (artifacts.last_diff) {
     keywordSources.push(artifacts.last_diff);
   }
+  if (artifacts.editing_path) {
+    keywordSources.push(artifacts.editing_path);
+  }
+  const semanticSeed = keywordSources.join(" ");
+  const queryEmbedding = generateEmbedding(semanticSeed)?.values ?? null;
 
-  let keywords = extractKeywords(keywordSources.join(" "));
+  let keywords = extractKeywords(semanticSeed);
 
   if (keywords.length === 0 && artifacts.editing_path) {
     const pathSegments = artifacts.editing_path
@@ -551,11 +671,14 @@ export async function contextBundle(
   const fileCache = new Map<string, FileContentCacheEntry>();
 
   for (const keyword of keywords) {
-    const rows = await db.all<FileWithBinaryRow>(
+    const rows = await db.all<FileWithEmbeddingRow>(
       `
-        SELECT f.path, f.lang, f.ext, f.is_binary, b.content
+        SELECT f.path, f.lang, f.ext, f.is_binary, b.content, fe.vector_json, fe.dims AS vector_dims
         FROM file f
         JOIN blob b ON b.hash = f.blob_hash
+        LEFT JOIN file_embedding fe
+          ON fe.repo_id = f.repo_id
+         AND fe.path = f.path
         WHERE f.repo_id = ?
           AND f.is_binary = FALSE
           AND b.content ILIKE '%' || ? || '%'
@@ -579,6 +702,7 @@ export async function contextBundle(
       candidate.lang ??= row.lang;
       candidate.ext ??= row.ext;
       candidate.totalLines ??= row.content.length === 0 ? 0 : row.content.split(/\r?\n/).length;
+      candidate.embedding ??= parseEmbedding(row.vector_json ?? null, row.vector_dims ?? null);
       stringMatchSeeds.add(row.path);
       if (!fileCache.has(row.path)) {
         fileCache.set(row.path, {
@@ -586,6 +710,7 @@ export async function contextBundle(
           lang: row.lang,
           ext: row.ext,
           totalLines: candidate.totalLines ?? 0,
+          embedding: candidate.embedding,
         });
       }
     }
@@ -598,14 +723,26 @@ export async function contextBundle(
     editingCandidate.matchLine ??= 1;
   }
 
+  // SQL injection防御: ファイルパスの検証パターン
+  const SAFE_PATH_PATTERN = /^[a-zA-Z0-9_.\-/]+$/;
+
   const dependencySeeds = new Set<string>();
   for (const pathSeed of stringMatchSeeds) {
+    if (!SAFE_PATH_PATTERN.test(pathSeed)) {
+      console.warn(`Skipping potentially unsafe path in dependency seeds: ${pathSeed}`);
+      continue;
+    }
     dependencySeeds.add(pathSeed);
     if (dependencySeeds.size >= MAX_DEPENDENCY_SEEDS) {
       break;
     }
   }
   if (artifacts.editing_path) {
+    if (!SAFE_PATH_PATTERN.test(artifacts.editing_path)) {
+      throw new Error(
+        `Invalid editing_path format. Path must contain only alphanumeric characters, underscores, dots, hyphens, and forward slashes.`
+      );
+    }
     dependencySeeds.add(artifacts.editing_path);
   }
 
@@ -679,6 +816,7 @@ export async function contextBundle(
         candidate.lang = cached.lang;
         candidate.ext = cached.ext;
         candidate.totalLines = cached.totalLines;
+        candidate.embedding = cached.embedding;
       } else {
         const loaded = await loadFileContent(db, repoId, candidate.path);
         if (!loaded) {
@@ -688,6 +826,7 @@ export async function contextBundle(
         candidate.lang = loaded.lang;
         candidate.ext = loaded.ext;
         candidate.totalLines = loaded.totalLines;
+        candidate.embedding = loaded.embedding;
         fileCache.set(candidate.path, loaded);
       }
     }
@@ -697,6 +836,8 @@ export async function contextBundle(
   if (materializedCandidates.length === 0) {
     return { context: [], tokens_estimate: 0 };
   }
+
+  applyStructuralScores(materializedCandidates, queryEmbedding, weights.structural);
 
   const sortedCandidates = materializedCandidates
     .sort((a, b) => {
@@ -772,11 +913,96 @@ export async function contextBundle(
     if (candidate && candidate.content) {
       return acc + estimateTokensFromContent(candidate.content, item.range[0], item.range[1]);
     }
-    // フォールバック: 行ベース推定
-    return acc + estimateTokens(item.range[0], item.range[1]);
+    // フォールバック: 行ベース推定（コンテンツが利用不可の場合）
+    const lineCount = Math.max(1, item.range[1] - item.range[0] + 1);
+    return acc + lineCount * 4;
   }, 0);
 
   return { context: results, tokens_estimate: tokensEstimate };
+}
+
+export async function semanticRerank(
+  context: ServerContext,
+  params: SemanticRerankParams
+): Promise<SemanticRerankResult> {
+  const text = params.text?.trim() ?? "";
+  if (text.length === 0) {
+    throw new Error(
+      "semantic.rerank requires non-empty text. Describe the intent to compute semantic similarity."
+    );
+  }
+
+  if (!Array.isArray(params.candidates) || params.candidates.length === 0) {
+    return { candidates: [] };
+  }
+
+  const uniqueCandidates: SemanticRerankCandidateInput[] = [];
+  const seenPaths = new Set<string>();
+  for (const candidate of params.candidates) {
+    if (!candidate || typeof candidate.path !== "string" || candidate.path.length === 0) {
+      continue;
+    }
+    if (seenPaths.has(candidate.path)) {
+      continue;
+    }
+    seenPaths.add(candidate.path);
+    uniqueCandidates.push(candidate);
+    if (uniqueCandidates.length >= MAX_RERANK_LIMIT) {
+      break;
+    }
+  }
+
+  if (uniqueCandidates.length === 0) {
+    return { candidates: [] };
+  }
+
+  const limitRaw = params.k ?? uniqueCandidates.length;
+  const limit = Math.max(1, Math.min(MAX_RERANK_LIMIT, Math.floor(limitRaw)));
+
+  const profileName = coerceProfileName(params.profile ?? null);
+  const weights = loadScoringProfile(profileName);
+  const structuralWeight = weights.structural;
+  const queryEmbedding = generateEmbedding(text)?.values ?? null;
+
+  let embeddingMap = new Map<string, number[]>();
+  if (queryEmbedding && structuralWeight > 0) {
+    const paths = uniqueCandidates.map((candidate) => candidate.path);
+    embeddingMap = await fetchEmbeddingMap(context.db, context.repoId, paths);
+  }
+
+  const scored: SemanticRerankItem[] = uniqueCandidates.map((candidate) => {
+    const base =
+      typeof candidate.score === "number" && Number.isFinite(candidate.score) ? candidate.score : 0;
+    let semantic = 0;
+    if (queryEmbedding && structuralWeight > 0) {
+      const embedding = embeddingMap.get(candidate.path);
+      if (embedding) {
+        const similarity = structuralSimilarity(queryEmbedding, embedding);
+        if (Number.isFinite(similarity) && similarity > 0) {
+          semantic = similarity;
+        }
+      }
+    }
+    const combined = base + structuralWeight * semantic;
+    return {
+      path: candidate.path,
+      base,
+      semantic,
+      combined,
+    };
+  });
+
+  const sorted = scored.sort((a, b) => {
+    if (b.combined === a.combined) {
+      if (b.semantic === a.semantic) {
+        return a.path.localeCompare(b.path);
+      }
+      return b.semantic - a.semantic;
+    }
+    return b.combined - a.combined;
+  });
+
+  return { candidates: sorted.slice(0, limit) };
 }
 
 export async function depsClosure(

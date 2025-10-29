@@ -4,6 +4,7 @@ import { join, resolve, extname } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { DuckDBClient } from "../shared/duckdb.js";
+import { generateEmbedding } from "../shared/embedding.js";
 
 import { analyzeSource, buildFallbackSnippet } from "./codeintel.js";
 import { getDefaultBranch, getHeadCommit, gitLsFiles } from "./git.js";
@@ -59,8 +60,15 @@ interface DependencyRow {
   rel: string;
 }
 
+interface EmbeddingRow {
+  path: string;
+  dims: number;
+  vector: number[];
+}
+
 const MAX_SAMPLE_BYTES = 32_768;
 const MAX_FILE_BYTES = 32 * 1024 * 1024; // 32MB limit to prevent memory exhaustion
+const SCAN_BATCH_SIZE = 100; // Process files in batches to limit memory usage
 
 function countLines(content: string): number {
   if (content.length === 0) {
@@ -272,6 +280,28 @@ async function persistDependencies(
   await db.run(sql, params);
 }
 
+async function persistEmbeddings(
+  db: DuckDBClient,
+  repoId: number,
+  records: EmbeddingRow[]
+): Promise<void> {
+  if (records.length === 0) return;
+
+  const placeholders = records.map(() => "(?, ?, ?, ?, CURRENT_TIMESTAMP)").join(", ");
+  const sql = `
+    INSERT OR REPLACE INTO file_embedding (
+      repo_id, path, dims, vector_json, updated_at
+    ) VALUES ${placeholders}
+  `;
+
+  const params: unknown[] = [];
+  for (const record of records) {
+    params.push(repoId, record.path, record.dims, JSON.stringify(record.vector));
+  }
+
+  await db.run(sql, params);
+}
+
 function buildCodeIntel(
   files: FileRecord[],
   blobs: Map<string, BlobRecord>
@@ -343,12 +373,45 @@ function buildCodeIntel(
   return { symbols, snippets, dependencies: Array.from(dependencies.values()) };
 }
 
+/**
+ * scanFilesのバッチ処理版
+ * メモリ枯渇を防ぐため、ファイルをバッチで処理する
+ */
+async function scanFilesInBatches(
+  repoRoot: string,
+  paths: string[]
+): Promise<{ blobs: Map<string, BlobRecord>; files: FileRecord[]; embeddings: EmbeddingRow[] }> {
+  const allBlobs = new Map<string, BlobRecord>();
+  const allFiles: FileRecord[] = [];
+  const allEmbeddings: EmbeddingRow[] = [];
+
+  for (let i = 0; i < paths.length; i += SCAN_BATCH_SIZE) {
+    const batch = paths.slice(i, i + SCAN_BATCH_SIZE);
+    const { blobs, files, embeddings } = await scanFiles(repoRoot, batch);
+
+    // マージ: blobはhashでユニークなので重複排除
+    for (const [hash, blob] of blobs) {
+      if (!allBlobs.has(hash)) {
+        allBlobs.set(hash, blob);
+      }
+    }
+    allFiles.push(...files);
+    allEmbeddings.push(...embeddings);
+
+    // バッチデータを明示的にクリアしてGCを促す
+    blobs.clear();
+  }
+
+  return { blobs: allBlobs, files: allFiles, embeddings: allEmbeddings };
+}
+
 async function scanFiles(
   repoRoot: string,
   paths: string[]
-): Promise<{ blobs: Map<string, BlobRecord>; files: FileRecord[] }> {
+): Promise<{ blobs: Map<string, BlobRecord>; files: FileRecord[]; embeddings: EmbeddingRow[] }> {
   const blobs = new Map<string, BlobRecord>();
   const files: FileRecord[] = [];
+  const embeddings: EmbeddingRow[] = [];
 
   for (const relativePath of paths) {
     const absolutePath = join(repoRoot, relativePath);
@@ -397,6 +460,13 @@ async function scanFiles(
         isBinary,
         mtimeIso,
       });
+
+      if (!isBinary && content) {
+        const embedding = generateEmbedding(content);
+        if (embedding) {
+          embeddings.push({ path: relativePath, dims: embedding.dims, vector: embedding.values });
+        }
+      }
     } catch (error) {
       console.warn(
         `Cannot read ${relativePath} due to filesystem error. Fix file permissions or remove the file.`
@@ -405,7 +475,7 @@ async function scanFiles(
     }
   }
 
-  return { blobs, files };
+  return { blobs, files, embeddings };
 }
 
 export async function runIndexer(options: IndexerOptions): Promise<void> {
@@ -422,7 +492,7 @@ export async function runIndexer(options: IndexerOptions): Promise<void> {
     getDefaultBranch(repoRoot),
   ]);
 
-  const { blobs, files } = await scanFiles(repoRoot, paths);
+  const { blobs, files, embeddings } = await scanFilesInBatches(repoRoot, paths);
   const codeIntel = buildCodeIntel(files, blobs);
 
   const db = await DuckDBClient.connect({ databasePath, ensureDirectory: true });
@@ -435,12 +505,14 @@ export async function runIndexer(options: IndexerOptions): Promise<void> {
       await db.run("DELETE FROM symbol WHERE repo_id = ?", [repoId]);
       await db.run("DELETE FROM snippet WHERE repo_id = ?", [repoId]);
       await db.run("DELETE FROM dependency WHERE repo_id = ?", [repoId]);
+      await db.run("DELETE FROM file_embedding WHERE repo_id = ?", [repoId]);
       await persistBlobs(db, blobs);
       await persistTrees(db, repoId, headCommit, files);
       await persistFiles(db, repoId, files);
       await persistSymbols(db, repoId, codeIntel.symbols);
       await persistSnippets(db, repoId, codeIntel.snippets);
       await persistDependencies(db, repoId, codeIntel.dependencies);
+      await persistEmbeddings(db, repoId, embeddings);
 
       // Update timestamp inside transaction to ensure atomicity
       if (defaultBranch) {

@@ -2,12 +2,14 @@
  * Tests for Unix socket transport layer
  */
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import * as net from "net";
 import * as fs from "fs/promises";
-import * as path from "path";
+import * as net from "net";
 import * as os from "os";
+import * as path from "path";
 import * as readline from "readline";
+
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
 import { createSocketServer } from "../../src/daemon/socket.js";
 import type { JsonRpcRequest, RpcHandleResult } from "../../src/server/rpc.js";
 
@@ -30,13 +32,15 @@ describe("Socket Transport", () => {
     // ソケットファイルとディレクトリをクリーンアップ
     try {
       await fs.unlink(socketPath);
-    } catch (err) {
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    } catch (_err) {
       // Already deleted
     }
 
     try {
       await fs.rmdir(path.dirname(socketPath));
-    } catch (err) {
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    } catch (_err) {
       // Already deleted
     }
   });
@@ -145,10 +149,7 @@ describe("Socket Transport", () => {
     ]);
 
     await Promise.all(
-      clients.map(
-        (client) =>
-          new Promise<void>((resolve) => client.on("connect", () => resolve()))
-      )
+      clients.map((client) => new Promise<void>((resolve) => client.on("connect", () => resolve())))
     );
 
     // 各クライアントからリクエスト送信

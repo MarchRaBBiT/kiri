@@ -2,10 +2,12 @@
  * Tests for daemon starter utility
  */
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as fs from "fs/promises";
-import * as path from "path";
 import * as os from "os";
+import * as path from "path";
+
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
 import { isDaemonRunning } from "../../src/client/start-daemon.js";
 
 describe("Daemon Starter", () => {
@@ -21,7 +23,8 @@ describe("Daemon Starter", () => {
     // クリーンアップ
     try {
       await fs.rm(tmpDir, { recursive: true, force: true });
-    } catch (err) {
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    } catch (_err) {
       // Ignore cleanup errors
     }
   });

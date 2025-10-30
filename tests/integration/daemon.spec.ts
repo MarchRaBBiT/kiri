@@ -2,13 +2,15 @@
  * Integration tests for daemon-client communication
  */
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import * as fs from "fs/promises";
-import * as path from "path";
-import * as os from "os";
-import * as net from "net";
-import * as readline from "readline";
 import { spawn, type ChildProcess } from "child_process";
+import * as fs from "fs/promises";
+import * as net from "net";
+import * as os from "os";
+import * as path from "path";
+import * as readline from "readline";
+
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
 import { runIndexer } from "../../src/indexer/cli.js";
 
 describe.skip("Daemon Integration", () => {
@@ -55,7 +57,8 @@ describe.skip("Daemon Integration", () => {
     // クリーンアップ
     try {
       await fs.rm(tmpDir, { recursive: true, force: true });
-    } catch (err) {
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    } catch (_err) {
       // Ignore cleanup errors
     }
   });
@@ -147,10 +150,7 @@ describe.skip("Daemon Integration", () => {
     ]);
 
     await Promise.all(
-      clients.map(
-        (client) =>
-          new Promise<void>((resolve) => client.on("connect", () => resolve()))
-      )
+      clients.map((client) => new Promise<void>((resolve) => client.on("connect", () => resolve())))
     );
 
     // 各クライアントからリクエスト送信

@@ -5,9 +5,10 @@
  * Handles multiple concurrent client connections with newline-delimited JSON-RPC protocol.
  */
 
-import * as net from "net";
 import * as fs from "fs/promises";
+import * as net from "net";
 import * as readline from "readline";
+
 import type { JsonRpcRequest, RpcHandleResult } from "../server/rpc.js";
 
 /**
@@ -66,7 +67,8 @@ export async function createSocketServer(
       server.close(async () => {
         try {
           await fs.unlink(socketPath);
-        } catch (err) {
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        } catch (_err) {
           // 削除エラーは無視（既に削除されている可能性）
         }
         resolve();

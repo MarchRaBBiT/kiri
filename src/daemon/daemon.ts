@@ -6,13 +6,15 @@
  * Manages DuckDB connection, watch mode, and graceful lifecycle.
  */
 
-import { parseArgs } from "util";
 import * as path from "path";
-import { createServerRuntime } from "../server/runtime.js";
+import { parseArgs } from "util";
+
 import { createRpcHandler } from "../server/rpc.js";
-import { createSocketServer } from "./socket.js";
-import { DaemonLifecycle } from "./lifecycle.js";
+import { createServerRuntime } from "../server/runtime.js";
 import type { ServerRuntime } from "../server/runtime.js";
+
+import { DaemonLifecycle } from "./lifecycle.js";
+import { createSocketServer } from "./socket.js";
 
 /**
  * デーモン設定オプション
@@ -46,9 +48,7 @@ function parseDaemonArgs(): DaemonOptions {
   });
 
   const repoRoot = path.resolve(values.repo || process.cwd());
-  const databasePath = path.resolve(
-    values.db || path.join(repoRoot, "var", "index.duckdb")
-  );
+  const databasePath = path.resolve(values.db || path.join(repoRoot, "var", "index.duckdb"));
   const socketPath = values["socket-path"]
     ? path.resolve(values["socket-path"])
     : `${databasePath}.sock`;
@@ -70,18 +70,13 @@ function parseDaemonArgs(): DaemonOptions {
  */
 async function main() {
   const options = parseDaemonArgs();
-  const lifecycle = new DaemonLifecycle(
-    options.databasePath,
-    options.idleTimeoutMinutes
-  );
+  const lifecycle = new DaemonLifecycle(options.databasePath, options.idleTimeoutMinutes);
 
   try {
     // スタートアップロックを取得
     const lockAcquired = await lifecycle.acquireStartupLock();
     if (!lockAcquired) {
-      console.error(
-        "[Daemon] Another daemon is starting up. Exiting to avoid race condition."
-      );
+      console.error("[Daemon] Another daemon is starting up. Exiting to avoid race condition.");
       process.exit(1);
     }
 

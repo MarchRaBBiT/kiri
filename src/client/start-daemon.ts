@@ -6,8 +6,8 @@
 
 import { spawn } from "child_process";
 import * as fs from "fs/promises";
-import * as path from "path";
 import * as net from "net";
+import * as path from "path";
 
 /**
  * デーモン起動オプション
@@ -39,7 +39,8 @@ export async function isDaemonRunning(databasePath: string): Promise<boolean> {
     // プロセスが実際に存在するかチェック
     try {
       process.kill(pid, 0); // シグナル0は存在チェック
-    } catch (err) {
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    } catch (_err) {
       // プロセスが存在しない場合、PIDファイルは古い
       // Note: クリーンアップは意図的に行わない（デーモン起動中の競合を防ぐため）
       console.error("[StartDaemon] Stale PID file detected");
@@ -84,7 +85,8 @@ export async function isDaemonRunning(databasePath: string): Promise<boolean> {
               socket.destroy();
               reject(new Error("Invalid ping response"));
             }
-          } catch (parseErr) {
+            // eslint-disable-next-line @typescript-eslint/no-unused-vars
+          } catch (_parseErr) {
             clearTimeout(timeout);
             socket.destroy();
             reject(new Error("Failed to parse health check response"));
@@ -114,33 +116,11 @@ export async function isDaemonRunning(databasePath: string): Promise<boolean> {
 }
 
 /**
- * 古いPID/ソケットファイルをクリーンアップ
- */
-async function cleanupStaleFiles(databasePath: string): Promise<void> {
-  const pidFilePath = `${databasePath}.daemon.pid`;
-  const socketPath = `${databasePath}.sock`;
-  const startupLockPath = `${databasePath}.daemon.starting`;
-
-  for (const filePath of [pidFilePath, socketPath, startupLockPath]) {
-    try {
-      await fs.unlink(filePath);
-      console.error(`[StartDaemon] Removed stale file: ${filePath}`);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-        console.error(`[StartDaemon] Failed to remove ${filePath}: ${err}`);
-      }
-    }
-  }
-}
-
-/**
  * デーモンプロセスを起動
  *
  * デタッチモードで起動し、ソケットが準備完了するまで待つ
  */
-export async function startDaemon(
-  options: StartDaemonOptions
-): Promise<void> {
+export async function startDaemon(options: StartDaemonOptions): Promise<void> {
   const {
     repoRoot,
     databasePath,
@@ -153,20 +133,10 @@ export async function startDaemon(
 
   // デーモン実行ファイルのパスを解決
   // 開発時: src/daemon/daemon.ts, ビルド後: dist/src/daemon/daemon.js
-  const daemonScriptPath = path.resolve(
-    __dirname,
-    "../daemon/daemon.js"
-  );
+  const daemonScriptPath = path.resolve(__dirname, "../daemon/daemon.js");
 
   // デーモン起動引数
-  const args = [
-    "--repo",
-    repoRoot,
-    "--db",
-    databasePath,
-    "--socket-path",
-    socketPath,
-  ];
+  const args = ["--repo", repoRoot, "--db", databasePath, "--socket-path", socketPath];
 
   if (watchMode) {
     args.push("--watch");
@@ -230,7 +200,8 @@ export async function startDaemon(
       console.error("[StartDaemon] Daemon is ready");
       await logFile.close();
       return;
-    } catch (err) {
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    } catch (_err) {
       // まだ準備できていない、再試行
       await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
     }

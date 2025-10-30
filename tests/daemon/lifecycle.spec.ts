@@ -2,10 +2,12 @@
  * Tests for daemon lifecycle management
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "fs/promises";
-import * as path from "path";
 import * as os from "os";
+import * as path from "path";
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
 import { DaemonLifecycle } from "../../src/daemon/lifecycle.js";
 
 describe("DaemonLifecycle", () => {
@@ -23,7 +25,8 @@ describe("DaemonLifecycle", () => {
     // クリーンアップ
     try {
       await fs.rm(tmpDir, { recursive: true, force: true });
-    } catch (err) {
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    } catch (_err) {
       // Ignore cleanup errors
     }
   });
@@ -128,7 +131,9 @@ describe("DaemonLifecycle", () => {
 
   it("idle timeout triggers shutdown when connections reach zero", async () => {
     // process.exit をモック
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {}) as any);
+    const exitSpy = vi
+      .spyOn(process, "exit")
+      .mockImplementation((() => {}) as (code?: number) => never);
 
     const shutdownCallback = vi.fn();
     lifecycle.onShutdown(async () => {

@@ -7,11 +7,13 @@
  */
 
 import * as net from "net";
+import * as path from "path";
 import * as readline from "readline";
 import { parseArgs } from "util";
-import * as path from "path";
-import { startDaemon, isDaemonRunning } from "./start-daemon.js";
+
 import packageJson from "../../package.json" with { type: "json" };
+
+import { startDaemon, isDaemonRunning } from "./start-daemon.js";
 
 /**
  * プロキシ設定オプション
@@ -45,9 +47,7 @@ function parseProxyArgs(): ProxyOptions {
   });
 
   const repoRoot = path.resolve(values.repo || process.cwd());
-  const databasePath = path.resolve(
-    values.db || path.join(repoRoot, "var", "index.duckdb")
-  );
+  const databasePath = path.resolve(values.db || path.join(repoRoot, "var", "index.duckdb"));
   const socketPath = values["socket-path"]
     ? path.resolve(values["socket-path"])
     : `${databasePath}.sock`;
@@ -116,6 +116,7 @@ async function checkDaemonVersion(socket: net.Socket): Promise<void> {
             resolve();
           }
         }
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
       } catch (parseErr) {
         clearTimeout(timeout);
         socket.removeListener("data", dataHandler);
@@ -248,12 +249,8 @@ async function main() {
   } catch (err) {
     const error = err as Error;
     console.error(`[Proxy] Failed to start proxy: ${error.message}`);
-    console.error(
-      `[Proxy] Check daemon log at: ${options.databasePath}.daemon.log`
-    );
-    console.error(
-      "[Proxy] Falling back to legacy stdio mode is not yet implemented"
-    );
+    console.error(`[Proxy] Check daemon log at: ${options.databasePath}.daemon.log`);
+    console.error("[Proxy] Falling back to legacy stdio mode is not yet implemented");
     process.exit(1);
   }
 }

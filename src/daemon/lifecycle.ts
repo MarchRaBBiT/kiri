@@ -5,7 +5,6 @@
  */
 
 import * as fs from "fs/promises";
-import * as path from "path";
 
 /**
  * PIDファイルとスタートアップロックを管理する
@@ -119,7 +118,8 @@ export class DaemonLifecycle {
       try {
         process.kill(pid, 0); // シグナル0は存在チェック
         return pid;
-      } catch (err) {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      } catch (_err) {
         // プロセスが存在しない場合、PIDファイルは古い
         return null;
       }
@@ -188,18 +188,21 @@ export class DaemonLifecycle {
     }
 
     this.resetIdleTimer();
-    this.idleTimer = setTimeout(async () => {
-      // タイマー発火時に再度チェック（レースコンディション対策）
-      if (this.activeConnections === 0 && !this.watchModeActive) {
-        console.error(
-          `[Daemon] Idle timeout (${this.idleTimeoutMinutes} minutes) reached. Shutting down...`
-        );
-        if (this.shutdownCallback) {
-          await this.shutdownCallback();
+    this.idleTimer = setTimeout(
+      async () => {
+        // タイマー発火時に再度チェック（レースコンディション対策）
+        if (this.activeConnections === 0 && !this.watchModeActive) {
+          console.error(
+            `[Daemon] Idle timeout (${this.idleTimeoutMinutes} minutes) reached. Shutting down...`
+          );
+          if (this.shutdownCallback) {
+            await this.shutdownCallback();
+          }
+          process.exit(0);
         }
-        process.exit(0);
-      }
-    }, this.idleTimeoutMinutes * 60 * 1000);
+      },
+      this.idleTimeoutMinutes * 60 * 1000
+    );
   }
 
   /**
@@ -250,7 +253,8 @@ export class DaemonLifecycle {
             // バックアップをリネーム
             await fs.rename(oldBackup, newBackup);
           }
-        } catch (err) {
+          // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        } catch (_err) {
           // ファイルが存在しない場合は無視
         }
       }

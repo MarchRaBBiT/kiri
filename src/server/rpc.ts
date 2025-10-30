@@ -84,6 +84,12 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
           description: "Maximum number of snippets to return. Default is 12.",
         },
         profile: { type: "string", description: "Evaluation profile name." },
+        boost_profile: {
+          type: "string",
+          enum: ["default", "docs", "none"],
+          description:
+            'File type boosting mode: "default" prioritizes implementation files (src/*.ts), "docs" prioritizes documentation (*.md), "none" disables boosting. Default is "default".',
+        },
         artifacts: {
           type: "object",
           additionalProperties: true,
@@ -144,6 +150,12 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         ext: { type: "string" },
         path_prefix: { type: "string" },
         limit: { type: "number", minimum: 1, maximum: 200 },
+        boost_profile: {
+          type: "string",
+          enum: ["default", "docs", "none"],
+          description:
+            'File type boosting mode: "default" prioritizes implementation files (src/*.ts), "docs" prioritizes documentation (*.md), "none" disables boosting. Default is "default".',
+        },
       },
     },
   },
@@ -211,6 +223,13 @@ function parseFilesSearchParams(input: unknown): FilesSearchParams {
   if (typeof record.ext === "string") params.ext = record.ext;
   if (typeof record.path_prefix === "string") params.path_prefix = record.path_prefix;
   if (limit !== undefined) params.limit = limit;
+
+  // Parse boost_profile parameter
+  const boostProfile = record.boost_profile;
+  if (boostProfile === "default" || boostProfile === "docs" || boostProfile === "none") {
+    params.boost_profile = boostProfile;
+  }
+
   return params;
 }
 
@@ -313,6 +332,12 @@ function parseContextBundleParams(input: unknown): ContextBundleParams {
 
   if (typeof record.profile === "string") {
     params.profile = record.profile;
+  }
+
+  // Parse boost_profile parameter
+  const boostProfile = record.boost_profile;
+  if (boostProfile === "default" || boostProfile === "docs" || boostProfile === "none") {
+    params.boost_profile = boostProfile;
   }
 
   return params;

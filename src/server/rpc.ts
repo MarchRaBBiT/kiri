@@ -70,7 +70,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: "context.bundle",
     description:
-      "Extract relevant code context based on task goals. Use this first when starting new tasks, fixing bugs, or understanding features - it minimizes token usage by returning only relevant snippets.",
+      "🎯 PRIMARY TOOL: Extract relevant code context for any task or goal. Intelligently finds related files using keyword matching, dependency analysis, file proximity, and semantic similarity. Returns ranked code snippets with explanations of relevance. USE THIS FIRST for: implementing new features, fixing bugs, understanding how existing code works, exploring architecture, or any code comprehension task. Automatically handles token optimization by returning only the most relevant snippets. Example: goal='How does authentication work?' returns auth-related code with reasons like 'text:auth', 'dep:login.ts', 'symbol:authenticate'.",
     inputSchema: {
       type: "object",
       required: ["goal"],
@@ -112,7 +112,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: "semantic.rerank",
     description:
-      "Re-rank candidates by semantic similarity. Use this to refine search results or prioritize files by relevance to a query.",
+      "Re-rank a list of file candidates by semantic similarity to a query text. Uses structural embeddings to compute similarity scores and combines them with existing scores. Use as a REFINEMENT step after files.search or when you have a list of candidates and want to prioritize them by semantic relevance. Not needed with context.bundle (which already does semantic ranking internally). Returns candidates sorted by combined score (base + semantic similarity). Example: after getting 20 search results, rerank them by semantic similarity to 'user authentication flow' to surface the most contextually relevant files.",
     inputSchema: {
       type: "object",
       required: ["text", "candidates"],
@@ -139,7 +139,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: "files.search",
     description:
-      "Search files by keyword using full-text index. Use this to find implementation patterns, specific functions, or explore unfamiliar code areas.",
+      "Search files by keyword with full-text indexing (BM25 ranking when FTS extension is available, falls back to ILIKE pattern matching). Use when you know SPECIFIC identifiers: function names, class names, error messages, log strings, or exact code patterns. Returns matching files with previews and line numbers. For broader exploration like 'understand feature X' or 'how does Y work', prefer context.bundle instead. Supports filters: lang (e.g., 'typescript'), ext (e.g., '.ts'), path_prefix (e.g., 'src/auth/'). Example: query='validateToken' finds files containing that function name.",
     inputSchema: {
       type: "object",
       required: ["query"],
@@ -162,7 +162,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: "snippets.get",
     description:
-      "Retrieve code snippets from a specific file. Use this to read only the necessary parts instead of entire files, reducing token usage.",
+      "Retrieve code snippets from a specific file path. Intelligently extracts relevant code sections using symbol boundaries (functions, classes, methods) when available. Use when you already know the exact file path and want to read its content efficiently without loading the entire file. Automatically selects appropriate snippet based on start_line or returns symbol-aligned chunks. Reduces token usage compared to reading full files. Use context.bundle instead if you don't know which file to read. Example: path='src/auth/login.ts' returns the most relevant function or class in that file.",
     inputSchema: {
       type: "object",
       required: ["path"],
@@ -177,7 +177,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: "deps.closure",
     description:
-      "Get dependency graph neighbors. Use this to understand impact scope when refactoring, or to trace call chains and module relationships.",
+      "Traverse the dependency graph from a starting file. Finds all files that depend on the target (inbound) or that the target depends on (outbound). Essential for impact analysis: understanding what breaks if you change a file, tracing import chains, or mapping module relationships. Returns nodes (files/packages) and edges (import statements) with depth levels. Use when: planning refactoring, understanding module boundaries, finding circular dependencies, or analyzing affected files. Example: path='src/utils.ts', direction='inbound' shows all files importing utils.ts. Set max_depth to limit traversal (default 3).",
     inputSchema: {
       type: "object",
       required: ["path"],

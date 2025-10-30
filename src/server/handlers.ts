@@ -158,7 +158,7 @@ export interface DepsClosureEdge {
 
 export interface DepsClosureResult {
   root: string;
-  direction: "outbound";
+  direction: "outbound" | "inbound";
   nodes: DepsClosureNode[];
   edges: DepsClosureEdge[];
 }
@@ -168,6 +168,7 @@ interface FileRow {
   lang: string | null;
   ext: string | null;
   content: string | null;
+  score?: number; // FTS検索時のBM25スコア
 }
 
 interface FileWithBinaryRow extends FileRow {
@@ -455,6 +456,17 @@ function estimateTokensFromContent(content: string, startLine: number, endLine: 
   }
 }
 
+/**
+ * 複数単語クエリを単語分割してOR検索条件を構築
+ * @param query - 検索クエリ文字列
+ * @returns 単語配列（2文字以下を除外）
+ */
+function splitQueryWords(query: string): string[] {
+  // 空白、スラッシュ、ハイフン、アンダースコアで分割
+  const words = query.split(/[\s\/\-_]+/).filter((w) => w.length > 2);
+  return words.length > 0 ? words : [query]; // 全て除外された場合は元のクエリを使用
+}
+
 export async function filesSearch(
   context: ServerContext,
   params: FilesSearchParams
@@ -468,34 +480,86 @@ export async function filesSearch(
   }
 
   const limit = normalizeLimit(params.limit);
-  const conditions = ["f.repo_id = ?", "b.content IS NOT NULL", "b.content ILIKE '%' || ? || '%'"];
-  const values: unknown[] = [repoId, query];
+  const hasFTS = context.features?.fts ?? false;
 
-  if (params.lang) {
-    conditions.push("COALESCE(f.lang, '') = ?");
-    values.push(params.lang);
+  let sql: string;
+  let values: unknown[];
+
+  if (hasFTS) {
+    // FTS拡張利用可能: fts_main_blob.match_bm25 を使用
+    const conditions = ["f.repo_id = ?"];
+    values = [repoId];
+
+    // 言語・拡張子フィルタ
+    if (params.lang) {
+      conditions.push("COALESCE(f.lang, '') = ?");
+      values.push(params.lang);
+    }
+    if (params.ext) {
+      conditions.push("COALESCE(f.ext, '') = ?");
+      values.push(params.ext);
+    }
+    if (params.path_prefix) {
+      conditions.push("f.path LIKE ?");
+      values.push(`${params.path_prefix}%`);
+    }
+
+    // FTS検索（BM25スコアリング）
+    sql = `
+      SELECT f.path, f.lang, f.ext, b.content, fts.score
+      FROM file f
+      JOIN blob b ON b.hash = f.blob_hash
+      JOIN (
+        SELECT hash, fts_main_blob.match_bm25(hash, ?) AS score
+        FROM blob
+        WHERE score IS NOT NULL
+      ) fts ON fts.hash = b.hash
+      WHERE ${conditions.join(" AND ")}
+      ORDER BY fts.score DESC
+      LIMIT ?
+    `;
+
+    values.unshift(query); // FTSクエリを先頭に追加
+    values.push(limit);
+  } else {
+    // FTS拡張利用不可: ILIKE検索（Phase 1の単語分割ロジック）
+    const conditions = ["f.repo_id = ?", "b.content IS NOT NULL"];
+    values = [repoId];
+
+    const words = splitQueryWords(query);
+    if (words.length === 1) {
+      conditions.push("b.content ILIKE '%' || ? || '%'");
+      values.push(query);
+    } else {
+      const wordConditions = words.map(() => "b.content ILIKE '%' || ? || '%'");
+      conditions.push(`(${wordConditions.join(" OR ")})`);
+      values.push(...words);
+    }
+
+    if (params.lang) {
+      conditions.push("COALESCE(f.lang, '') = ?");
+      values.push(params.lang);
+    }
+    if (params.ext) {
+      conditions.push("COALESCE(f.ext, '') = ?");
+      values.push(params.ext);
+    }
+    if (params.path_prefix) {
+      conditions.push("f.path LIKE ?");
+      values.push(`${params.path_prefix}%`);
+    }
+
+    sql = `
+      SELECT f.path, f.lang, f.ext, b.content
+      FROM file f
+      JOIN blob b ON b.hash = f.blob_hash
+      WHERE ${conditions.join(" AND ")}
+      ORDER BY f.path
+      LIMIT ?
+    `;
+
+    values.push(limit);
   }
-
-  if (params.ext) {
-    conditions.push("COALESCE(f.ext, '') = ?");
-    values.push(params.ext);
-  }
-
-  if (params.path_prefix) {
-    conditions.push("f.path LIKE ?");
-    values.push(`${params.path_prefix}%`);
-  }
-
-  const sql = `
-    SELECT f.path, f.lang, f.ext, b.content
-    FROM file f
-    JOIN blob b ON b.hash = f.blob_hash
-    WHERE ${conditions.join(" AND ")}
-    ORDER BY f.path
-    LIMIT ?
-  `;
-
-  values.push(limit);
 
   const rows = await db.all<FileRow>(sql, values);
 
@@ -507,7 +571,7 @@ export async function filesSearch(
       matchLine: line,
       lang: row.lang,
       ext: row.ext,
-      score: 1.0,
+      score: row.score ?? 1.0, // FTS時はBM25スコア、ILIKE時は1.0
     };
   });
 }
@@ -1015,10 +1079,7 @@ export async function depsClosure(
     );
   }
 
-  if (params.direction && params.direction !== "outbound") {
-    throw new Error("deps.closure currently supports only outbound direction. Use outbound.");
-  }
-
+  const direction = params.direction ?? "outbound";
   const maxDepth = params.max_depth ?? 3;
   const includePackages = params.include_packages ?? true;
 
@@ -1031,12 +1092,25 @@ export async function depsClosure(
     [repoId]
   );
 
+  // outbound: このファイルが使用する依存関係
   const outbound = new Map<string, DependencyRow[]>();
+  // inbound: このファイルを使用しているファイル
+  const inbound = new Map<string, DependencyRow[]>();
+
   for (const row of dependencyRows) {
+    // outbound マップ構築
     if (!outbound.has(row.src_path)) {
       outbound.set(row.src_path, []);
     }
     outbound.get(row.src_path)?.push(row);
+
+    // inbound マップ構築（dst が path の場合のみ）
+    if (row.dst_kind === "path") {
+      if (!inbound.has(row.dst)) {
+        inbound.set(row.dst, []);
+      }
+      inbound.get(row.dst)?.push(row);
+    }
   }
 
   interface Pending {
@@ -1073,31 +1147,53 @@ export async function depsClosure(
     if (current.depth >= maxDepth) {
       continue;
     }
-    const edges = outbound.get(current.path) ?? [];
+
+    // direction に応じて使用するマップを選択
+    const edgeMap = direction === "inbound" ? inbound : outbound;
+    const edges = edgeMap.get(current.path) ?? [];
+
     for (const edge of edges) {
       const nextDepth = current.depth + 1;
-      if (edge.dst_kind === "path") {
+
+      if (direction === "inbound") {
+        // inbound: edge.src_path がこのファイルを使用している
         recordEdge({
-          from: current.path,
-          to: edge.dst,
+          from: edge.src_path,
+          to: current.path,
           kind: "path",
           rel: edge.rel,
           depth: nextDepth,
         });
-        recordNode({ kind: "path", target: edge.dst, depth: nextDepth });
-        if (!visitedPaths.has(edge.dst)) {
-          visitedPaths.add(edge.dst);
-          queue.push({ path: edge.dst, depth: nextDepth });
+        recordNode({ kind: "path", target: edge.src_path, depth: nextDepth });
+        if (!visitedPaths.has(edge.src_path)) {
+          visitedPaths.add(edge.src_path);
+          queue.push({ path: edge.src_path, depth: nextDepth });
         }
-      } else if (edge.dst_kind === "package" && includePackages) {
-        recordEdge({
-          from: current.path,
-          to: edge.dst,
-          kind: "package",
-          rel: edge.rel,
-          depth: nextDepth,
-        });
-        recordNode({ kind: "package", target: edge.dst, depth: nextDepth });
+      } else {
+        // outbound: このファイルが edge.dst を使用している
+        if (edge.dst_kind === "path") {
+          recordEdge({
+            from: current.path,
+            to: edge.dst,
+            kind: "path",
+            rel: edge.rel,
+            depth: nextDepth,
+          });
+          recordNode({ kind: "path", target: edge.dst, depth: nextDepth });
+          if (!visitedPaths.has(edge.dst)) {
+            visitedPaths.add(edge.dst);
+            queue.push({ path: edge.dst, depth: nextDepth });
+          }
+        } else if (edge.dst_kind === "package" && includePackages) {
+          recordEdge({
+            from: current.path,
+            to: edge.dst,
+            kind: "package",
+            rel: edge.rel,
+            depth: nextDepth,
+          });
+          recordNode({ kind: "package", target: edge.dst, depth: nextDepth });
+        }
       }
     }
   }
@@ -1122,7 +1218,7 @@ export async function depsClosure(
 
   return {
     root: params.path,
-    direction: "outbound",
+    direction,
     nodes,
     edges,
   };

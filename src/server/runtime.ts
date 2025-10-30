@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 
+import { tryCreateFTSIndex } from "../indexer/schema.js";
 import { DuckDBClient } from "../shared/duckdb.js";
 
 import { bootstrapServer, type BootstrapOptions } from "./bootstrap.js";
@@ -42,7 +43,18 @@ export async function createServerRuntime(options: CommonServerOptions): Promise
   try {
     db = await DuckDBClient.connect({ databasePath, ensureDirectory: true });
     const repoId = await resolveRepoId(db, repoRoot);
-    const context: ServerContext = { db, repoId };
+
+    // FTS拡張の利用可否を検出
+    const hasFTS = await tryCreateFTSIndex(db);
+
+    const context: ServerContext = {
+      db,
+      repoId,
+      features: {
+        fts: hasFTS,
+      },
+    };
+
     const degrade = new DegradeController(repoRoot);
     const metrics = new MetricsRegistry();
     const tokens = bootstrap.security.config.sensitive_tokens ?? [];

@@ -10,9 +10,9 @@
 
 ## 🎯 Key Features
 
-- **🔍 Smart Code Search**: Full-text search with semantic ranking
+- **🔍 Smart Code Search**: Full-text search with multi-word queries, FTS/BM25 ranking, and graceful fallback
 - **📦 Context Bundling**: Extract relevant code fragments based on task goals
-- **🔗 Dependency Analysis**: Visualize and navigate dependency graphs
+- **🔗 Dependency Analysis**: Bidirectional dependency graphs (outbound and inbound closure)
 - **⚡ Fast Response**: Time to first useful result ≤ 1.0s
 - **🛡️ Degrade-First Architecture**: Works without VSS/FTS extensions via fallback
 - **🔌 MCP Integration**: JSON-RPC 2.0 over stdio/HTTP
@@ -90,13 +90,22 @@ node dist/src/server/main.js --repo . --db var/index.duckdb --port 8765 --watch
 
 KIRI provides 5 MCP tools for code exploration:
 
-| Tool                | Description                                       |
-| ------------------- | ------------------------------------------------- |
-| **context.bundle**  | Extract relevant code context based on task goals |
-| **semantic.rerank** | Re-rank candidates by semantic similarity         |
-| **files.search**    | Full-text search across indexed files             |
-| **snippets.get**    | Retrieve code snippets with symbol boundaries     |
-| **deps.closure**    | Get dependency graph neighborhood                 |
+| Tool                | Description                                                                 |
+| ------------------- | --------------------------------------------------------------------------- |
+| **context.bundle**  | Extract relevant code context based on task goals                           |
+| **semantic.rerank** | Re-rank candidates by semantic similarity                                   |
+| **files.search**    | Full-text search with multi-word queries (FTS/BM25 or ILIKE fallback)      |
+| **snippets.get**    | Retrieve code snippets with symbol boundaries                               |
+| **deps.closure**    | Get dependency graph neighborhood (outbound/inbound)                        |
+
+### Search Query Syntax
+
+**files.search** supports multi-word queries automatically:
+- `"tools call implementation"` → Finds files containing ANY of these words (OR logic)
+- `"MCP-server-handler"` → Splits on hyphens and searches for each part
+- Single words work as expected: `"DuckDB"` → Exact match
+
+When DuckDB's FTS extension is available, searches use BM25 ranking for better relevance. Otherwise, the system falls back to pattern matching (ILIKE) with graceful degradation.
 
 ## 🔧 Configuration
 

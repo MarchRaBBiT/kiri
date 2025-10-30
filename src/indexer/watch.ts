@@ -70,6 +70,7 @@ export class IndexWatcher {
   private pendingFiles = new Set<string>();
   private readonly stats: WatcherStatistics;
   private readonly lockfilePath: string;
+  private isStopping = false; // Flag to prevent new reindexes during shutdown
 
   constructor(options: IndexWatcherOptions) {
     this.options = {
@@ -162,6 +163,11 @@ export class IndexWatcher {
    * @param path - Absolute path to the changed file
    */
   private scheduleReindex(event: string, path: string): void {
+    // Don't schedule new reindexes if watcher is stopping
+    if (this.isStopping) {
+      return;
+    }
+
     const relativePath = path.replace(this.options.repoRoot + "/", "");
     this.pendingFiles.add(relativePath);
 
@@ -198,6 +204,12 @@ export class IndexWatcher {
    * another reindex after the current one completes.
    */
   private async executeReindex(): Promise<void> {
+    // Don't start reindex if watcher is stopping
+    if (this.isStopping) {
+      process.stderr.write(`🛑 Watcher stopping. Skipping reindex.\n`);
+      return;
+    }
+
     // Check if already reindexing
     if (this.isReindexing) {
       process.stderr.write(
@@ -214,6 +226,12 @@ export class IndexWatcher {
     // Create and store the reindex promise for proper shutdown handling
     this.reindexPromise = (async () => {
       try {
+        // Double-check stopping flag before acquiring lock
+        if (this.isStopping) {
+          process.stderr.write(`🛑 Watcher stopping. Skipping reindex.\n`);
+          return;
+        }
+
         // Acquire lock to prevent concurrent indexing
         try {
           acquireLock(this.lockfilePath);
@@ -263,6 +281,12 @@ export class IndexWatcher {
         releaseLock(this.lockfilePath);
         this.reindexPromise = null;
 
+        // Clear timer to prevent resource leak
+        if (this.reindexTimer !== null) {
+          clearTimeout(this.reindexTimer);
+          this.reindexTimer = null;
+        }
+
         // If more changes occurred during reindex, schedule another one
         if (this.pendingReindex) {
           process.stderr.write(
@@ -288,6 +312,9 @@ export class IndexWatcher {
     }
 
     process.stderr.write(`\n🛑 Stopping watch mode...\n`);
+
+    // Set stopping flag FIRST to prevent new reindex operations
+    this.isStopping = true;
 
     // Clear pending timer
     if (this.reindexTimer !== null) {

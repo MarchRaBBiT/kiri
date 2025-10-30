@@ -78,15 +78,32 @@ export async function ensureDatabaseIndexed(
     );
 
     // Clean up partial database to prevent corrupt DB usage on next startup
+    // DuckDB creates multiple files (.duckdb, .duckdb.wal, .duckdb.tmp)
     if (existsSync(absoluteDatabasePath)) {
       process.stderr.write(`ℹ️  Cleaning up partially created database...\n`);
-      try {
-        unlinkSync(absoluteDatabasePath);
+
+      const dbFiles = [
+        absoluteDatabasePath,
+        `${absoluteDatabasePath}.wal`,
+        `${absoluteDatabasePath}.tmp`,
+      ];
+
+      let cleanupSuccess = true;
+      for (const file of dbFiles) {
+        if (existsSync(file)) {
+          try {
+            unlinkSync(file);
+          } catch (cleanupError) {
+            cleanupSuccess = false;
+            process.stderr.write(
+              `❌ Failed to delete ${file}: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}\n`
+            );
+          }
+        }
+      }
+
+      if (cleanupSuccess) {
         process.stderr.write(`✅ Cleanup successful.\n`);
-      } catch (cleanupError) {
-        process.stderr.write(
-          `❌ Failed to clean up database file: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}\n`
-        );
       }
     }
 

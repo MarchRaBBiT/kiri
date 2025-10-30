@@ -58,13 +58,30 @@ export function acquireLock(lockfilePath: string): void {
         const existingPid = parseInt(existingPidStr, 10);
 
         if (!isNaN(existingPid) && !isProcessRunning(existingPid)) {
-          // Stale lock detected - remove it and retry
+          // Stale lock detected - double-check before removing to prevent PID reuse race
           process.stderr.write(`⚠️  Removing stale lock file (PID ${existingPid} not running)\n`);
-          unlinkSync(lockfilePath);
 
-          // Retry acquisition (should succeed now)
-          writeFileSync(lockfilePath, String(process.pid), { flag: "wx" });
-          return;
+          // Re-verify PID hasn't been reused (TOCTOU mitigation)
+          if (existsSync(lockfilePath)) {
+            const recheckPidStr = readFileSync(lockfilePath, "utf8");
+            const recheckPid = parseInt(recheckPidStr, 10);
+
+            // Only remove if PID still matches and process still dead
+            if (!isNaN(recheckPid) && recheckPid === existingPid && !isProcessRunning(recheckPid)) {
+              unlinkSync(lockfilePath);
+
+              // Retry acquisition (should succeed now)
+              writeFileSync(lockfilePath, String(process.pid), { flag: "wx" });
+              return;
+            }
+          }
+
+          // Lock file changed or PID was reused - throw error
+          throw new LockfileError(
+            `Lock file changed during stale check. Another process may be active.`,
+            lockfilePath,
+            existingPid
+          );
         }
 
         // Lock is held by a running process

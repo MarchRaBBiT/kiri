@@ -25,44 +25,53 @@ export async function startStdioServer(options: StdioServerOptions): Promise<voi
         return;
       }
 
-      void (async () => {
-        let payload: JsonRpcRequest;
+      // Handle each line in a separate async context with proper error handling
+      (async () => {
         try {
-          payload = JSON.parse(line) as JsonRpcRequest;
-        } catch {
-          const response = errorResponse(
-            null,
-            "Invalid JSON payload. Submit a JSON-RPC 2.0 compliant request."
-          );
-          stdout.write(JSON.stringify(response) + "\n");
-          return;
-        }
+          let payload: JsonRpcRequest;
+          try {
+            payload = JSON.parse(line) as JsonRpcRequest;
+          } catch {
+            const response = errorResponse(
+              null,
+              "Invalid JSON payload. Submit a JSON-RPC 2.0 compliant request."
+            );
+            stdout.write(JSON.stringify(response) + "\n");
+            return;
+          }
 
-        const validationMessage = validateJsonRpcRequest(payload);
-        if (validationMessage) {
-          const response = errorResponse(payload.id ?? null, validationMessage);
-          stdout.write(JSON.stringify(response) + "\n");
-          return;
-        }
+          const validationMessage = validateJsonRpcRequest(payload);
+          if (validationMessage) {
+            const response = errorResponse(payload.id ?? null, validationMessage);
+            stdout.write(JSON.stringify(response) + "\n");
+            return;
+          }
 
-        const start = performance.now();
-        try {
-          const result = await handleRpc(payload);
-          stdout.write(JSON.stringify(result.response) + "\n");
+          const start = performance.now();
+          try {
+            const result = await handleRpc(payload);
+            stdout.write(JSON.stringify(result.response) + "\n");
+          } catch (error) {
+            stderr.write(`Unhandled stdio RPC error: ${String(error)}\n`);
+            const response = errorResponse(
+              payload.id ?? null,
+              "Unexpected server error. Inspect server logs and retry the request."
+            );
+            stdout.write(JSON.stringify(response) + "\n");
+          } finally {
+            const elapsed = performance.now() - start;
+            runtime.metrics.recordRequest(elapsed);
+          }
         } catch (error) {
-          stderr.write(`Unhandled stdio RPC error: ${String(error)}\n`);
-          const response = errorResponse(
-            payload.id ?? null,
-            "Unexpected server error. Inspect server logs and retry the request."
-          );
-          stdout.write(JSON.stringify(response) + "\n");
-        } finally {
-          const elapsed = performance.now() - start;
-          runtime.metrics.recordRequest(elapsed);
+          // Safe error logging with fallback - prevents server crash if stderr fails
+          try {
+            stderr.write(`Failed to process RPC line: ${String(error)}\n`);
+          } catch {
+            // Silent failure - better than crashing the server
+            // This catch prevents uncaught exceptions if stderr.write throws
+          }
         }
-      })().catch((error) => {
-        stderr.write(`Failed to process RPC line: ${String(error)}\n`);
-      });
+      })();
     });
 
     rl.once("close", async () => {

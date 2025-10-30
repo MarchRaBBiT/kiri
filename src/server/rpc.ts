@@ -221,8 +221,22 @@ function parseFilesSearchParams(input: unknown): FilesSearchParams {
   };
   if (typeof record.lang === "string") params.lang = record.lang;
   if (typeof record.ext === "string") params.ext = record.ext;
-  if (typeof record.path_prefix === "string") params.path_prefix = record.path_prefix;
-  if (limit !== undefined) params.limit = limit;
+
+  // Validate path_prefix to prevent path traversal attacks
+  if (typeof record.path_prefix === "string") {
+    if (record.path_prefix.includes("..")) {
+      throw new Error("path_prefix cannot contain '..' (path traversal not allowed)");
+    }
+    params.path_prefix = record.path_prefix;
+  }
+
+  // Validate limit is within acceptable range
+  if (limit !== undefined) {
+    if (limit < 1 || limit > 200) {
+      throw new Error("limit must be between 1 and 200");
+    }
+    params.limit = limit;
+  }
 
   // Parse boost_profile parameter
   const boostProfile = record.boost_profile;
@@ -297,14 +311,24 @@ function parseContextBundleParams(input: unknown): ContextBundleParams {
   const params: ContextBundleParams = {
     goal: typeof record.goal === "string" ? record.goal : "",
   };
+
+  // Parse and validate limit parameter
   const limitValue = record.limit;
+  let limit: number | undefined;
   if (typeof limitValue === "number") {
-    params.limit = limitValue;
+    limit = limitValue;
   } else if (typeof limitValue === "string") {
     const parsed = Number(limitValue);
     if (!Number.isNaN(parsed)) {
-      params.limit = parsed;
+      limit = parsed;
     }
+  }
+
+  if (limit !== undefined) {
+    if (limit < 1 || limit > 20) {
+      throw new Error("limit must be between 1 and 20");
+    }
+    params.limit = limit;
   }
 
   const artifactsValue = record.artifacts;

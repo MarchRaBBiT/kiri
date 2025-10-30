@@ -88,7 +88,12 @@ async function main() {
     console.error(`[Daemon] PID: ${process.pid}`);
 
     // データベースが存在しない場合、自動的にインデックスを作成
-    await ensureDatabaseIndexed(options.repoRoot, options.databasePath, options.allowDegrade, false);
+    await ensureDatabaseIndexed(
+      options.repoRoot,
+      options.databasePath,
+      options.allowDegrade,
+      false
+    );
 
     // ServerRuntimeを作成（DuckDB接続、メトリクス、デグレード制御など）
     let runtime: ServerRuntime | null = null;

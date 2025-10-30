@@ -11,14 +11,49 @@
 
 ### ファイルタイプブースト
 
-#### files.search
+`boost_profile` パラメータで3つのモードを選択可能:
+
+#### boost_profile: "default" (デフォルト)
+実装ファイルを優遇し、ドキュメントを減点
+
+**files.search:**
 - `src/*.ts`, `src/*.js`: スコア ×1.5（実装ファイルを優遇）
 - `tests/*.ts`: スコア ×1.2（テストファイルを軽度優遇）
 - `*.md`, `*.yaml`, `*.yml`: スコア ×0.5（ドキュメントを減点）
 
-#### context.bundle
+**context.bundle:**
 - `src/*.ts`: スコア +0.5（実装ファイルに追加ボーナス）
 - `*.md`, `*.yaml`, `*.yml`: スコア -0.3（ドキュメントにペナルティ）
+
+#### boost_profile: "docs"
+ドキュメントを優遇し、実装ファイルを軽度減点
+
+**files.search:**
+- `*.md`, `*.yaml`, `*.yml`: スコア ×1.5（ドキュメントを優遇）
+- `src/*.ts`, `src/*.js`: スコア ×0.7（実装ファイルを軽度減点）
+
+**context.bundle:**
+- `*.md`, `*.yaml`, `*.yml`: スコア +0.5（ドキュメントに追加ボーナス）
+- `src/*.ts`: スコア -0.2（実装ファイルに軽度ペナルティ）
+
+#### boost_profile: "none"
+ファイルタイプによるブースト無効、純粋なBM25スコアのみ
+
+### 使用例
+
+```typescript
+// 実装ファイルを探す（デフォルト）
+filesSearch({ query: "tryCreateFTSIndex" })
+// → src/*.ts が上位に
+
+// ドキュメントを探す
+filesSearch({ query: "setup instructions", boost_profile: "docs" })
+// → *.md が上位に
+
+// 純粋なBM25スコア
+filesSearch({ query: "authentication", boost_profile: "none" })
+// → ファイルタイプ関係なく、BM25スコアのみ
+```
 
 ## スコア計算例
 

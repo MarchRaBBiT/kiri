@@ -13,6 +13,7 @@ export interface FilesSearchParams {
   ext?: string;
   path_prefix?: string;
   limit?: number;
+  boost_profile?: "default" | "docs" | "none";
 }
 
 export interface FilesSearchResult {
@@ -51,6 +52,7 @@ export interface ContextBundleParams {
   artifacts?: ContextBundleArtifacts;
   limit?: number;
   profile?: string;
+  boost_profile?: "default" | "docs" | "none";
 }
 
 export interface ContextBundleItem {
@@ -469,28 +471,44 @@ function splitQueryWords(query: string): string[] {
 
 /**
  * ファイルタイプに基づいてスコアをブーストする
- * 実装ファイルを優遇し、ドキュメントファイルを減点する
+ * プロファイルに応じて実装ファイルまたはドキュメントを優遇
  * @param path - ファイルパス
  * @param baseScore - 元のスコア
+ * @param profile - ブーストプロファイル ("default" | "docs" | "none")
  * @returns ブースト適用後のスコア
  */
-function applyFileTypeBoost(path: string, baseScore: number): number {
-  // 実装ファイルを優遇（src/*.ts, src/*.js）
+function applyFileTypeBoost(
+  path: string,
+  baseScore: number,
+  profile: "default" | "docs" | "none" = "default"
+): number {
+  // ブースト無効
+  if (profile === "none") {
+    return baseScore;
+  }
+
+  // ドキュメントモード: ドキュメントを優遇、実装ファイルを軽度減点
+  if (profile === "docs") {
+    if (path.endsWith(".md") || path.endsWith(".yaml") || path.endsWith(".yml")) {
+      return baseScore * 1.5; // ドキュメント優遇
+    }
+    if (path.startsWith("src/") && (path.endsWith(".ts") || path.endsWith(".js"))) {
+      return baseScore * 0.7; // 実装ファイル軽度減点
+    }
+    return baseScore;
+  }
+
+  // デフォルトモード: 実装ファイルを優遇、ドキュメントを減点
   if (path.startsWith("src/") && (path.endsWith(".ts") || path.endsWith(".js"))) {
-    return baseScore * 1.5;
+    return baseScore * 1.5; // 実装ファイル優遇
   }
-
-  // テストファイルを軽度優遇
   if (path.startsWith("tests/") && path.endsWith(".ts")) {
-    return baseScore * 1.2;
+    return baseScore * 1.2; // テストファイル軽度優遇
   }
-
-  // ドキュメントファイルを減点
   if (path.endsWith(".md") || path.endsWith(".yaml") || path.endsWith(".yml")) {
-    return baseScore * 0.5;
+    return baseScore * 0.5; // ドキュメント減点
   }
 
-  // その他のファイルはそのまま
   return baseScore;
 }
 
@@ -590,11 +608,13 @@ export async function filesSearch(
 
   const rows = await db.all<FileRow>(sql, values);
 
+  const boostProfile = params.boost_profile ?? "default";
+
   return rows
     .map((row) => {
       const { preview, line } = buildPreview(row.content ?? "", query);
       const baseScore = row.score ?? 1.0; // FTS時はBM25スコア、ILIKE時は1.0
-      const boostedScore = applyFileTypeBoost(row.path, baseScore);
+      const boostedScore = applyFileTypeBoost(row.path, baseScore, boostProfile);
 
       return {
         path: row.path,
@@ -791,15 +811,30 @@ export async function contextBundle(
       candidate.score += weights.textMatch;
       candidate.reasons.add(`text:${keyword}`);
 
-      // ファイルタイプブーストを適用
-      if (row.path.startsWith("src/") && row.ext === ".ts") {
-        candidate.score += 0.5; // 実装ファイルに追加ボーナス
-        candidate.reasons.add("boost:impl-file");
+      // ファイルタイプブーストを適用（boost_profileに応じて）
+      const boostProfile = params.boost_profile ?? "default";
+      if (boostProfile === "docs") {
+        // ドキュメントモード
+        if (row.path.endsWith(".md") || row.path.endsWith(".yaml") || row.path.endsWith(".yml")) {
+          candidate.score += 0.5; // ドキュメントに追加ボーナス
+          candidate.reasons.add("boost:doc-file");
+        }
+        if (row.path.startsWith("src/") && row.ext === ".ts") {
+          candidate.score -= 0.2; // 実装ファイルに軽度ペナルティ
+          candidate.reasons.add("penalty:impl-file");
+        }
+      } else if (boostProfile === "default") {
+        // デフォルトモード
+        if (row.path.startsWith("src/") && row.ext === ".ts") {
+          candidate.score += 0.5; // 実装ファイルに追加ボーナス
+          candidate.reasons.add("boost:impl-file");
+        }
+        if (row.path.endsWith(".md") || row.path.endsWith(".yaml") || row.path.endsWith(".yml")) {
+          candidate.score -= 0.3; // ドキュメントにペナルティ
+          candidate.reasons.add("penalty:doc-file");
+        }
       }
-      if (row.path.endsWith(".md") || row.path.endsWith(".yaml") || row.path.endsWith(".yml")) {
-        candidate.score -= 0.3; // ドキュメントにペナルティ
-        candidate.reasons.add("penalty:doc-file");
-      }
+      // boostProfile === "none" の場合はブースト適用なし
 
       const { line } = buildPreview(row.content, keyword);
       candidate.matchLine =

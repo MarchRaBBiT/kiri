@@ -107,6 +107,25 @@ KIRI provides 5 MCP tools for code exploration:
 
 When DuckDB's FTS extension is available, searches use BM25 ranking for better relevance. Otherwise, the system falls back to pattern matching (ILIKE) with graceful degradation.
 
+### File Type Boosting
+
+Control search ranking behavior with the `boost_profile` parameter:
+
+- **`"default"`** (default): Prioritizes implementation files (src/*.ts) over documentation
+- **`"docs"`**: Prioritizes documentation files (*.md) over implementation
+- **`"none"`**: Pure BM25 scoring without file type adjustments
+
+```javascript
+// Find implementation files (default behavior)
+mcp__kiri__files_search({ query: "filesSearch implementation" })
+
+// Find documentation
+mcp__kiri__files_search({ query: "setup guide", boost_profile: "docs" })
+
+// Pure BM25 ranking
+mcp__kiri__files_search({ query: "authentication", boost_profile: "none" })
+```
+
 ## 🔧 Configuration
 
 ### Watch Mode

@@ -467,6 +467,33 @@ function splitQueryWords(query: string): string[] {
   return words.length > 0 ? words : [query]; // 全て除外された場合は元のクエリを使用
 }
 
+/**
+ * ファイルタイプに基づいてスコアをブーストする
+ * 実装ファイルを優遇し、ドキュメントファイルを減点する
+ * @param path - ファイルパス
+ * @param baseScore - 元のスコア
+ * @returns ブースト適用後のスコア
+ */
+function applyFileTypeBoost(path: string, baseScore: number): number {
+  // 実装ファイルを優遇（src/*.ts, src/*.js）
+  if (path.startsWith("src/") && (path.endsWith(".ts") || path.endsWith(".js"))) {
+    return baseScore * 1.5;
+  }
+
+  // テストファイルを軽度優遇
+  if (path.startsWith("tests/") && path.endsWith(".ts")) {
+    return baseScore * 1.2;
+  }
+
+  // ドキュメントファイルを減点
+  if (path.endsWith(".md") || path.endsWith(".yaml") || path.endsWith(".yml")) {
+    return baseScore * 0.5;
+  }
+
+  // その他のファイルはそのまま
+  return baseScore;
+}
+
 export async function filesSearch(
   context: ServerContext,
   params: FilesSearchParams
@@ -563,17 +590,22 @@ export async function filesSearch(
 
   const rows = await db.all<FileRow>(sql, values);
 
-  return rows.map((row) => {
-    const { preview, line } = buildPreview(row.content ?? "", query);
-    return {
-      path: row.path,
-      preview,
-      matchLine: line,
-      lang: row.lang,
-      ext: row.ext,
-      score: row.score ?? 1.0, // FTS時はBM25スコア、ILIKE時は1.0
-    };
-  });
+  return rows
+    .map((row) => {
+      const { preview, line } = buildPreview(row.content ?? "", query);
+      const baseScore = row.score ?? 1.0; // FTS時はBM25スコア、ILIKE時は1.0
+      const boostedScore = applyFileTypeBoost(row.path, baseScore);
+
+      return {
+        path: row.path,
+        preview,
+        matchLine: line,
+        lang: row.lang,
+        ext: row.ext,
+        score: boostedScore,
+      };
+    })
+    .sort((a, b) => b.score - a.score); // スコアの高い順に再ソート
 }
 
 export async function snippetsGet(
@@ -758,6 +790,17 @@ export async function contextBundle(
       const candidate = ensureCandidate(candidates, row.path);
       candidate.score += weights.textMatch;
       candidate.reasons.add(`text:${keyword}`);
+
+      // ファイルタイプブーストを適用
+      if (row.path.startsWith("src/") && row.ext === ".ts") {
+        candidate.score += 0.5; // 実装ファイルに追加ボーナス
+        candidate.reasons.add("boost:impl-file");
+      }
+      if (row.path.endsWith(".md") || row.path.endsWith(".yaml") || row.path.endsWith(".yml")) {
+        candidate.score -= 0.3; // ドキュメントにペナルティ
+        candidate.reasons.add("penalty:doc-file");
+      }
+
       const { line } = buildPreview(row.content, keyword);
       candidate.matchLine =
         candidate.matchLine === null ? line : Math.min(candidate.matchLine, line);

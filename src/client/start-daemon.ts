@@ -41,24 +41,54 @@ export async function isDaemonRunning(databasePath: string): Promise<boolean> {
       process.kill(pid, 0); // シグナル0は存在チェック
     } catch (err) {
       // プロセスが存在しない場合、PIDファイルは古い
-      console.error("[StartDaemon] Stale PID file detected. Cleaning up...");
-      await cleanupStaleFiles(databasePath);
+      // Note: クリーンアップは意図的に行わない（デーモン起動中の競合を防ぐため）
+      console.error("[StartDaemon] Stale PID file detected");
       return false;
     }
 
-    // ソケットに接続可能かチェック
+    // ソケットに接続してpingヘルスチェックを実行
     try {
       const socket = net.connect(socketPath);
-      await new Promise<void>((resolve, reject) => {
+
+      const healthCheck = await new Promise<boolean>((resolve, reject) => {
         const timeout = setTimeout(() => {
           socket.destroy();
-          reject(new Error("Socket connection timeout"));
+          reject(new Error("Health check timeout"));
         }, 2000);
 
+        let responseReceived = false;
+
         socket.on("connect", () => {
-          clearTimeout(timeout);
-          socket.end();
-          resolve();
+          // pingリクエストを送信
+          const pingRequest = {
+            jsonrpc: "2.0",
+            id: 1,
+            method: "ping",
+          };
+          socket.write(JSON.stringify(pingRequest) + "\n");
+        });
+
+        socket.on("data", (data) => {
+          if (responseReceived) return;
+
+          try {
+            const response = JSON.parse(data.toString().trim());
+            // 正常なpingレスポンスを確認
+            if (response.result && response.result.status === "ok") {
+              responseReceived = true;
+              clearTimeout(timeout);
+              socket.end();
+              resolve(true);
+            } else {
+              clearTimeout(timeout);
+              socket.destroy();
+              reject(new Error("Invalid ping response"));
+            }
+          } catch (parseErr) {
+            clearTimeout(timeout);
+            socket.destroy();
+            reject(new Error("Failed to parse health check response"));
+          }
         });
 
         socket.on("error", (err) => {
@@ -67,13 +97,12 @@ export async function isDaemonRunning(databasePath: string): Promise<boolean> {
         });
       });
 
-      return true;
+      return healthCheck;
     } catch (err) {
-      // ソケット接続失敗
+      // ソケット接続失敗またはヘルスチェック失敗（起動中の可能性もあるため、クリーンアップは行わない）
       console.error(
-        `[StartDaemon] Daemon process exists but socket not responsive. Cleaning up...`
+        `[StartDaemon] Daemon health check failed: ${err instanceof Error ? err.message : String(err)}`
       );
-      await cleanupStaleFiles(databasePath);
       return false;
     }
   } catch (err) {

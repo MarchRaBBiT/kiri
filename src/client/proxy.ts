@@ -11,6 +11,7 @@ import * as readline from "readline";
 import { parseArgs } from "util";
 import * as path from "path";
 import { startDaemon, isDaemonRunning } from "./start-daemon.js";
+import packageJson from "../../package.json" with { type: "json" };
 
 /**
  * プロキシ設定オプション
@@ -62,6 +63,69 @@ function parseProxyArgs(): ProxyOptions {
     securityConfigPath: values["security-config"],
     securityLockPath: values["security-lock"],
   };
+}
+
+/**
+ * デーモンのバージョンをチェック
+ *
+ * Major/minor versionが一致しない場合はエラーを投げる
+ */
+async function checkDaemonVersion(socket: net.Socket): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new Error("Version check timeout"));
+    }, 3000);
+
+    // pingリクエストを送信してバージョン情報を取得
+    const pingRequest = {
+      jsonrpc: "2.0",
+      id: "version-check",
+      method: "ping",
+    };
+
+    let responseReceived = false;
+
+    const dataHandler = (data: Buffer) => {
+      if (responseReceived) return;
+
+      try {
+        const response = JSON.parse(data.toString().trim());
+        if (response.id === "version-check" && response.result) {
+          responseReceived = true;
+          clearTimeout(timeout);
+          socket.removeListener("data", dataHandler);
+
+          const daemonVersion = response.result.serverInfo?.version || "unknown";
+          const clientVersion =
+            typeof packageJson?.version === "string" ? packageJson.version : "0.0.0";
+
+          // Major.minor バージョンを比較
+          const daemonMajorMinor = daemonVersion.split(".").slice(0, 2).join(".");
+          const clientMajorMinor = clientVersion.split(".").slice(0, 2).join(".");
+
+          if (daemonMajorMinor !== clientMajorMinor) {
+            reject(
+              new Error(
+                `Version mismatch: client ${clientVersion} is incompatible with daemon ${daemonVersion}. Restart the daemon to use the current version.`
+              )
+            );
+          } else {
+            console.error(
+              `[Proxy] Version check passed: client=${clientVersion}, daemon=${daemonVersion}`
+            );
+            resolve();
+          }
+        }
+      } catch (parseErr) {
+        clearTimeout(timeout);
+        socket.removeListener("data", dataHandler);
+        reject(new Error("Failed to parse version check response"));
+      }
+    };
+
+    socket.on("data", dataHandler);
+    socket.write(JSON.stringify(pingRequest) + "\n");
+  });
 }
 
 /**
@@ -173,6 +237,9 @@ async function main() {
       options.maxRetries,
       options.retryDelayMs
     );
+
+    // バージョン互換性をチェック
+    await checkDaemonVersion(socket);
 
     console.error("[Proxy] Connected to daemon. Bridging stdio ↔ socket...");
 

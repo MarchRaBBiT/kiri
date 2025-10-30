@@ -42,8 +42,8 @@ describe("Daemon Starter", () => {
       const running = await isDaemonRunning(databasePath);
       expect(running).toBe(false);
 
-      // PIDファイルがクリーンアップされたことを確認
-      await expect(fs.access(pidFilePath)).rejects.toThrow();
+      // PIDファイルは残っていることを確認（積極的なクリーンアップは行わない）
+      await fs.access(pidFilePath); // Should not throw
     });
 
     it("returns false when daemon process exists but socket is not responsive", async () => {
@@ -55,11 +55,11 @@ describe("Daemon Starter", () => {
       const running = await isDaemonRunning(databasePath);
       expect(running).toBe(false);
 
-      // PIDファイルがクリーンアップされたことを確認
-      await expect(fs.access(pidFilePath)).rejects.toThrow();
+      // PIDファイルは残っていることを確認（デーモン起動中の可能性があるため）
+      await fs.access(pidFilePath); // Should not throw
     });
 
-    it("cleans up stale socket file", async () => {
+    it("does not clean up stale files to avoid race conditions", async () => {
       const pidFilePath = `${databasePath}.daemon.pid`;
       const socketPath = `${databasePath}.sock`;
 
@@ -70,12 +70,12 @@ describe("Daemon Starter", () => {
       const running = await isDaemonRunning(databasePath);
       expect(running).toBe(false);
 
-      // 両方のファイルがクリーンアップされたことを確認
-      await expect(fs.access(pidFilePath)).rejects.toThrow();
-      await expect(fs.access(socketPath)).rejects.toThrow();
+      // ファイルは残っていることを確認（デーモン自身がクリーンアップを担当）
+      await fs.access(pidFilePath); // Should not throw
+      await fs.access(socketPath); // Should not throw
     });
 
-    it("cleans up startup lock file", async () => {
+    it("preserves startup lock file to avoid interfering with daemon startup", async () => {
       const pidFilePath = `${databasePath}.daemon.pid`;
       const startupLockPath = `${databasePath}.daemon.starting`;
 
@@ -86,9 +86,9 @@ describe("Daemon Starter", () => {
       const running = await isDaemonRunning(databasePath);
       expect(running).toBe(false);
 
-      // 両方のファイルがクリーンアップされたことを確認
-      await expect(fs.access(pidFilePath)).rejects.toThrow();
-      await expect(fs.access(startupLockPath)).rejects.toThrow();
+      // ファイルは残っていることを確認（起動中のデーモンを妨害しないため）
+      await fs.access(pidFilePath); // Should not throw
+      await fs.access(startupLockPath); // Should not throw
     });
   });
 });

@@ -18,6 +18,8 @@ export class DaemonLifecycle {
   private activeConnections = 0;
   private watchModeActive = false;
   private shutdownCallback?: () => Promise<void>;
+  private readonly maxLogSizeBytes: number = 10 * 1024 * 1024; // 10MB
+  private readonly maxLogBackups: number = 3;
 
   constructor(
     private readonly databasePath: string,
@@ -187,13 +189,16 @@ export class DaemonLifecycle {
 
     this.resetIdleTimer();
     this.idleTimer = setTimeout(async () => {
-      console.error(
-        `[Daemon] Idle timeout (${this.idleTimeoutMinutes} minutes) reached. Shutting down...`
-      );
-      if (this.shutdownCallback) {
-        await this.shutdownCallback();
+      // タイマー発火時に再度チェック（レースコンディション対策）
+      if (this.activeConnections === 0 && !this.watchModeActive) {
+        console.error(
+          `[Daemon] Idle timeout (${this.idleTimeoutMinutes} minutes) reached. Shutting down...`
+        );
+        if (this.shutdownCallback) {
+          await this.shutdownCallback();
+        }
+        process.exit(0);
       }
-      process.exit(0);
     }, this.idleTimeoutMinutes * 60 * 1000);
   }
 
@@ -221,9 +226,55 @@ export class DaemonLifecycle {
   }
 
   /**
+   * ログファイルをローテーション
+   *
+   * ファイルサイズが maxLogSizeBytes を超えた場合、古いログをバックアップして新しいログを開始
+   */
+  private async rotateLogIfNeeded(): Promise<void> {
+    try {
+      const stats = await fs.stat(this.logFilePath);
+      if (stats.size < this.maxLogSizeBytes) {
+        return; // ローテーション不要
+      }
+
+      // 既存のバックアップをシフト (.log.3 -> .log.4 は削除, .log.2 -> .log.3, etc.)
+      for (let i = this.maxLogBackups; i > 0; i--) {
+        const oldBackup = `${this.logFilePath}.${i}`;
+        const newBackup = `${this.logFilePath}.${i + 1}`;
+        try {
+          await fs.access(oldBackup);
+          if (i === this.maxLogBackups) {
+            // 最古のバックアップは削除
+            await fs.unlink(oldBackup);
+          } else {
+            // バックアップをリネーム
+            await fs.rename(oldBackup, newBackup);
+          }
+        } catch (err) {
+          // ファイルが存在しない場合は無視
+        }
+      }
+
+      // 現在のログファイルを .log.1 にリネーム
+      await fs.rename(this.logFilePath, `${this.logFilePath}.1`);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        console.error(`Failed to rotate log file: ${err}`);
+      }
+    }
+  }
+
+  /**
    * ログファイルにメッセージを書き込む
+   *
+   * ファイルサイズが制限を超えた場合、自動的にローテーションを実行
    */
   async log(message: string): Promise<void> {
+    // ローテーションチェック（非同期だがログ書き込みはブロックしない）
+    this.rotateLogIfNeeded().catch((err) => {
+      console.error(`Log rotation failed: ${err}`);
+    });
+
     const timestamp = new Date().toISOString();
     const logMessage = `${timestamp} ${message}\n`;
     try {

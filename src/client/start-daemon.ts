@@ -8,6 +8,7 @@ import { spawn } from "child_process";
 import * as fs from "fs/promises";
 import * as net from "net";
 import * as path from "path";
+import { fileURLToPath } from "url";
 
 /**
  * デーモン起動オプション
@@ -133,6 +134,8 @@ export async function startDaemon(options: StartDaemonOptions): Promise<void> {
 
   // デーモン実行ファイルのパスを解決
   // 開発時: src/daemon/daemon.ts, ビルド後: dist/src/daemon/daemon.js
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = path.dirname(__filename);
   const daemonScriptPath = path.resolve(__dirname, "../daemon/daemon.js");
 
   // デーモン起動引数

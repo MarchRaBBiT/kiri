@@ -2,9 +2,52 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Use KIRI MCP Tools
+## Use KIRI MCP Tools - MANDATORY
 
-**This project uses KIRI MCP**. Use KIRI mcp tools when exploring this codebase.
+**This project uses KIRI MCP**. You MUST proactively use KIRI MCP tools for all code exploration and search tasks.
+
+### When to Use KIRI Tools
+
+**ALWAYS use KIRI tools instead of Glob/Grep for:**
+
+1. **Understanding codebase structure** → Use `mcp__kiri__context_bundle`
+   - Finding relevant code for implementing features
+   - Understanding how existing features work
+   - Locating code related to specific functionality
+   - Example: `mcp__kiri__context_bundle` with goal "How does the daemon lifecycle work?"
+
+2. **Searching for files or code patterns** → Use `mcp__kiri__files_search`
+   - Finding files by keywords or functionality
+   - Locating implementation patterns
+   - Example: `mcp__kiri__files_search` with query "daemon startup"
+
+3. **Reading specific code sections** → Use `mcp__kiri__snippets_get`
+   - Reading only relevant parts of large files
+   - Minimizing token usage
+   - Example: `mcp__kiri__snippets_get` for path "src/daemon/daemon.ts"
+
+4. **Understanding dependencies** → Use `mcp__kiri__deps_closure`
+   - Finding what files depend on a module (inbound)
+   - Finding what a module depends on (outbound)
+   - Impact analysis for refactoring
+   - Example: `mcp__kiri__deps_closure` with path "src/server/runtime.ts"
+
+5. **Refining search results** → Use `mcp__kiri__semantic_rerank`
+   - Prioritizing files by semantic relevance
+   - Narrowing down search results
+
+### Performance Benefits
+
+- **Token efficiency**: KIRI returns only relevant snippets, not entire files
+- **Precision**: Context-aware search beats simple pattern matching
+- **Speed**: Indexed search is faster than filesystem traversal
+- **Structure-aware**: Understands code symbols and dependencies
+
+### Default Tool Priority
+
+1. First: Try KIRI tools (`mcp__kiri__*`)
+2. Fallback: Use Glob/Grep only when KIRI doesn't return useful results
+3. Never: Use Glob/Grep for initial exploration without trying KIRI first
 
 ---
 

@@ -6,3 +6,6 @@ var/
 .DS_Store
 coverage/
 .claude/settings.local.json
+.kiri/
+package/
+*.tgz

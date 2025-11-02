@@ -46,7 +46,7 @@ describe("Socket Transport", () => {
   });
 
   it("creates socket server and accepts connections", async () => {
-    const handler = async (request: JsonRpcRequest): Promise<RpcHandleResult> => {
+    const handler = async (request: JsonRpcRequest): Promise<RpcHandleResult | null> => {
       return {
         response: {
           jsonrpc: "2.0",
@@ -72,7 +72,7 @@ describe("Socket Transport", () => {
   });
 
   it("handles JSON-RPC request and returns response", async () => {
-    const handler = async (request: JsonRpcRequest): Promise<RpcHandleResult> => {
+    const handler = async (request: JsonRpcRequest): Promise<RpcHandleResult | null> => {
       return {
         response: {
           jsonrpc: "2.0",
@@ -124,7 +124,7 @@ describe("Socket Transport", () => {
   it("handles multiple concurrent client connections", async () => {
     let requestCount = 0;
 
-    const handler = async (request: JsonRpcRequest): Promise<RpcHandleResult> => {
+    const handler = async (request: JsonRpcRequest): Promise<RpcHandleResult | null> => {
       requestCount++;
       return {
         response: {
@@ -184,8 +184,59 @@ describe("Socket Transport", () => {
     });
   });
 
+  it("does not emit a response for notifications without id", async () => {
+    let handled = 0;
+
+    const handler = async (request: JsonRpcRequest): Promise<RpcHandleResult | null> => {
+      handled++;
+      return {
+        response: {
+          jsonrpc: "2.0",
+          id: request.id ?? "ignored",
+          result: { ok: true },
+        },
+        statusCode: 200,
+      };
+    };
+
+    closeServer = await createSocketServer({
+      socketPath,
+      onRequest: handler,
+    });
+
+    const client = net.connect(socketPath);
+    await new Promise<void>((resolve) => client.on("connect", () => resolve()));
+
+    const rl = readline.createInterface({ input: client, crlfDelay: Infinity });
+    const responsePromise = new Promise<string | null>((resolve) => {
+      const timer = setTimeout(() => {
+        rl.removeAllListeners("line");
+        resolve(null);
+      }, 100);
+      rl.once("line", (line) => {
+        clearTimeout(timer);
+        resolve(line);
+      });
+    });
+
+    const notification = {
+      jsonrpc: "2.0",
+      method: "notify",
+      params: { value: 1 },
+    };
+
+    client.write(JSON.stringify(notification) + "\n");
+
+    const responseLine = await responsePromise;
+    expect(responseLine).toBeNull();
+    expect(handled).toBe(1);
+
+    rl.close();
+    client.end();
+  });
+
   it("handles handler errors gracefully", async () => {
-    const handler = async (): Promise<RpcHandleResult> => {
+    const handler = async (): Promise<RpcHandleResult | null> => {
       throw new Error("Handler error");
     };
 
@@ -225,7 +276,7 @@ describe("Socket Transport", () => {
   });
 
   it("cleans up socket file on close", async () => {
-    const handler = async (request: JsonRpcRequest): Promise<RpcHandleResult> => {
+    const handler = async (request: JsonRpcRequest): Promise<RpcHandleResult | null> => {
       return {
         response: { jsonrpc: "2.0", id: request.id, result: {} },
         statusCode: 200,
@@ -249,7 +300,7 @@ describe("Socket Transport", () => {
   });
 
   it("handles malformed JSON gracefully", async () => {
-    const handler = async (request: JsonRpcRequest): Promise<RpcHandleResult> => {
+    const handler = async (request: JsonRpcRequest): Promise<RpcHandleResult | null> => {
       return {
         response: { jsonrpc: "2.0", id: request.id, result: {} },
         statusCode: 200,

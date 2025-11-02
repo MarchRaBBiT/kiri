@@ -32,4 +32,43 @@ describe("DegradeController", () => {
     const results = controller.search("console value");
     expect(results[0]?.path).toContain("src/file.ts");
   });
+
+  it("does not enter degrade mode for user-facing tool errors", async () => {
+    const dir = await mkdtemp("degrade-test-");
+    tempDirs.push(dir);
+    const controller = new DegradeController(dir);
+
+    await expect(
+      controller.withResource(async () => {
+        throw new Error(
+          "Requested snippet file was not indexed. Re-run the indexer or choose another path."
+        );
+      }, "duckdb:snippets.get")
+    ).rejects.toThrow();
+
+    expect(controller.current.active).toBe(false);
+  });
+
+  it("skips binary files when performing fallback search", async () => {
+    const dir = await mkdtemp("degrade-test-binary-");
+    tempDirs.push(dir);
+    await mkdir(join(dir, "bin"));
+    await writeFile(join(dir, "bin", "binary.dat"), Buffer.from([0, 1, 2, 3]));
+
+    const controller = new DegradeController(dir);
+    const results = controller.search("0 1");
+    expect(results).toHaveLength(0);
+  });
+
+  it("skips files larger than the preview threshold", async () => {
+    const dir = await mkdtemp("degrade-test-large-");
+    tempDirs.push(dir);
+    await mkdir(join(dir, "large"));
+    const largeContent = "x".repeat(512 * 1024);
+    await writeFile(join(dir, "large", "huge.txt"), largeContent);
+
+    const controller = new DegradeController(dir);
+    const results = controller.search("x");
+    expect(results).toHaveLength(0);
+  });
 });

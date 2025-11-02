@@ -33,31 +33,39 @@ export async function startStdioServer(options: StdioServerOptions): Promise<voi
             payload = JSON.parse(line) as JsonRpcRequest;
           } catch {
             const response = errorResponse(
-              null,
-              "Invalid JSON payload. Submit a JSON-RPC 2.0 compliant request."
+              0,
+              "Invalid JSON payload. Submit a JSON-RPC 2.0 compliant request.",
+              -32700
             );
             stdout.write(JSON.stringify(response) + "\n");
             return;
           }
 
           const validationMessage = validateJsonRpcRequest(payload);
+          const hasResponseId = typeof payload.id === "string" || typeof payload.id === "number";
           if (validationMessage) {
-            const response = errorResponse(payload.id ?? null, validationMessage);
-            stdout.write(JSON.stringify(response) + "\n");
+            if (hasResponseId) {
+              const response = errorResponse(payload.id as string | number, validationMessage);
+              stdout.write(JSON.stringify(response) + "\n");
+            }
             return;
           }
 
           const start = performance.now();
           try {
             const result = await handleRpc(payload);
-            stdout.write(JSON.stringify(result.response) + "\n");
+            if (result) {
+              stdout.write(JSON.stringify(result.response) + "\n");
+            }
           } catch (error) {
             stderr.write(`Unhandled stdio RPC error: ${String(error)}\n`);
-            const response = errorResponse(
-              payload.id ?? null,
-              "Unexpected server error. Inspect server logs and retry the request."
-            );
-            stdout.write(JSON.stringify(response) + "\n");
+            if (hasResponseId) {
+              const response = errorResponse(
+                payload.id as string | number,
+                "Unexpected server error. Inspect server logs and retry the request."
+              );
+              stdout.write(JSON.stringify(response) + "\n");
+            }
           } finally {
             const elapsed = performance.now() - start;
             runtime.metrics.recordRequest(elapsed);

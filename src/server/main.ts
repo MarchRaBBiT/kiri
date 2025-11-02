@@ -63,7 +63,7 @@ export async function startServer(options: ServerOptions): Promise<Server> {
         res.setHeader("Content-Type", "application/json");
         res.end(
           JSON.stringify(
-            errorResponse(null, "Only POST is supported. Send a JSON-RPC request via POST.")
+            errorResponse(0, "Only POST is supported. Send a JSON-RPC request via POST.")
           )
         );
         return;
@@ -78,8 +78,9 @@ export async function startServer(options: ServerOptions): Promise<Server> {
         res.end(
           JSON.stringify(
             errorResponse(
-              null,
-              "Failed to read request body. Retry the call with a smaller payload."
+              0,
+              "Failed to read request body. Retry the call with a smaller payload.",
+              -32000
             )
           )
         );
@@ -94,7 +95,11 @@ export async function startServer(options: ServerOptions): Promise<Server> {
         res.setHeader("Content-Type", "application/json");
         res.end(
           JSON.stringify(
-            errorResponse(null, "Invalid JSON payload. Submit a JSON-RPC 2.0 compliant request.")
+            errorResponse(
+              0,
+              "Invalid JSON payload. Submit a JSON-RPC 2.0 compliant request.",
+              -32700
+            )
           )
         );
         return;
@@ -102,17 +107,28 @@ export async function startServer(options: ServerOptions): Promise<Server> {
 
       res.setHeader("Content-Type", "application/json");
       const validationMessage = validateJsonRpcRequest(payload);
+      const hasResponseId = typeof payload.id === "string" || typeof payload.id === "number";
       if (validationMessage) {
-        res.statusCode = 400;
-        res.end(JSON.stringify(errorResponse(payload.id ?? null, validationMessage)));
+        if (hasResponseId) {
+          res.statusCode = 400;
+          res.end(JSON.stringify(errorResponse(payload.id as string | number, validationMessage)));
+        } else {
+          res.statusCode = 204;
+          res.end();
+        }
         return;
       }
 
       const start = performance.now();
       try {
         const result = await handleRpc(payload);
-        res.statusCode = result.statusCode;
-        res.end(JSON.stringify(result.response));
+        if (result) {
+          res.statusCode = result.statusCode;
+          res.end(JSON.stringify(result.response));
+        } else {
+          res.statusCode = 204;
+          res.end();
+        }
       } finally {
         const elapsed = performance.now() - start;
         runtime.metrics.recordRequest(elapsed);

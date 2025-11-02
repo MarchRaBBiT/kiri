@@ -18,7 +18,7 @@ export interface SocketServerOptions {
   /** Unix socket file path (e.g., /path/to/database.duckdb.sock) */
   socketPath: string;
   /** Handler function for JSON-RPC requests */
-  onRequest: (request: JsonRpcRequest) => Promise<RpcHandleResult>;
+  onRequest: (request: JsonRpcRequest) => Promise<RpcHandleResult | null>;
   /** Optional error handler for connection errors */
   onError?: (error: Error) => void;
 }
@@ -87,7 +87,7 @@ export async function createSocketServer(
  */
 function handleClientConnection(
   socket: net.Socket,
-  onRequest: (request: JsonRpcRequest) => Promise<RpcHandleResult>,
+  onRequest: (request: JsonRpcRequest) => Promise<RpcHandleResult | null>,
   onError?: (error: Error) => void
 ): void {
   const rl = readline.createInterface({
@@ -96,21 +96,53 @@ function handleClientConnection(
   });
 
   rl.on("line", async (line) => {
+    let request: JsonRpcRequest | null = null;
     try {
-      const request = JSON.parse(line) as JsonRpcRequest;
-      const result = await onRequest(request);
-      // Extract response from RpcHandleResult (statusCode is only for HTTP)
-      socket.write(JSON.stringify(result.response) + "\n");
+      request = JSON.parse(line) as JsonRpcRequest;
     } catch (err) {
       const error = err as Error;
       if (onError) {
         onError(error);
       }
 
-      // エラーレスポンスを送信
       const errorResponse = {
         jsonrpc: "2.0" as const,
         id: null,
+        error: {
+          code: -32700,
+          message: "Parse error: Invalid JSON received.",
+        },
+      };
+      socket.write(JSON.stringify(errorResponse) + "\n");
+      return;
+    }
+
+    try {
+      const result = await onRequest(request);
+      if (result) {
+        const hasResponseId = typeof request.id === "string" || typeof request.id === "number";
+        if (!hasResponseId) {
+          return;
+        }
+        // Extract response from RpcHandleResult (statusCode is only for HTTP)
+        socket.write(JSON.stringify(result.response) + "\n");
+      }
+    } catch (err) {
+      const error = err as Error;
+      if (onError) {
+        onError(error);
+      }
+
+      const hasResponseId =
+        request && (typeof request.id === "string" || typeof request.id === "number");
+      if (!hasResponseId) {
+        return;
+      }
+
+      // エラーレスポンスを送信
+      const errorResponse = {
+        jsonrpc: "2.0" as const,
+        id: request.id,
         error: {
           code: -32603,
           message: `Internal error: ${error.message}`,

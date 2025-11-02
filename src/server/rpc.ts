@@ -27,13 +27,13 @@ export interface JsonRpcRequest {
 
 export interface JsonRpcSuccess {
   jsonrpc: "2.0";
-  id: unknown;
+  id: string | number | null;
   result: unknown;
 }
 
 export interface JsonRpcError {
   jsonrpc: "2.0";
-  id: unknown;
+  id: string | number | null;
   error: {
     code: number;
     message: string;
@@ -414,11 +414,15 @@ function parseSemanticRerankParams(input: unknown): SemanticRerankParams {
   return params;
 }
 
-export function successResponse(id: unknown, result: unknown): JsonRpcSuccess {
+export function successResponse(id: string | number, result: unknown): JsonRpcSuccess {
   return { jsonrpc: "2.0", id, result };
 }
 
-export function errorResponse(id: unknown, message: string, code = -32603): JsonRpcError {
+export function errorResponse(
+  id: string | number | null,
+  message: string,
+  code = -32603
+): JsonRpcError {
   return { jsonrpc: "2.0", id, error: { code, message } };
 }
 
@@ -498,9 +502,10 @@ async function executeToolByName(
 
 export function createRpcHandler(
   dependencies: RpcHandlerDependencies
-): (payload: JsonRpcRequest) => Promise<RpcHandleResult> {
+): (payload: JsonRpcRequest) => Promise<RpcHandleResult | null> {
   const { context, degrade, metrics, tokens, allowDegrade } = dependencies;
-  return async (payload: JsonRpcRequest): Promise<RpcHandleResult> => {
+  return async (payload: JsonRpcRequest): Promise<RpcHandleResult | null> => {
+    const hasResponseId = typeof payload.id === "string" || typeof payload.id === "number";
     try {
       let result: unknown;
 
@@ -524,30 +529,39 @@ export function createRpcHandler(
           result = { tools: TOOL_DESCRIPTORS };
           break;
         }
+        case "resources/list": {
+          // MCP standard format: resources array without pagination
+          result = { resources: [] };
+          break;
+        }
         case "tools/call": {
           // MCP standard tool invocation
           const paramsRecord = payload.params as Record<string, unknown> | null | undefined;
           if (!paramsRecord || typeof paramsRecord !== "object") {
-            return {
-              statusCode: 400,
-              response: errorResponse(
-                payload.id ?? null,
-                "Invalid params for tools/call. Provide name and arguments.",
-                -32602
-              ),
-            };
+            return hasResponseId
+              ? {
+                  statusCode: 400,
+                  response: errorResponse(
+                    payload.id as string | number,
+                    "Invalid params for tools/call. Provide name and arguments.",
+                    -32602
+                  ),
+                }
+              : null;
           }
 
           const toolName = paramsRecord.name;
           if (typeof toolName !== "string") {
-            return {
-              statusCode: 400,
-              response: errorResponse(
-                payload.id ?? null,
-                "Invalid params for tools/call. Tool name must be a string.",
-                -32602
-              ),
-            };
+            return hasResponseId
+              ? {
+                  statusCode: 400,
+                  response: errorResponse(
+                    payload.id as string | number,
+                    "Invalid params for tools/call. Tool name must be a string.",
+                    -32602
+                  ),
+                }
+              : null;
           }
 
           const toolArguments = paramsRecord.arguments ?? {};
@@ -644,53 +658,64 @@ export function createRpcHandler(
           break;
         }
         default: {
-          return {
-            statusCode: 404,
-            response: errorResponse(
-              payload.id ?? null,
-              "Requested method is not available. Use tools/call, or legacy methods: context.bundle, semantic.rerank, files.search, snippets.get, or deps.closure.",
-              -32601
-            ),
-          };
+          return hasResponseId
+            ? {
+                statusCode: 404,
+                response: errorResponse(
+                  payload.id as string | number,
+                  "Requested method is not available. Use tools/call, or legacy methods: context.bundle, semantic.rerank, files.search, snippets.get, or deps.closure.",
+                  -32601
+                ),
+              }
+            : null;
         }
       }
       const masked = maskValue(result, { tokens });
       if (masked.applied > 0) {
         metrics.recordMask(masked.applied);
       }
+      if (!hasResponseId) {
+        return null;
+      }
       return {
         statusCode: 200,
-        response: successResponse(payload.id ?? null, masked.masked),
+        response: successResponse(payload.id as string | number, masked.masked),
       };
     } catch (error) {
       if (degrade.current.active && !allowDegrade) {
-        return {
-          statusCode: 503,
-          response: errorResponse(
-            payload.id ?? null,
-            "Backend degraded and --allow-degrade not set. Restore DuckDB availability or restart server."
-          ),
-        };
+        return hasResponseId
+          ? {
+              statusCode: 503,
+              response: errorResponse(
+                payload.id as string | number,
+                "Backend degraded and --allow-degrade not set. Restore DuckDB availability or restart server."
+              ),
+            }
+          : null;
       }
       if (degrade.current.active && allowDegrade) {
-        return {
-          statusCode: 503,
-          response: errorResponse(
-            payload.id ?? null,
-            degrade.current.reason
-              ? `Backend degraded due to ${degrade.current.reason}. Only files.search is operational.`
-              : "Backend degraded. Only files.search is operational."
-          ),
-        };
+        return hasResponseId
+          ? {
+              statusCode: 503,
+              response: errorResponse(
+                payload.id as string | number,
+                degrade.current.reason
+                  ? `Backend degraded due to ${degrade.current.reason}. Only files.search is operational.`
+                  : "Backend degraded. Only files.search is operational."
+              ),
+            }
+          : null;
       }
       const message =
         error instanceof Error
           ? error.message
           : "Unknown error occurred. Inspect server logs and retry the request.";
-      return {
-        statusCode: 500,
-        response: errorResponse(payload.id ?? null, message),
-      };
+      return hasResponseId
+        ? {
+            statusCode: 500,
+            response: errorResponse(payload.id as string | number, message),
+          }
+        : null;
     }
   };
 }

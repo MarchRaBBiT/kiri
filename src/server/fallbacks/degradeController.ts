@@ -1,5 +1,8 @@
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { closeSync, openSync, readFileSync, readdirSync, readSync, statSync } from "node:fs";
 import { join, relative as relativePath, resolve } from "node:path";
+
+const MAX_SAMPLE_BYTES = 32 * 1024;
+const MAX_PREVIEW_FILE_BYTES = 256 * 1024;
 
 export interface DegradeState {
   active: boolean;
@@ -25,6 +28,52 @@ export class DegradeController {
     return this.state;
   }
 
+  private shouldTriggerDegrade(error: unknown): boolean {
+    if (!(error instanceof Error)) {
+      return false;
+    }
+    const message = error.message ?? "";
+    const normalized = message.toLowerCase();
+    if (message.includes("| SQL:")) {
+      return true;
+    }
+    if (normalized.includes("duckdb")) {
+      return true;
+    }
+    if (normalized.includes("catalog error")) {
+      return true;
+    }
+    if (normalized.includes("io error")) {
+      return true;
+    }
+    return false;
+  }
+
+  private isBinaryFile(path: string, size: number): boolean {
+    if (size === 0) {
+      return false;
+    }
+    let fd: number | null = null;
+    try {
+      fd = openSync(path, "r");
+      const sampleSize = Math.min(size, MAX_SAMPLE_BYTES);
+      const buffer = Buffer.allocUnsafe(sampleSize);
+      const bytesRead = readSync(fd, buffer, 0, sampleSize, 0);
+      const sample = buffer.subarray(0, bytesRead);
+      if (sample.includes(0)) {
+        return true;
+      }
+      const decoded = sample.toString("utf8");
+      return decoded.includes("\uFFFD");
+    } catch {
+      return true;
+    } finally {
+      if (fd !== null) {
+        closeSync(fd);
+      }
+    }
+  }
+
   enable(reason: string): void {
     if (this.state.active) {
       return;
@@ -46,7 +95,9 @@ export class DegradeController {
       const result = await operation();
       return result;
     } catch (error) {
-      this.enable(reason);
+      if (this.shouldTriggerDegrade(error)) {
+        this.enable(reason);
+      }
       throw error;
     }
   }
@@ -57,11 +108,23 @@ export class DegradeController {
       return [];
     }
     const results: DegradeSearchResult[] = [];
-    this.walkFiles(this.repoRoot, (absolutePath, relativeFile) => {
+    this.walkFiles(this.repoRoot, (absolutePath, relativeFile, stats) => {
       if (results.length >= limit) {
         return;
       }
-      const content = readFileSync(absolutePath, "utf8");
+      const fileSize = typeof stats.size === "bigint" ? Number(stats.size) : stats.size;
+      if (fileSize > MAX_PREVIEW_FILE_BYTES) {
+        return;
+      }
+      if (this.isBinaryFile(absolutePath, fileSize)) {
+        return;
+      }
+      let content: string;
+      try {
+        content = readFileSync(absolutePath, "utf8");
+      } catch {
+        return;
+      }
       const lines = content.split(/\r?\n/);
       const matchIndex = lines.findIndex((line) => tokens.every((token) => line.includes(token)));
       if (matchIndex >= 0) {
@@ -72,7 +135,10 @@ export class DegradeController {
     return results;
   }
 
-  private walkFiles(root: string, visitor: (absolute: string, relative: string) => void): void {
+  private walkFiles(
+    root: string,
+    visitor: (absolute: string, relative: string, stats: ReturnType<typeof statSync>) => void
+  ): void {
     const entries = readdirSync(root);
     for (const entry of entries) {
       const absolute = join(root, entry);
@@ -81,7 +147,7 @@ export class DegradeController {
       if (stats.isDirectory()) {
         this.walkFiles(absolute, visitor);
       } else if (stats.isFile()) {
-        visitor(absolute, relative);
+        visitor(absolute, relative, stats);
       }
     }
   }

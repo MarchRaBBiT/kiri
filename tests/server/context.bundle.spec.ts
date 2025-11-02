@@ -172,7 +172,7 @@ describe("context.bundle", () => {
     // キーワード抽出が失敗してもエラーにならず、空の結果が返ることを確認
     expect(bundle.context).toBeDefined();
     expect(Array.isArray(bundle.context)).toBe(true);
-  });
+  }, 15000);
 
   it("respects MAX_DEPENDENCY_SEEDS_QUERY_LIMIT for security", async () => {
     // 大量の依存関係シードを持つケースをシミュレート

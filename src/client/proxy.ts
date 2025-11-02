@@ -13,7 +13,7 @@ import { parseArgs } from "util";
 
 import packageJson from "../../package.json" with { type: "json" };
 
-import { startDaemon, isDaemonRunning } from "./start-daemon.js";
+import { startDaemon, isDaemonRunning, stopDaemon } from "./start-daemon.js";
 
 /**
  * プロキシ設定オプション
@@ -240,7 +240,54 @@ async function main() {
     );
 
     // バージョン互換性をチェック
-    await checkDaemonVersion(socket);
+    try {
+      await checkDaemonVersion(socket);
+    } catch (versionError) {
+      const versionErr = versionError as Error;
+      // バージョン不一致を検出した場合、自動的に再起動
+      if (versionErr.message.includes("Version mismatch")) {
+        console.error(`[Proxy] ${versionErr.message}`);
+        console.error("[Proxy] Automatically restarting daemon with current version...");
+
+        socket.destroy();
+
+        // 古いデーモンを停止
+        await stopDaemon(options.databasePath);
+
+        // 少し待ってから新しいデーモンを起動
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+
+        // 新しいデーモンを起動
+        await startDaemon({
+          repoRoot: options.repoRoot,
+          databasePath: options.databasePath,
+          socketPath: options.socketPath,
+          watchMode: options.watchMode,
+          allowDegrade: options.allowDegrade,
+          securityConfigPath: options.securityConfigPath,
+          securityLockPath: options.securityLockPath,
+        });
+
+        console.error("[Proxy] Daemon restarted successfully, reconnecting...");
+
+        // 再接続を試みる
+        const newSocket = await connectToDaemon(
+          options.socketPath,
+          options.maxRetries,
+          options.retryDelayMs
+        );
+
+        // 再度バージョンチェック
+        await checkDaemonVersion(newSocket);
+
+        console.error("[Proxy] Connected to daemon. Bridging stdio ↔ socket...");
+
+        // Stdio ↔ Socket ブリッジを確立
+        bridgeStdioToSocket(newSocket);
+        return;
+      }
+      throw versionError;
+    }
 
     console.error("[Proxy] Connected to daemon. Bridging stdio ↔ socket...");
 

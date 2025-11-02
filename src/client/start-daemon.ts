@@ -117,6 +117,66 @@ export async function isDaemonRunning(databasePath: string): Promise<boolean> {
 }
 
 /**
+ * デーモンプロセスを停止
+ *
+ * PIDファイルから読み取り、グレースフルシャットダウンを試みる
+ */
+export async function stopDaemon(databasePath: string): Promise<void> {
+  const pidFilePath = `${databasePath}.daemon.pid`;
+  const startupLockPath = `${databasePath}.daemon.starting`;
+
+  try {
+    const pidStr = await fs.readFile(pidFilePath, "utf-8");
+    const pid = parseInt(pidStr.trim(), 10);
+
+    // プロセスが存在するかチェック
+    try {
+      process.kill(pid, 0);
+    } catch {
+      // プロセスが存在しない場合はクリーンアップのみ
+      console.error("[StopDaemon] Process not found, cleaning up files");
+      await fs.unlink(pidFilePath).catch(() => {
+        // ファイルが存在しない場合は無視
+      });
+      await fs.unlink(startupLockPath).catch(() => {
+        // ファイルが存在しない場合は無視
+      });
+      return;
+    }
+
+    // SIGTERM でグレースフルシャットダウン
+    console.error(`[StopDaemon] Stopping daemon (PID: ${pid})...`);
+    process.kill(pid, "SIGTERM");
+
+    // 最大5秒待機してから強制終了
+    for (let i = 0; i < 50; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      try {
+        process.kill(pid, 0);
+      } catch {
+        // プロセスが終了した
+        console.error("[StopDaemon] Daemon stopped gracefully");
+        await fs.unlink(pidFilePath).catch(() => {});
+        await fs.unlink(startupLockPath).catch(() => {});
+        return;
+      }
+    }
+
+    // タイムアウトした場合は強制終了
+    console.error("[StopDaemon] Force killing daemon...");
+    process.kill(pid, "SIGKILL");
+    await fs.unlink(pidFilePath).catch(() => {});
+    await fs.unlink(startupLockPath).catch(() => {});
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      // PIDファイルが存在しない場合は何もしない
+      return;
+    }
+    throw err;
+  }
+}
+
+/**
  * デーモンプロセスを起動
  *
  * デタッチモードで起動し、ソケットが準備完了するまで待つ

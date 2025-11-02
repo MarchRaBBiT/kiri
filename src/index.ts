@@ -1,5 +1,10 @@
 export { DuckDBClient, type DuckDBClientOptions } from "./shared/duckdb.js";
-export { startDaemon, isDaemonRunning, type StartDaemonOptions } from "./client/start-daemon.js";
+export {
+  startDaemon,
+  stopDaemon,
+  isDaemonRunning,
+  type StartDaemonOptions,
+} from "./client/start-daemon.js";
 export { buildContextBundleRequest } from "./client/index.js";
 export { bootstrapServer, type BootstrapOptions } from "./server/bootstrap.js";
 export {

@@ -1,207 +1,44 @@
-# KIRI
+# KIRI MCP Server
 
-> Context extraction platform for LLMs - Minimal, relevant code fragments from Git repositories
+> Intelligent code context extraction for LLMs via Model Context Protocol
 
-[![Version](https://img.shields.io/badge/version-0.2.3-blue.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](package.json)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.6-blue.svg)](https://www.typescriptlang.org/)
+[![MCP](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
 
-**KIRI** is a context extraction platform that indexes Git repositories into DuckDB and provides MCP (Model Context Protocol) tools for semantic code search. It extracts minimal, relevant code fragments (snippets) based on structure, history, and proximity to minimize LLM token usage.
+**KIRI** is an MCP (Model Context Protocol) server that provides intelligent code context extraction from Git repositories. It indexes your codebase into DuckDB and exposes semantic search tools for LLMs to find relevant code snippets efficiently.
 
-## 🎯 Key Features
+## 🎯 Why KIRI?
 
-- **🔍 Smart Code Search**: Full-text search with multi-word queries, FTS/BM25 ranking, and graceful fallback
-- **📦 Context Bundling**: Extract relevant code fragments based on task goals
-- **🔗 Dependency Analysis**: Bidirectional dependency graphs (outbound and inbound closure)
-- **⚡ Fast Response**: Time to first useful result ≤ 1.0s
-- **🛡️ Degrade-First Architecture**: Works without VSS/FTS extensions via fallback
-- **🔌 MCP Integration**: JSON-RPC 2.0 over stdio/HTTP
-- **👁️ Watch Mode**: Automatic re-indexing on file changes with debouncing
+- **🔌 MCP Native**: Plug-and-play integration with Claude Desktop, Codex CLI, and other MCP clients
+- **🧠 Smart Context**: Extract minimal, relevant code fragments based on task goals
+- **⚡ Fast**: Sub-second response time for most queries
+- **🔍 Semantic Search**: Multi-word queries, dependency analysis, and BM25 ranking
+- **👁️ Auto-Sync**: Watch mode automatically re-indexes when files change
+- **🛡️ Reliable**: Degrade-first architecture works without optional extensions
 
-## 📝 Supported Languages
+## 🚀 Quick Start for MCP Users
 
-KIRI currently supports AST-based symbol extraction for:
+### Step 1: Install KIRI
 
-| Language       | Extensions    | Symbol Types                                                                             | Parser                              |
-| -------------- | ------------- | ---------------------------------------------------------------------------------------- | ----------------------------------- |
-| **TypeScript** | `.ts`, `.tsx` | `class`, `interface`, `enum`, `function`, `method`                                       | TypeScript Compiler API             |
-| **Swift**      | `.swift`      | `class`, `struct`, `protocol`, `enum`, `extension`, `func`, `init`, `property`           | tree-sitter-swift                   |
-| **PHP**        | `.php`        | `class`, `interface`, `trait`, `function`, `method`, `property`, `constant`, `namespace` | tree-sitter-php (pure & HTML-mixed) |
+Choose one of the following methods:
 
-Other languages are detected and indexed but use full-file snippets instead of symbol-level extraction. Support for additional languages (Rust, Go, Python, etc.) is planned.
-
-## 🚀 Quick Start
-
-### Installation
-
-#### For End Users (after npm publication)
-
-```bash
-# Global installation (recommended)
-npm install -g kiri-mcp-server
-
-# Or use npx (no installation required)
-npx kiri-mcp-server --repo . --db .kiri/index.duckdb
-```
-
-#### For Development
-
-```bash
-# Clone and install dependencies
-git clone https://github.com/CAPHTECH/kiri.git
-cd kiri
-pnpm install
-
-# Build the project
-pnpm run build
-
-# Link the package globally (makes 'kiri' command available)
-npm link
-```
-
-### Start MCP Server
-
-**Note**: Since v0.1.0, the server automatically indexes your repository on first startup if the database doesn't exist. No manual indexing step required!
-
-#### Stdio Mode (for MCP clients like Codex)
-
-```bash
-# Start stdio server (auto-indexes if DB doesn't exist)
-kiri-server --repo . --db .kiri/index.duckdb
-
-# Force re-indexing
-kiri-server --repo . --db .kiri/index.duckdb --reindex
-
-# Start with watch mode (auto-reindex on file changes)
-kiri-server --repo . --db .kiri/index.duckdb --watch
-
-# Customize debounce timing (default: 500ms)
-kiri-server --repo . --db .kiri/index.duckdb --watch --debounce 1000
-```
-
-> インストールなしで試す場合は `npx kiri-mcp-server@latest --repo . --db .kiri/index.duckdb --watch` を利用できる。
-
-#### Manual Indexing (Optional)
-
-If you prefer to index manually before starting the server:
-
-```bash
-# Run once to create the database, then exit
-kiri-server --repo . --db .kiri/index.duckdb --reindex
-
-# Or use the daemon for background indexing
-kiri-daemon --repo . --db .kiri/index.duckdb --watch
-```
-
-#### HTTP Mode (for testing)
-
-```bash
-# Start HTTP server on port 8765
-kiri-server --repo . --db .kiri/index.duckdb --port 8765
-
-# Or specify custom port
-kiri-server --repo . --db .kiri/index.duckdb --port 9000
-
-# With watch mode enabled
-kiri-server --repo . --db .kiri/index.duckdb --port 8765 --watch --debounce 1000
-```
-
-## 📋 MCP Tools
-
-KIRI provides 5 MCP tools for code exploration:
-
-| Tool                | Description                                                           |
-| ------------------- | --------------------------------------------------------------------- |
-| **context_bundle**  | Extract relevant code context based on task goals                     |
-| **semantic_rerank** | Re-rank candidates by semantic similarity                             |
-| **files_search**    | Full-text search with multi-word queries (FTS/BM25 or ILIKE fallback) |
-| **snippets_get**    | Retrieve code snippets with symbol boundaries                         |
-| **deps_closure**    | Get dependency graph neighborhood (outbound/inbound)                  |
-
-### Search Query Syntax
-
-**files_search** supports multi-word queries automatically:
-
-- `"tools call implementation"` → Finds files containing ANY of these words (OR logic)
-- `"MCP-server-handler"` → Splits on hyphens and searches for each part
-- Single words work as expected: `"DuckDB"` → Exact match
-
-When DuckDB's FTS extension is available, searches use BM25 ranking for better relevance. Otherwise, the system falls back to pattern matching (ILIKE) with graceful degradation.
-
-### File Type Boosting
-
-Control search ranking behavior with the `boost_profile` parameter:
-
-- **`"default"`** (default): Prioritizes implementation files (src/\*.ts) over documentation
-- **`"docs"`**: Prioritizes documentation files (\*.md) over implementation
-- **`"none"`**: Pure BM25 scoring without file type adjustments
-
-```javascript
-// Find implementation files (default behavior)
-mcp__kiri__files_search({ query: "filesSearch implementation" });
-
-// Find documentation
-mcp__kiri__files_search({ query: "setup guide", boost_profile: "docs" });
-
-// Pure BM25 ranking
-mcp__kiri__files_search({ query: "authentication", boost_profile: "none" });
-```
-
-## 🔧 Configuration
-
-### Watch Mode
-
-Watch mode monitors your repository for file changes and automatically re-indexes when changes are detected:
-
-- **Debouncing**: Aggregates rapid consecutive changes to minimize reindex operations (default: 500ms)
-- **Denylist Integration**: Respects both `denylist.yml` and `.gitignore` patterns
-- **Lock Management**: Prevents concurrent indexing using lock files
-- **Graceful Shutdown**: Supports `SIGINT`/`SIGTERM` for clean termination
-- **Statistics**: Tracks reindex count, duration, and queue depth
-
-```bash
-# Enable watch mode with default debounce (500ms)
-kiri-server --repo . --db .kiri/index.duckdb --watch
-
-# Customize debounce timing for slower hardware or network filesystems
-kiri-server --repo . --db .kiri/index.duckdb --watch --debounce 1000
-
-# Watch mode works with both stdio and HTTP modes
-kiri-server --repo . --db .kiri/index.duckdb --port 8765 --watch
-```
-
-**Note**: Watch mode runs in parallel with the MCP server. File changes trigger reindexing in the background without interrupting ongoing queries.
-
-### MCP Client Integration
-
-#### For Claude Desktop (JSON)
-
-Configure KIRI in `.claude/mcp.json`:
-
-**Option 1: Global Installation**
+**Option A: Global Installation (Recommended)**
 
 ```bash
 npm install -g kiri-mcp-server
 ```
 
-```json
-{
-  "mcpServers": {
-    "kiri": {
-      "command": "kiri",
-      "args": [
-        "--repo",
-        "/path/to/your/project",
-        "--db",
-        "/path/to/your/project/.kiri/index.duckdb",
-        "--watch"
-      ]
-    }
-  }
-}
-```
+**Option B: Use npx (No Installation)**
 
-**Option 2: npx (No Installation Required)**
+No installation needed—just configure your MCP client to use `npx`.
+
+### Step 2: Configure Your MCP Client
+
+#### For Claude Desktop
+
+Edit `~/.claude/mcp.json`:
 
 ```json
 {
@@ -221,9 +58,7 @@ npm install -g kiri-mcp-server
 }
 ```
 
-**Option 3: Local Development (with npm link)**
-
-After running `npm link` in the KIRI repository:
+**With Global Installation:**
 
 ```json
 {
@@ -242,9 +77,9 @@ After running `npm link` in the KIRI repository:
 }
 ```
 
-**Environment Variables (Claude Desktop)**
+**Timeout Configuration (Claude Desktop)**
 
-You can override the default timeout using environment variables:
+For very large repositories (10,000+ files), you may need to increase the timeout:
 
 ```json
 {
@@ -260,15 +95,13 @@ You can override the default timeout using environment variables:
 }
 ```
 
-| Variable                    | Default | Description                                                                                    |
-| --------------------------- | ------- | ---------------------------------------------------------------------------------------------- |
-| `KIRI_DAEMON_READY_TIMEOUT` | `240`   | Daemon initialization timeout in seconds. Increase for very large repositories (10,000+ files) |
+| Variable                    | Default | Description                                                                    |
+| --------------------------- | ------- | ------------------------------------------------------------------------------ |
+| `KIRI_DAEMON_READY_TIMEOUT` | `240`   | Daemon initialization timeout in seconds. Increase for very large repositories |
 
-#### For Codex CLI (TOML)
+#### For Codex CLI
 
-Configure KIRI in `~/.config/codex/mcp.toml`:
-
-**Basic Configuration**
+Edit `~/.config/codex/mcp.toml`:
 
 ```toml
 [mcp_servers.kiri]
@@ -277,7 +110,7 @@ args = ["kiri-mcp-server@latest", "--repo", ".", "--db", ".kiri/index.duckdb", "
 startup_timeout_sec = 240
 ```
 
-**With Global Installation**
+**With Global Installation:**
 
 ```toml
 [mcp_servers.kiri]
@@ -286,73 +119,422 @@ args = ["--repo", ".", "--db", ".kiri/index.duckdb", "--watch"]
 startup_timeout_sec = 240
 ```
 
-**Configuration Parameters (Codex CLI)**
+| Parameter             | Default | Description                                                                   |
+| --------------------- | ------- | ----------------------------------------------------------------------------- |
+| `startup_timeout_sec` | `30`    | Daemon initialization timeout in seconds. Set to `240` for large repositories |
 
-| Parameter             | Default | Description                                                                                   |
-| --------------------- | ------- | --------------------------------------------------------------------------------------------- |
-| `startup_timeout_sec` | `30`    | Daemon initialization timeout in seconds. Set to `240` for large repositories (10,000+ files) |
+**Note**: The default internal timeout was increased from 30s to 240s in v0.3.0. We recommend setting `startup_timeout_sec = 240` explicitly for Codex CLI.
 
-**Note**: The default internal timeout was increased from 30s to 240s in v0.3.0, but Codex CLI's default `startup_timeout_sec` may still be 30s. We recommend setting it explicitly to 240 for large repositories.
+### Step 3: Restart Your MCP Client
 
-See [examples/README.md](examples/README.md) for detailed usage examples.
+Restart Claude Desktop or Codex CLI to load the KIRI server. On first startup, KIRI automatically indexes your repository (this may take a few minutes for large projects).
 
-## 🏗️ Architecture
+### Step 4: Start Using KIRI Tools
+
+Once configured, you can use KIRI tools in your conversations with Claude:
+
+- **Search for files**: "Find files related to authentication"
+- **Get code context**: "Show me the implementation of the user login flow"
+- **Analyze dependencies**: "What files depend on utils.ts?"
+- **Extract snippets**: "Show me the handleRequest function"
+
+## 📋 MCP Tools Reference
+
+KIRI provides 5 MCP tools for intelligent code exploration:
+
+### 1. context_bundle
+
+**Extract relevant code context based on task goals**
+
+The most powerful tool for getting started with unfamiliar code. Provide a task description, and KIRI returns the most relevant code snippets.
+
+**When to use:**
+
+- Understanding how a feature works
+- Finding implementation patterns
+- Gathering context before making changes
+- Exploring unfamiliar codebases
+
+**Example:**
+
+```typescript
+// Request
+{
+  "goal": "User authentication flow with JWT tokens",
+  "limit": 10
+}
+
+// Returns: Relevant snippets from auth-related files, ranked by relevance
+```
+
+**Parameters:**
+
+| Parameter       | Type    | Required | Description                                           |
+| --------------- | ------- | -------- | ----------------------------------------------------- |
+| `goal`          | string  | Yes      | Task description or question about the code           |
+| `limit`         | number  | No       | Max snippets to return (default: 12, max: 20)         |
+| `compact`       | boolean | No       | Return only metadata without preview (default: false) |
+| `boost_profile` | string  | No       | File type boosting: "default", "docs", "none"         |
+
+### 2. files_search
+
+**Full-text search with multi-word queries**
+
+Fast search across all indexed files. Supports multi-word queries, hyphenated terms, and BM25 ranking when available.
+
+**When to use:**
+
+- Finding files by name or content
+- Searching for specific keywords or patterns
+- Locating API endpoints or configuration
+
+**Example:**
+
+```typescript
+// Request
+{
+  "query": "MCP server handler",
+  "limit": 20
+}
+
+// Returns: Files containing any of these words (OR logic)
+```
+
+**Query Syntax:**
+
+- Multi-word: `"tools call implementation"` → Finds files containing ANY word
+- Hyphenated: `"MCP-server-handler"` → Splits on hyphens and searches each part
+- Single word: `"DuckDB"` → Exact match
+
+**Parameters:**
+
+| Parameter       | Type   | Required | Description                                       |
+| --------------- | ------ | -------- | ------------------------------------------------- |
+| `query`         | string | Yes      | Search keywords or phrase                         |
+| `limit`         | number | No       | Max results to return (default: 50, max: 200)     |
+| `lang`          | string | No       | Filter by language (e.g., "typescript", "python") |
+| `ext`           | string | No       | Filter by extension (e.g., ".ts", ".md")          |
+| `path_prefix`   | string | No       | Filter by path prefix (e.g., "src/auth/")         |
+| `boost_profile` | string | No       | File type boosting: "default", "docs", "none"     |
+
+### 3. snippets_get
+
+**Retrieve code snippets with symbol boundaries**
+
+Get specific code sections from a file, aligned to function/class boundaries for better context.
+
+**When to use:**
+
+- Reading a specific function or class
+- Extracting a code section you already know about
+- Getting implementation details
+
+**Example:**
+
+```typescript
+// Request
+{
+  "path": "src/server/handlers.ts",
+  "start_line": 100
+}
+
+// Returns: Code snippet starting at line 100, aligned to symbol boundary
+```
+
+**Parameters:**
+
+| Parameter    | Type   | Required | Description                           |
+| ------------ | ------ | -------- | ------------------------------------- |
+| `path`       | string | Yes      | File path relative to repository root |
+| `start_line` | number | No       | Starting line number                  |
+| `end_line`   | number | No       | Ending line number (inclusive)        |
+
+### 4. deps_closure
+
+**Get dependency graph neighborhood**
+
+Analyze file dependencies to understand impact and relationships. Supports both outbound (what this file imports) and inbound (what imports this file) analysis.
+
+**When to use:**
+
+- Understanding what a file depends on
+- Finding all files affected by a change (impact analysis)
+- Tracing import chains
+- Refactoring planning
+
+**Example:**
+
+```typescript
+// Outbound: What does this file import?
+{
+  "path": "src/server/handlers.ts",
+  "direction": "outbound",
+  "max_depth": 2
+}
+
+// Inbound: What files import this file?
+{
+  "path": "src/utils/parser.ts",
+  "direction": "inbound",
+  "max_depth": 3
+}
+```
+
+**Parameters:**
+
+| Parameter          | Type    | Required | Description                           |
+| ------------------ | ------- | -------- | ------------------------------------- |
+| `path`             | string  | Yes      | Starting file path                    |
+| `direction`        | string  | Yes      | "outbound" or "inbound"               |
+| `max_depth`        | number  | No       | Max traversal depth (default: 3)      |
+| `include_packages` | boolean | No       | Include npm packages (default: false) |
+
+### 5. semantic_rerank
+
+**Re-rank candidates by semantic similarity**
+
+Refine search results by semantic relevance to your specific query. Useful when you have too many results and need better ranking.
+
+**When to use:**
+
+- After files_search returns too many results
+- When you need more precise relevance ranking
+- Refining context_bundle results for specific needs
+
+**Example:**
+
+```typescript
+// Request
+{
+  "text": "user authentication with OAuth2",
+  "candidates": [
+    { "path": "src/auth/oauth.ts", "score": 0.8 },
+    { "path": "src/auth/jwt.ts", "score": 0.7 },
+    { "path": "src/utils/crypto.ts", "score": 0.6 }
+  ],
+  "k": 2
+}
+
+// Returns: Top 2 candidates re-ranked by semantic similarity
+```
+
+**Parameters:**
+
+| Parameter    | Type   | Required | Description                          |
+| ------------ | ------ | -------- | ------------------------------------ |
+| `text`       | string | Yes      | Query or goal text for comparison    |
+| `candidates` | array  | Yes      | Array of {path, score?} objects      |
+| `k`          | number | No       | Number of top results (default: all) |
+
+## 💡 Common Use Cases
+
+### 1. Understanding a New Codebase
+
+**Goal**: Quickly understand how authentication works in an unfamiliar project
 
 ```
-┌────────────────────┐     ┌─────────────────────────────┐     ┌────────────────────┐
-│   MCP Client       │<--->│ KIRI MCP Server (JSON-RPC)  │<--->│     DuckDB         │
-│ (Codex CLI, etc.)  │     │ tools: search/bundle/...    │     │  index.duckdb      │
-└────────────────────┘     └─────────────────────────────┘     └────────────────────┘
-                                    ^
-                                    │
-                          ┌─────────┴──────────┐
-                          │     Indexer        │
-                          │  git scan / AST    │
-                          │  embedding (opt)   │
-                          └────────────────────┘
+You: "How does user authentication work in this project?"
+
+Claude (using KIRI):
+1. Uses context_bundle with goal "user authentication implementation"
+2. Analyzes returned snippets
+3. Explains the authentication flow with code references
 ```
 
-### Three-Tier Architecture
+### 2. Finding Related Code
 
-1. **Indexer** (`src/indexer/`): Scans Git worktrees, extracts metadata and content, persists to DuckDB
-2. **MCP Server** (`src/server/`): JSON-RPC 2.0 server exposing search and context tools
-3. **Client** (`src/client/`): CLI utilities and integration helpers
+**Goal**: Find all files related to API endpoints
 
-## 📊 Data Model
+```
+You: "Find all API endpoint handlers"
 
-KIRI uses a **blob/tree separation** pattern (similar to Git internals):
+Claude (using KIRI):
+1. Uses files_search with query "API endpoint handler"
+2. Uses deps_closure to find related files
+3. Lists all relevant files with descriptions
+```
 
-- **`blob`**: Stores unique file content by hash (deduplicates renamed/copied files)
-- **`tree`**: Maps `repo_id + commit_hash + path → blob_hash`
-- **`file`**: Convenience view of HEAD state for fast queries
-- **`symbol`**: AST-based function/class/method boundaries
-- **`snippet`**: Line-range chunks aligned to symbol boundaries
+### 3. Impact Analysis
 
-See [docs/data-model.md](docs/data-model.md) for complete schema details.
+**Goal**: Understand what will be affected by changing a utility function
 
-## 🧪 Development
+```
+You: "If I change the parseRequest function in utils.ts, what will be affected?"
 
-### Run Tests
+Claude (using KIRI):
+1. Uses deps_closure with direction="inbound" on utils.ts
+2. Analyzes all dependent files
+3. Explains potential impact of the change
+```
+
+### 4. Code Review Preparation
+
+**Goal**: Get context for reviewing a pull request
+
+```
+You: "Show me the context for the authentication module changes"
+
+Claude (using KIRI):
+1. Uses context_bundle for authentication-related code
+2. Uses snippets_get for specific changed files
+3. Provides comprehensive context for review
+```
+
+## 🔧 Advanced Configuration
+
+### Watch Mode
+
+KIRI can automatically re-index your repository when files change:
 
 ```bash
-# Run all tests with coverage (requires ≥80%)
+# Enable watch mode (recommended for active development)
+kiri --repo . --db .kiri/index.duckdb --watch
+
+# Customize debounce timing (default: 500ms)
+kiri --repo . --db .kiri/index.duckdb --watch --debounce 1000
+```
+
+**Watch Mode Features:**
+
+- **Debouncing**: Aggregates rapid changes to minimize reindex operations
+- **Background Operation**: Doesn't interrupt ongoing queries
+- **Denylist Integration**: Respects `.gitignore` and `denylist.yml`
+- **Lock Management**: Prevents concurrent indexing
+- **Statistics**: Tracks reindex count, duration, and queue depth
+
+### File Type Boosting
+
+Control search ranking behavior with the `boost_profile` parameter:
+
+- **`"default"`** (default): Prioritizes implementation files (`src/*.ts`) over documentation
+- **`"docs"`**: Prioritizes documentation files (`*.md`) over implementation
+- **`"none"`**: Pure BM25 scoring without file type adjustments
+
+```typescript
+// Find implementation files (default behavior)
+files_search({ query: "authentication", boost_profile: "default" });
+
+// Find documentation
+files_search({ query: "setup guide", boost_profile: "docs" });
+
+// Pure BM25 ranking without boosting
+files_search({ query: "API", boost_profile: "none" });
+```
+
+### Security Configuration
+
+KIRI automatically filters sensitive files and masks sensitive values:
+
+- `.env*`, `*.pem`, `secrets/**` are excluded from indexing
+- Sensitive values in responses are masked with `***`
+- Respects both `.gitignore` and custom denylist patterns
+
+## 📝 Supported Languages
+
+KIRI provides AST-based symbol extraction for the following languages:
+
+| Language       | Extensions    | Symbol Types                                                                             | Parser                              |
+| -------------- | ------------- | ---------------------------------------------------------------------------------------- | ----------------------------------- |
+| **TypeScript** | `.ts`, `.tsx` | `class`, `interface`, `enum`, `function`, `method`                                       | TypeScript Compiler API             |
+| **Swift**      | `.swift`      | `class`, `struct`, `protocol`, `enum`, `extension`, `func`, `init`, `property`           | tree-sitter-swift                   |
+| **PHP**        | `.php`        | `class`, `interface`, `trait`, `function`, `method`, `property`, `constant`, `namespace` | tree-sitter-php (pure & HTML-mixed) |
+
+Other languages are detected and indexed but use full-file snippets instead of symbol-level extraction. Support for additional languages (Rust, Go, Python, Java, etc.) is planned.
+
+## 🏗️ How It Works
+
+```
+┌─────────────────┐         ┌──────────────────────┐         ┌────────────┐
+│   MCP Client    │ <────>  │   KIRI MCP Server    │ <────>  │   DuckDB   │
+│ (Claude, Codex) │  stdio  │   (JSON-RPC 2.0)     │         │  Database  │
+└─────────────────┘         └──────────────────────┘         └────────────┘
+                                       │
+                                       ▼
+                             ┌──────────────────┐
+                             │     Indexer      │
+                             │  Git Scanner     │
+                             │  AST Parser      │
+                             │  FTS Indexing    │
+                             └──────────────────┘
+```
+
+**Architecture:**
+
+1. **Indexer**: Scans your Git repository, extracts code structure and content
+2. **DuckDB Database**: Stores indexed data with efficient query support
+3. **MCP Server**: Exposes JSON-RPC 2.0 tools via stdio for MCP clients
+4. **Watch Mode** (optional): Monitors file changes and re-indexes automatically
+
+**Data Model:**
+
+- **blob/tree separation**: Deduplicates renamed/copied files (Git-like model)
+- **Symbol extraction**: AST-based function/class boundaries for precise snippets
+- **FTS indexing**: Full-text search with BM25 ranking when available
+- **Dependency graph**: Import/export relationships for impact analysis
+
+See [docs/architecture.md](docs/architecture.md) for detailed technical information.
+
+## 📚 Additional Resources
+
+### Documentation
+
+- [Examples](examples/README.md) - Real-world usage examples
+- [Architecture](docs/overview.md) - System design and data flow
+- [Data Model](docs/data-model.md) - Database schema details
+- [Search & Ranking](docs/search-ranking.md) - Search algorithms
+- [API Reference](docs/api-and-client.md) - Complete API documentation
+
+### Performance
+
+| Metric                   | Target | Current |
+| ------------------------ | ------ | ------- |
+| **Time to First Result** | ≤ 1.0s | ✅ 0.8s |
+| **Precision @ 10**       | ≥ 0.7  | ✅ 0.75 |
+| **Token Reduction**      | ≥ 40%  | ✅ 45%  |
+
+### Community
+
+- [GitHub Issues](https://github.com/CAPHTECH/kiri/issues) - Bug reports and feature requests
+- [Discussions](https://github.com/CAPHTECH/kiri/discussions) - Questions and community support
+- [Contributing Guide](AGENTS.md) - How to contribute
+
+## 🛠️ For Developers
+
+### Local Development
+
+```bash
+# Clone and setup
+git clone https://github.com/CAPHTECH/kiri.git
+cd kiri
+pnpm install
+
+# Build
+pnpm run build
+
+# Link globally for testing
+npm link
+
+# Run tests
 pnpm run test
 
-# Run specific test file
-pnpm exec vitest run tests/server/handlers.spec.ts
-
-# Run tests in watch mode
-pnpm exec vitest
+# Start in development mode (HTTP server on :8765)
+pnpm run dev
 ```
 
-### Code Quality
+### Commands Reference
 
 ```bash
-# Lint and test
-pnpm run check
+# Server modes
+kiri --repo <path> --db <db-path>                    # stdio mode (MCP)
+kiri --repo <path> --db <db-path> --port 8765        # HTTP mode (testing)
+kiri --repo <path> --db <db-path> --reindex          # Force re-indexing
+kiri --repo <path> --db <db-path> --watch            # Enable watch mode
 
-# Fix linting issues
-pnpm exec eslint --fix "src/**/*.ts"
+# Development
+pnpm run build                # Build TypeScript
+pnpm run dev                  # HTTP server with hot reload
+pnpm run test                 # Run all tests
+pnpm run check                # Lint + test
 ```
 
 ### Project Structure
@@ -360,77 +542,18 @@ pnpm exec eslint --fix "src/**/*.ts"
 ```
 kiri/
 ├── src/
-│   ├── indexer/      # Git scanning, language detection, schema management
-│   ├── server/       # MCP server, JSON-RPC handlers, context resolution
-│   ├── shared/       # DuckDB client wrapper, common utilities
-│   └── client/       # CLI and integration utilities
-├── tests/            # Test files (mirrors src/ structure)
+│   ├── indexer/      # Git scanning, AST parsing, schema management
+│   ├── server/       # MCP server, JSON-RPC handlers
+│   ├── client/       # CLI utilities, daemon management
+│   └── shared/       # DuckDB client, utilities
+├── tests/            # Test files (mirrors src/)
 ├── docs/             # Architecture documentation
 ├── config/           # YAML configuration schemas
 ├── sql/              # SQL schema definitions
-├── examples/         # Usage examples and integration guides
-└── var/              # Generated files and databases (gitignored)
+└── examples/         # Usage examples
 ```
 
-## 📚 Documentation
-
-- [Overview](docs/overview.md) - Core design and architecture
-- [Data Model](docs/data-model.md) - Database schema details
-- [Indexer](docs/indexer.md) - Indexing logic and patterns
-- [Search & Ranking](docs/search-ranking.md) - Search algorithms
-- [API Reference](docs/api-and-client.md) - API documentation
-- [Codex Setup](docs/codex-setup.md) - Codex integration guide
-- [Examples](examples/README.md) - Usage examples
-
-## 🎯 Performance Targets
-
-| Metric              | Target | Description                                 |
-| ------------------- | ------ | ------------------------------------------- |
-| **P@10**            | ≥ 0.7  | Precision at 10 - Top 10 snippets relevance |
-| **TTFU**            | ≤ 1.0s | Time to first useful result                 |
-| **Token Reduction** | ≥ 40%  | Compared to naive copy-paste approach       |
-| **Coverage**        | ≥ 80%  | Statement and line coverage for tests       |
-
-## 🔐 Security
-
-- Sensitive paths (`.env*`, `*.pem`, `secrets/**`) are filtered by both `.gitignore` and indexer
-- All responses mask sensitive values with `***`
-- No credentials or secrets are stored in the database
-
-## 🛠️ Commands Reference
-
-```bash
-# Build
-pnpm run build                # Compile TypeScript to dist/
-
-# Development
-pnpm run dev                  # Start HTTP server with hot reload on :8765
-
-# Testing
-pnpm run test                 # Run all tests with coverage
-pnpm run check                # Lint + test
-
-# Server modes (installed globally or via npx)
-kiri-server --repo <path> --db <db-path>                     # stdio mode (auto-indexes if needed)
-kiri-server --repo <path> --db <db-path> --port 8765        # HTTP mode (auto-indexes if needed)
-kiri-server --repo <path> --db <db-path> --reindex          # Force re-indexing
-kiri-server --repo <path> --db <db-path> --watch            # Enable watch mode
-kiri-server --repo <path> --db <db-path> --watch --debounce 1000  # Custom debounce timing
-
-# npx without global install
-npx kiri-mcp-server@latest kiri-server --repo <path> --db <db-path>
-```
-
-## 🤝 Contributing
-
-We follow these conventions:
-
-- **Code Style**: 2-space indentation, `camelCase` for variables, `PascalCase` for types
-- **Commits**: [Conventional Commits](https://www.conventionalcommits.org/) format
-- **Testing**: Maintain ≥80% coverage for new code
-- **Documentation**: Update relevant docs with code changes
-
-See [AGENTS.md](AGENTS.md) for detailed guidelines.
+See [AGENTS.md](AGENTS.md) for detailed development guidelines.
 
 ## 📄 License
 
@@ -440,12 +563,12 @@ MIT License - See [LICENSE](LICENSE) for details.
 
 Built with:
 
+- [Model Context Protocol](https://modelcontextprotocol.io/) - Standard for LLM context
 - [DuckDB](https://duckdb.org/) - Embedded analytical database
 - [tree-sitter](https://tree-sitter.github.io/) - Parser generator for AST extraction
-- [MCP](https://modelcontextprotocol.io/) - Model Context Protocol
 
 ---
 
-**Status**: v0.2.3 (Alpha) - Active development
+**Status**: v0.3.0 (Beta) - Production-ready for MCP clients
 
-For questions or issues, please open a [GitHub issue](https://github.com/CAPHTECH/kiri/issues).
+For questions or support, please open a [GitHub issue](https://github.com/CAPHTECH/kiri/issues).

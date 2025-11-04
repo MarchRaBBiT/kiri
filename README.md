@@ -18,6 +18,23 @@
 - **👁️ Auto-Sync**: Watch mode automatically re-indexes when files change
 - **🛡️ Reliable**: Degrade-first architecture works without optional extensions
 
+## ⚙️ Prerequisites
+
+Before using KIRI, ensure you have:
+
+- **Node.js** v18.0.0 or higher
+- **npm** v9.0.0 or higher
+- **Git** v2.0 or higher
+- A Git repository to index
+
+Check your versions:
+
+```bash
+node --version  # Should be >= v18.0.0
+npm --version   # Should be >= v9.0.0
+git --version   # Should be >= v2.0
+```
+
 ## 🚀 Quick Start for MCP Users
 
 ### Step 1: Install KIRI
@@ -30,13 +47,15 @@ Choose one of the following methods:
 npm install -g kiri-mcp-server
 ```
 
-**Option B: Use npx (No Installation)**
+> **Note**: This installs the `kiri` command globally. You can verify with `kiri --version`.
 
-No installation needed—just configure your MCP client to use `npx`.
+**Option B: Use npx (No Permanent Installation)**
+
+No permanent installation needed—`npx` downloads and caches the package on first use. Just configure your MCP client to use `npx`.
 
 ### Step 2: Configure Your MCP Client
 
-#### For Claude Desktop
+#### For Claude Code
 
 Edit `~/.claude/mcp.json`:
 
@@ -45,14 +64,7 @@ Edit `~/.claude/mcp.json`:
   "mcpServers": {
     "kiri": {
       "command": "npx",
-      "args": [
-        "kiri-mcp-server@latest",
-        "--repo",
-        "/path/to/your/project",
-        "--db",
-        "/path/to/your/project/.kiri/index.duckdb",
-        "--watch"
-      ]
+      "args": ["kiri-mcp-server@latest", "--repo", ".", "--db", ".kiri/index.duckdb", "--watch"]
     }
   }
 }
@@ -65,19 +77,13 @@ Edit `~/.claude/mcp.json`:
   "mcpServers": {
     "kiri": {
       "command": "kiri",
-      "args": [
-        "--repo",
-        "/path/to/your/project",
-        "--db",
-        "/path/to/your/project/.kiri/index.duckdb",
-        "--watch"
-      ]
+      "args": ["--repo", ".", "--db", ".kiri/index.duckdb", "--watch"]
     }
   }
 }
 ```
 
-**Timeout Configuration (Claude Desktop)**
+**Timeout Configuration (Claude Code)**
 
 For very large repositories (10,000+ files), you may need to increase the timeout:
 
@@ -86,14 +92,16 @@ For very large repositories (10,000+ files), you may need to increase the timeou
   "mcpServers": {
     "kiri": {
       "command": "kiri",
-      "args": ["--repo", "/path/to/project", "--db", ".kiri/index.duckdb", "--watch"],
+      "args": ["--repo", ".", "--db", ".kiri/index.duckdb", "--watch"],
       "env": {
-        "KIRI_DAEMON_READY_TIMEOUT": "240"
+        "KIRI_DAEMON_READY_TIMEOUT": "480"
       }
     }
   }
 }
 ```
+
+> **Note**: The example shows `480` seconds (8 minutes) for very large repositories (>20,000 files). The default `240` seconds (4 minutes) is sufficient for most projects with <10,000 files.
 
 | Variable                    | Default | Description                                                                    |
 | --------------------------- | ------- | ------------------------------------------------------------------------------ |
@@ -428,6 +436,109 @@ KIRI automatically filters sensitive files and masks sensitive values:
 - `.env*`, `*.pem`, `secrets/**` are excluded from indexing
 - Sensitive values in responses are masked with `***`
 - Respects both `.gitignore` and custom denylist patterns
+
+## 🔧 Troubleshooting
+
+### Common Issues
+
+#### Daemon Initialization Timeout
+
+**Problem**: MCP client shows "Daemon did not become ready within X seconds"
+
+**Solutions**:
+
+1. **Increase timeout** for large repositories:
+   - Claude Code: Set `KIRI_DAEMON_READY_TIMEOUT` to `480` or higher
+   - Codex CLI: Set `startup_timeout_sec = 480` or higher
+
+2. **Check daemon logs**:
+
+   ```bash
+   cat .kiri/index.duckdb.daemon.log
+   ```
+
+3. **Manual indexing** to verify repository can be indexed:
+   ```bash
+   kiri --repo . --db .kiri/index.duckdb --port 8765
+   ```
+
+#### Command Not Found
+
+**Problem**: `kiri: command not found` when using global installation
+
+**Solutions**:
+
+1. **Verify installation**:
+
+   ```bash
+   npm list -g kiri-mcp-server
+   ```
+
+2. **Re-link package**:
+
+   ```bash
+   npm link kiri-mcp-server
+   ```
+
+3. **Use npx instead**:
+   ```bash
+   npx kiri-mcp-server@latest --repo . --db .kiri/index.duckdb
+   ```
+
+#### Slow Indexing
+
+**Problem**: Initial indexing takes too long
+
+**Solutions**:
+
+1. **Check repository size**:
+
+   ```bash
+   git ls-files | wc -l  # Count tracked files
+   ```
+
+2. **Review `.gitignore`**: Ensure large directories (node_modules, build artifacts) are excluded
+
+3. **Use denylist**: Create `.kiri/denylist.yml` to exclude additional patterns:
+   ```yaml
+   patterns:
+     - "**/*.min.js"
+     - "**/vendor/**"
+     - "**/dist/**"
+   ```
+
+#### Disk Space Issues
+
+**Problem**: Database file grows too large
+
+**Solutions**:
+
+1. **Check database size**:
+
+   ```bash
+   du -h .kiri/index.duckdb
+   ```
+
+2. **Force reindex with cleanup**:
+
+   ```bash
+   rm -f .kiri/index.duckdb*
+   kiri --repo . --db .kiri/index.duckdb --port 8765
+   ```
+
+3. **Typical database sizes**:
+   - Small project (<1,000 files): 1-10 MB
+   - Medium project (1,000-10,000 files): 10-100 MB
+   - Large project (>10,000 files): 100-500 MB
+
+### Getting Help
+
+If you encounter issues not covered here:
+
+1. **Check daemon logs**: `.kiri/index.duckdb.daemon.log`
+2. **Enable verbose logging**: Set `DEBUG=kiri:*` environment variable
+3. **Report issues**: [GitHub Issues](https://github.com/CAPHTECH/kiri/issues)
+4. **Community support**: [GitHub Discussions](https://github.com/CAPHTECH/kiri/discussions)
 
 ## 📝 Supported Languages
 

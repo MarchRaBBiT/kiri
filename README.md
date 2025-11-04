@@ -2,7 +2,7 @@
 
 > Intelligent code context extraction for LLMs via Model Context Protocol
 
-[![Version](https://img.shields.io/badge/version-0.3.0-blue.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-0.4.1-blue.svg)](package.json)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.6-blue.svg)](https://www.typescriptlang.org/)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
@@ -680,6 +680,6 @@ Built with:
 
 ---
 
-**Status**: v0.3.0 (Beta) - Production-ready for MCP clients
+**Status**: v0.4.1 (Beta) - Production-ready for MCP clients
 
 For questions or support, please open a [GitHub issue](https://github.com/CAPHTECH/kiri/issues).

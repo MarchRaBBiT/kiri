@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2025-01-04
+
+### Changed
+
+- Increased default daemon initialization timeout from 30 seconds to 240 seconds to better support large repositories (10,000+ files)
+- Completely restructured README.md with MCP user focus:
+  - Added Prerequisites section with Node.js/npm/Git version requirements
+  - Improved installation instructions with `kiri` command explanation and npx behavior details
+  - Clarified configuration format differences between Claude Code (JSON) and Codex CLI (TOML)
+  - Enhanced timeout configuration documentation with specific recommendations for different repository sizes
+
+### Added
+
+- Comprehensive Troubleshooting section covering 4 common issues:
+  - Daemon initialization timeout
+  - Command not found errors
+  - Slow indexing performance
+  - Disk space management
+- Getting Help section with log access, debugging tips, and support channels
+- Detailed "When to use" guidance for each MCP tool
+- Common use case examples for new users
+
+### Fixed
+
+- Users no longer need to manually configure `KIRI_DAEMON_READY_TIMEOUT` or `startup_timeout_sec` for most repositories
+
 ## [0.4.0] - 2025-01-04
 
 ### Changed

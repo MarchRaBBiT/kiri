@@ -2,7 +2,7 @@ import path from "node:path";
 
 import { DuckDBClient } from "../shared/duckdb.js";
 import { generateEmbedding, structuralSimilarity } from "../shared/embedding.js";
-import { encode as encodeGPT } from "../shared/tokenizer.js";
+import { encode as encodeGPT, tokenizeText } from "../shared/tokenizer.js";
 
 import { ServerContext } from "./context.js";
 import { coerceProfileName, loadScoringProfile } from "./scoring.js";
@@ -308,13 +308,20 @@ function extractQuotedPhrases(text: string): { phrases: string[]; remaining: str
 }
 
 /**
- * ハイフン区切り用語を抽出
+ * 複合用語を抽出（ハイフンまたはアンダースコア区切り）
+ * Unicode文字に対応（日本語、中国語などの複合用語もサポート）
  * 例: "page-agent lambda-handler" → ["page-agent", "lambda-handler"]
+ * 例: "user_profile file_embedding" → ["user_profile", "file_embedding"]
+ * 例: "app-日本語" → ["app-日本語"]
  */
-function extractHyphenatedTerms(text: string): string[] {
-  // マッチ条件: 英数字 + ハイフン + 英数字（少なくとも3文字以上）
-  const hyphenPattern = /\b[a-z0-9]+(?:-[a-z0-9]+)+\b/gi;
-  const matches = text.match(hyphenPattern) || [];
+function extractCompoundTerms(text: string): string[] {
+  // Unicode対応: ハイフン(-)とアンダースコア(_)の両方をサポート
+  // snake_case (Python/Rust) と kebab-case を同等に扱う
+  // 注: \b はアンダースコアを単語文字として扱うため、アンダースコアでは機能しない
+  // そのため、明示的な境界チェックを使用
+  const compoundPattern =
+    /(?:^|\s|[^\p{L}\p{N}_-])([\p{L}\p{N}]+(?:[-_][\p{L}\p{N}]+)+)(?=\s|[^\p{L}\p{N}_-]|$)/giu;
+  const matches = Array.from(text.matchAll(compoundPattern)).map((m) => m[1]!);
   return matches
     .map((term) => term.toLowerCase())
     .filter((term) => term.length >= 3 && !STOP_WORDS.has(term));
@@ -322,10 +329,12 @@ function extractHyphenatedTerms(text: string): string[] {
 
 /**
  * パスライクな用語を抽出
+ * Unicode文字に対応
  * 例: "lambda/page-agent/handler" → ["lambda", "page-agent", "handler"]
  */
 function extractPathSegments(text: string): string[] {
-  const pathPattern = /\b[a-z0-9_-]+(?:\/[a-z0-9_-]+)+\b/gi;
+  // Unicode対応: パスセグメントでもUnicode文字をサポート
+  const pathPattern = /\b[\p{L}\p{N}_-]+(?:\/[\p{L}\p{N}_-]+)+\b/giu;
   const matches = text.match(pathPattern) || [];
   const segments: string[] = [];
 
@@ -342,15 +351,13 @@ function extractPathSegments(text: string): string[] {
 }
 
 /**
- * 通常の単語を抽出（レガシーロジック）
+ * 通常の単語を抽出
+ * 共有トークン化ユーティリティを使用
  */
 function extractRegularWords(text: string, strategy: TokenizationStrategy): string[] {
-  const splitPattern = strategy === "legacy" ? /[^a-z0-9_]+/iu : /[^a-z0-9_-]+/iu;
-  const words = text
-    .toLowerCase()
-    .split(splitPattern)
-    .map((word) => word.trim())
-    .filter((word) => word.length >= 3 && !STOP_WORDS.has(word));
+  const words = tokenizeText(text, strategy).filter(
+    (word) => word.length >= 3 && !STOP_WORDS.has(word)
+  );
 
   return words;
 }
@@ -375,15 +382,18 @@ function extractKeywords(text: string): ExtractedTerms {
   const pathSegments = extractPathSegments(afterQuotes);
   result.pathSegments.push(...pathSegments);
 
-  // Phase 3: ハイフン区切り用語を抽出（phrase-aware または hybrid モード）
+  // Phase 3: 複合用語を抽出（ハイフン/アンダースコア区切り）（phrase-aware または hybrid モード）
   if (strategy === "phrase-aware" || strategy === "hybrid") {
-    const hyphenatedTerms = extractHyphenatedTerms(afterQuotes);
-    result.phrases.push(...hyphenatedTerms);
+    const compoundTerms = extractCompoundTerms(afterQuotes);
+    result.phrases.push(...compoundTerms);
 
-    // hybrid モードの場合、ハイフン区切り用語を分割したキーワードも追加
+    // hybrid モードの場合、複合用語を分割したキーワードも追加
     if (strategy === "hybrid") {
-      for (const term of hyphenatedTerms) {
-        const parts = term.split("-").filter((part) => part.length >= 3 && !STOP_WORDS.has(part));
+      for (const term of compoundTerms) {
+        // ハイフンとアンダースコアの両方で分割
+        const parts = term
+          .split(/[-_]/)
+          .filter((part) => part.length >= 3 && !STOP_WORDS.has(part));
         result.keywords.push(...parts);
       }
     }
@@ -1133,8 +1143,11 @@ export async function contextBundle(
   const stringMatchSeeds = new Set<string>();
   const fileCache = new Map<string, FileContentCacheEntry>();
 
-  // フレーズマッチング（高い重み: textMatch × 2）
-  for (const phrase of extractedTerms.phrases) {
+  // フレーズマッチング（高い重み: textMatch × 2）- 統合クエリでパフォーマンス改善
+  if (extractedTerms.phrases.length > 0) {
+    const phrasePlaceholders = extractedTerms.phrases
+      .map(() => "b.content ILIKE '%' || ? || '%'")
+      .join(" OR ");
     const rows = await db.all<FileWithEmbeddingRow>(
       `
         SELECT f.path, f.lang, f.ext, f.is_binary, b.content, fe.vector_json, fe.dims AS vector_dims
@@ -1145,27 +1158,44 @@ export async function contextBundle(
          AND fe.path = f.path
         WHERE f.repo_id = ?
           AND f.is_binary = FALSE
-          AND b.content ILIKE '%' || ? || '%'
+          AND (${phrasePlaceholders})
         ORDER BY f.path
         LIMIT ?
       `,
-      [repoId, phrase, MAX_MATCHES_PER_KEYWORD]
+      [repoId, ...extractedTerms.phrases, MAX_MATCHES_PER_KEYWORD * extractedTerms.phrases.length]
     );
+
+    const boostProfile = params.boost_profile ?? "default";
 
     for (const row of rows) {
       if (row.content === null) {
         continue;
       }
-      const candidate = ensureCandidate(candidates, row.path);
-      // フレーズマッチは通常の2倍のスコア
-      candidate.score += weights.textMatch * 2.0;
-      candidate.reasons.add(`phrase:${phrase}`);
 
-      // Apply boost profile to prioritize/penalize files based on type and location
-      const boostProfile = params.boost_profile ?? "default";
+      // どのフレーズにマッチしたかをチェック
+      const lowerContent = row.content.toLowerCase();
+      const matchedPhrases = extractedTerms.phrases.filter((phrase) =>
+        lowerContent.includes(phrase)
+      );
+
+      if (matchedPhrases.length === 0) {
+        continue; // Should not happen, but defensive check
+      }
+
+      const candidate = ensureCandidate(candidates, row.path);
+
+      // 各マッチしたフレーズに対してスコアリング
+      for (const phrase of matchedPhrases) {
+        // フレーズマッチは通常の2倍のスコア
+        candidate.score += weights.textMatch * 2.0;
+        candidate.reasons.add(`phrase:${phrase}`);
+      }
+
+      // Apply boost profile once per file
       applyBoostProfile(candidate, row, boostProfile, extractedTerms, weights.pathMatch);
 
-      const { line } = buildPreview(row.content, phrase);
+      // Use first matched phrase for preview (guaranteed to exist due to length check above)
+      const { line } = buildPreview(row.content, matchedPhrases[0]!);
       candidate.matchLine =
         candidate.matchLine === null ? line : Math.min(candidate.matchLine, line);
       candidate.content ??= row.content;
@@ -1186,8 +1216,11 @@ export async function contextBundle(
     }
   }
 
-  // キーワードマッチング（通常の重み）
-  for (const keyword of extractedTerms.keywords) {
+  // キーワードマッチング（通常の重み）- 統合クエリでパフォーマンス改善
+  if (extractedTerms.keywords.length > 0) {
+    const keywordPlaceholders = extractedTerms.keywords
+      .map(() => "b.content ILIKE '%' || ? || '%'")
+      .join(" OR ");
     const rows = await db.all<FileWithEmbeddingRow>(
       `
         SELECT f.path, f.lang, f.ext, f.is_binary, b.content, fe.vector_json, fe.dims AS vector_dims
@@ -1198,26 +1231,43 @@ export async function contextBundle(
          AND fe.path = f.path
         WHERE f.repo_id = ?
           AND f.is_binary = FALSE
-          AND b.content ILIKE '%' || ? || '%'
+          AND (${keywordPlaceholders})
         ORDER BY f.path
         LIMIT ?
       `,
-      [repoId, keyword, MAX_MATCHES_PER_KEYWORD]
+      [repoId, ...extractedTerms.keywords, MAX_MATCHES_PER_KEYWORD * extractedTerms.keywords.length]
     );
+
+    const boostProfile = params.boost_profile ?? "default";
 
     for (const row of rows) {
       if (row.content === null) {
         continue;
       }
-      const candidate = ensureCandidate(candidates, row.path);
-      candidate.score += weights.textMatch;
-      candidate.reasons.add(`text:${keyword}`);
 
-      // Apply boost profile to prioritize/penalize files based on type and location
-      const boostProfile = params.boost_profile ?? "default";
+      // どのキーワードにマッチしたかをチェック
+      const lowerContent = row.content.toLowerCase();
+      const matchedKeywords = extractedTerms.keywords.filter((keyword) =>
+        lowerContent.includes(keyword)
+      );
+
+      if (matchedKeywords.length === 0) {
+        continue; // Should not happen, but defensive check
+      }
+
+      const candidate = ensureCandidate(candidates, row.path);
+
+      // 各マッチしたキーワードに対してスコアリング
+      for (const keyword of matchedKeywords) {
+        candidate.score += weights.textMatch;
+        candidate.reasons.add(`text:${keyword}`);
+      }
+
+      // Apply boost profile once per file
       applyBoostProfile(candidate, row, boostProfile, extractedTerms, weights.pathMatch);
 
-      const { line } = buildPreview(row.content, keyword);
+      // Use first matched keyword for preview (guaranteed to exist due to length check above)
+      const { line } = buildPreview(row.content, matchedKeywords[0]!);
       candidate.matchLine =
         candidate.matchLine === null ? line : Math.min(candidate.matchLine, line);
       candidate.content ??= row.content;

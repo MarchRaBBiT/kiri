@@ -1,35 +1,13 @@
 import { createHash } from "node:crypto";
 
+import { tokenizeText } from "./tokenizer.js";
+
 export interface EmbeddingVector {
   dims: number;
   values: number[];
 }
 
 const DEFAULT_DIMS = 64;
-
-/**
- * 埋め込み生成用のトークン化
- * keyword extractionと同じ戦略を使用してハイフン区切り用語を保持
- */
-function tokenize(text: string): string[] {
-  const strategy = process.env.KIRI_TOKENIZATION_STRATEGY?.toLowerCase();
-
-  // レガシーモード: ハイフンも分割（従来の動作）
-  if (strategy === "legacy") {
-    return text
-      .toLowerCase()
-      .split(/[^\p{L}\p{N}_]+/u)
-      .map((token) => token.trim())
-      .filter((token) => token.length > 0);
-  }
-
-  // phrase-aware または hybrid モード: ハイフンを保持
-  return text
-    .toLowerCase()
-    .split(/[^\p{L}\p{N}_-]+/u)
-    .map((token) => token.trim())
-    .filter((token) => token.length > 0);
-}
 
 function hashToken(token: string): number {
   const digest = createHash("sha256").update(token).digest();
@@ -64,7 +42,7 @@ export function generateEmbedding(text: string, dims = DEFAULT_DIMS): EmbeddingV
   if (!text || text.trim().length === 0) {
     return null;
   }
-  const tokens = tokenize(text);
+  const tokens = tokenizeText(text);
   if (tokens.length === 0) {
     return null;
   }

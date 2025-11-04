@@ -49,14 +49,22 @@ contextBundle({ goal: '"oauth-handler" authentication' });
 // → "oauth-handler" がコンテンツまたはパスに含まれるファイルを優先
 ```
 
-### ハイフン区切り用語の自動認識
+### 複合用語の自動認識（ハイフン・アンダースコア）
 
-引用符なしでも、ハイフン区切り用語は自動的にフレーズとして認識されます（`phrase-aware` モード）:
+引用符なしでも、ハイフン区切り用語（kebab-case）やアンダースコア区切り用語（snake_case）は自動的にフレーズとして認識されます（`phrase-aware` モード）:
 
 ```typescript
 // 例: page-agent が単一ユニットとして処理される
 contextBundle({ goal: "page-agent Lambda handler" });
 // → "page-agent" を含むファイルを優先（"page" と "agent" に分割されない）
+
+// 例: user_profile が単一ユニットとして処理される (snake_case)
+contextBundle({ goal: "user_profile database query" });
+// → "user_profile" を含むファイルを優先（"user" と "profile" に分割されない）
+
+// 例: file_embedding も同様
+contextBundle({ goal: "file_embedding vector generation" });
+// → "file_embedding" がフレーズとして認識される
 ```
 
 ### パスライクな用語の抽出

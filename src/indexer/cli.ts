@@ -17,6 +17,7 @@ interface IndexerOptions {
   databasePath: string;
   full: boolean;
   since?: string;
+  changedPaths?: string[]; // For incremental indexing: only reindex these files
 }
 
 interface BlobRecord {
@@ -494,27 +495,257 @@ async function scanFiles(
   return { blobs, files, embeddings };
 }
 
-export async function runIndexer(options: IndexerOptions): Promise<void> {
-  if (!options.full && options.since) {
-    console.warn("Incremental indexing is not yet supported. Falling back to full reindex.");
+/**
+ * 既存のファイルハッシュをDBから取得する（インクリメンタルインデックス用）
+ * Fetches existing file hashes from database for incremental indexing
+ */
+async function getExistingFileHashes(
+  db: DuckDBClient,
+  repoId: number
+): Promise<Map<string, string>> {
+  const rows = await db.all<{ path: string; blob_hash: string }>(
+    "SELECT path, blob_hash FROM file WHERE repo_id = ?",
+    [repoId]
+  );
+  const hashMap = new Map<string, string>();
+  for (const row of rows) {
+    hashMap.set(row.path, row.blob_hash);
   }
+  return hashMap;
+}
 
-  const repoRoot = resolve(options.repoRoot);
-  const databasePath = resolve(options.databasePath);
+/**
+ * 削除されたファイルをDBから検出・削除する（インクリメンタルインデックス用）
+ * Reconcile deleted files by comparing git tree with database records
+ *
+ * This function detects files that exist in the database but no longer exist
+ * in the git tree (deleted or renamed files) and removes their records.
+ *
+ * @param db - Database client
+ * @param repoId - Repository ID
+ * @param repoRoot - Repository root path
+ * @returns Array of deleted file paths
+ */
+async function reconcileDeletedFiles(
+  db: DuckDBClient,
+  repoId: number,
+  repoRoot: string
+): Promise<string[]> {
+  // Get all current files from git tree
+  const currentFiles = new Set(await gitLsFiles(repoRoot));
 
-  const [paths, headCommit, defaultBranch] = await Promise.all([
-    gitLsFiles(repoRoot),
-    getHeadCommit(repoRoot),
-    getDefaultBranch(repoRoot),
+  // Get all indexed files from database
+  const indexedFiles = await db.all<{ path: string }>("SELECT path FROM file WHERE repo_id = ?", [
+    repoId,
   ]);
 
-  const { blobs, files, embeddings } = await scanFilesInBatches(repoRoot, paths);
-  const codeIntel = buildCodeIntel(files, blobs);
+  // Find files that are in DB but not in git tree (deleted/renamed)
+  const deletedPaths: string[] = [];
+  for (const row of indexedFiles) {
+    if (!currentFiles.has(row.path)) {
+      deletedPaths.push(row.path);
+    }
+  }
+
+  // Delete all records for removed files in a single transaction
+  if (deletedPaths.length > 0) {
+    await db.transaction(async () => {
+      for (const path of deletedPaths) {
+        await db.run("DELETE FROM symbol WHERE repo_id = ? AND path = ?", [repoId, path]);
+        await db.run("DELETE FROM snippet WHERE repo_id = ? AND path = ?", [repoId, path]);
+        await db.run("DELETE FROM dependency WHERE repo_id = ? AND src_path = ?", [repoId, path]);
+        await db.run("DELETE FROM file_embedding WHERE repo_id = ? AND path = ?", [repoId, path]);
+        await db.run("DELETE FROM tree WHERE repo_id = ? AND path = ?", [repoId, path]);
+        await db.run("DELETE FROM file WHERE repo_id = ? AND path = ?", [repoId, path]);
+      }
+    });
+  }
+
+  return deletedPaths;
+}
+
+/**
+ * 単一ファイルのレコードを削除する（トランザクション内で使用）
+ * Delete all records for a single file (must be called within a transaction)
+ *
+ * @param db - Database client (must be within an active transaction)
+ * @param repoId - Repository ID
+ * @param headCommit - Current HEAD commit hash
+ * @param path - File path to delete
+ */
+async function deleteFileRecords(
+  db: DuckDBClient,
+  repoId: number,
+  headCommit: string,
+  path: string
+): Promise<void> {
+  await db.run("DELETE FROM symbol WHERE repo_id = ? AND path = ?", [repoId, path]);
+  await db.run("DELETE FROM snippet WHERE repo_id = ? AND path = ?", [repoId, path]);
+  await db.run("DELETE FROM dependency WHERE repo_id = ? AND src_path = ?", [repoId, path]);
+  await db.run("DELETE FROM file_embedding WHERE repo_id = ? AND path = ?", [repoId, path]);
+  await db.run("DELETE FROM tree WHERE repo_id = ? AND commit_hash = ? AND path = ?", [
+    repoId,
+    headCommit,
+    path,
+  ]);
+  await db.run("DELETE FROM file WHERE repo_id = ? AND path = ?", [repoId, path]);
+}
+
+export async function runIndexer(options: IndexerOptions): Promise<void> {
+  const repoRoot = resolve(options.repoRoot);
+  const databasePath = resolve(options.databasePath);
 
   const db = await DuckDBClient.connect({ databasePath, ensureDirectory: true });
   try {
     await ensureBaseSchema(db);
+
+    const [headCommit, defaultBranch] = await Promise.all([
+      getHeadCommit(repoRoot),
+      getDefaultBranch(repoRoot),
+    ]);
+
     const repoId = await ensureRepo(db, repoRoot, defaultBranch);
+
+    // Incremental mode: only reindex files in changedPaths
+    if (options.changedPaths && options.changedPaths.length > 0) {
+      // First, reconcile deleted files (handle renames/deletions)
+      const deletedPaths = await reconcileDeletedFiles(db, repoId, repoRoot);
+      if (deletedPaths.length > 0) {
+        console.info(`Removed ${deletedPaths.length} deleted file(s) from index.`);
+      }
+
+      const existingHashes = await getExistingFileHashes(db, repoId);
+      const { blobs, files, embeddings } = await scanFilesInBatches(repoRoot, options.changedPaths);
+
+      // Filter out files that haven't actually changed (same hash)
+      const changedFiles: FileRecord[] = [];
+      const changedBlobs = new Map<string, BlobRecord>();
+
+      for (const file of files) {
+        const existingHash = existingHashes.get(file.path);
+        if (existingHash !== file.blobHash) {
+          changedFiles.push(file);
+          const blob = blobs.get(file.blobHash);
+          if (blob) {
+            changedBlobs.set(blob.hash, blob);
+          }
+        }
+      }
+
+      if (changedFiles.length === 0) {
+        console.info(
+          `No actual changes detected in ${options.changedPaths.length} file(s). Skipping reindex.`
+        );
+        // Still update timestamp to indicate we checked
+        if (defaultBranch) {
+          await db.run(
+            "UPDATE repo SET indexed_at = CURRENT_TIMESTAMP, default_branch = ? WHERE id = ?",
+            [defaultBranch, repoId]
+          );
+        } else {
+          await db.run("UPDATE repo SET indexed_at = CURRENT_TIMESTAMP WHERE id = ?", [repoId]);
+        }
+        return;
+      }
+
+      // Process all changed files in a single transaction for atomicity
+      const fileSet = new Set<string>(files.map((f) => f.path));
+      let processedCount = 0;
+
+      await db.transaction(async () => {
+        for (const file of changedFiles) {
+          const blob = changedBlobs.get(file.blobHash);
+          if (!blob) continue;
+
+          // Build code intelligence for this file
+          const fileSymbols: SymbolRow[] = [];
+          const fileSnippets: SnippetRow[] = [];
+          const fileDependencies: DependencyRow[] = [];
+
+          if (!file.isBinary && blob.content) {
+            const analysis = analyzeSource(file.path, file.lang, blob.content, fileSet);
+            for (const symbol of analysis.symbols) {
+              fileSymbols.push({
+                path: file.path,
+                symbolId: symbol.symbolId,
+                name: symbol.name,
+                kind: symbol.kind,
+                rangeStartLine: symbol.rangeStartLine,
+                rangeEndLine: symbol.rangeEndLine,
+                signature: symbol.signature,
+                doc: symbol.doc,
+              });
+            }
+            for (const snippet of analysis.snippets) {
+              fileSnippets.push({
+                path: file.path,
+                snippetId: snippet.startLine,
+                startLine: snippet.startLine,
+                endLine: snippet.endLine,
+                symbolId: snippet.symbolId,
+              });
+            }
+            for (const dep of analysis.dependencies) {
+              fileDependencies.push({
+                srcPath: file.path,
+                dstKind: dep.dstKind,
+                dst: dep.dst,
+                rel: dep.rel,
+              });
+            }
+          } else {
+            // Binary or no content: add fallback snippet
+            const fallback = buildFallbackSnippet(blob.lineCount ?? 1);
+            fileSnippets.push({
+              path: file.path,
+              snippetId: fallback.startLine,
+              startLine: fallback.startLine,
+              endLine: fallback.endLine,
+              symbolId: fallback.symbolId,
+            });
+          }
+
+          const fileEmbedding = embeddings.find((e) => e.path === file.path) ?? null;
+
+          // Delete old records for this file (within main transaction)
+          await deleteFileRecords(db, repoId, headCommit, file.path);
+
+          // Insert new records (within main transaction)
+          await persistBlobs(db, new Map([[blob.hash, blob]]));
+          await persistTrees(db, repoId, headCommit, [file]);
+          await persistFiles(db, repoId, [file]);
+          await persistSymbols(db, repoId, fileSymbols);
+          await persistSnippets(db, repoId, fileSnippets);
+          await persistDependencies(db, repoId, fileDependencies);
+          if (fileEmbedding) {
+            await persistEmbeddings(db, repoId, [fileEmbedding]);
+          }
+
+          processedCount++;
+        }
+
+        // Update timestamp inside main transaction
+        if (defaultBranch) {
+          await db.run(
+            "UPDATE repo SET indexed_at = CURRENT_TIMESTAMP, default_branch = ? WHERE id = ?",
+            [defaultBranch, repoId]
+          );
+        } else {
+          await db.run("UPDATE repo SET indexed_at = CURRENT_TIMESTAMP WHERE id = ?", [repoId]);
+        }
+      });
+
+      console.info(
+        `Incrementally indexed ${processedCount} changed file(s) for repo ${repoRoot} at ${databasePath} (commit ${headCommit.slice(0, 12)})`
+      );
+      return;
+    }
+
+    // Full mode: reindex entire repository
+    const paths = await gitLsFiles(repoRoot);
+    const { blobs, files, embeddings } = await scanFilesInBatches(repoRoot, paths);
+    const codeIntel = buildCodeIntel(files, blobs);
+
     await db.transaction(async () => {
       await db.run("DELETE FROM tree WHERE repo_id = ?", [repoId]);
       await db.run("DELETE FROM file WHERE repo_id = ?", [repoId]);
@@ -540,13 +771,13 @@ export async function runIndexer(options: IndexerOptions): Promise<void> {
         await db.run("UPDATE repo SET indexed_at = CURRENT_TIMESTAMP WHERE id = ?", [repoId]);
       }
     });
+
+    console.info(
+      `Indexed ${files.length} files for repo ${repoRoot} at ${databasePath} (commit ${headCommit.slice(0, 12)})`
+    );
   } finally {
     await db.close();
   }
-
-  console.info(
-    `Indexed ${files.length} files for repo ${repoRoot} at ${databasePath} (commit ${headCommit.slice(0, 12)})`
-  );
 }
 
 function parseArg(flag: string): string | undefined {

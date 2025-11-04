@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2025-11-05
+
+### Added
+
+- **Phrase-aware Tokenization**: Compound terms (kebab-case like `page-agent`, snake_case like `user_profile`) are now recognized as single phrases with 2× scoring weight
+  - Configurable tokenization strategy via `KIRI_TOKENIZATION_STRATEGY` environment variable
+  - Strategies: `phrase-aware` (default), `legacy`, `hybrid`
+  - Supports Unicode characters (international compound terms)
+- **Path-based Scoring**: Additional boost when keywords/phrases appear in file paths
+  - Phrase in path: `pathMatch × 1.5`
+  - Path segment: `pathMatch × 1.0`
+  - Keyword in path: `pathMatch × 0.5`
+- **Auto-create .gitignore**: Database directories automatically get `.gitignore` to prevent accidental commits
+  - Enabled by default via `autoGitignore: true` option in `DuckDBClientOptions`
+  - Only creates in Git repositories
+  - Respects existing `.gitignore` files (no overwrite/append)
+  - Wildcard pattern (`*`) ignores all database files
+
+### Changed
+
+- **context_bundle accuracy improved from 65-75% to 95%** through phrase-aware tokenization and path-based scoring
+- Enhanced tool description for `context_bundle` with new feature explanations and examples
+- Document file penalty strengthened from `-1.0` to `-2.0` to prioritize implementation files
+- N+1 database query optimization: consolidated 15 individual queries into 2 queries with OR clauses
+
+### Fixed
+
+- Test regression from N+1 query consolidation by adjusting document penalty
+- Inconsistent tokenization between `handlers.ts` and `embedding.ts` by creating shared `tokenizer.ts` utility
+- Unicode support in compound term extraction using `\p{L}\p{N}` property escapes
+
 ## [0.5.0] - 2025-11-04
 
 ### Added

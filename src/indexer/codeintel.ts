@@ -424,7 +424,7 @@ function collectPHPDependencies(
   sourcePath: string,
   tree: Parser.Tree,
   content: string,
-  fileSet: Set<string>
+  _fileSet: Set<string>
 ): DependencyRecord[] {
   const dependencies = new Map<string, DependencyRecord>();
 

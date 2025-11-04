@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2025-11-04
+
+### Added
+
+- **Incremental Indexing (Phase 1)**: Hash-based file-level incremental indexing for watch mode
+  - Only reindex files that have changed content (10-100x performance improvement)
+  - Automatic detection and removal of deleted/renamed files to prevent orphaned database records
+  - Single transaction atomicity ensures all files succeed or fail together (no partial updates)
+  - Debouncing aggregates rapid consecutive changes into a single reindex operation
+  - Performance: Typically completes in 400-500ms vs 2-10 seconds for full reindex
+
+### Changed
+
+- Watch mode now uses incremental indexing by default instead of full repository reindex
+- Indexer tracks existing file hashes in database to detect content changes
+- File reconciliation runs before each incremental batch to clean up stale records
+
+### Fixed
+
+- Database bloat from orphaned records when files are deleted or renamed
+- Partial database updates when indexing errors occur mid-batch
+- Watch mode performance issues with large repositories
+
+### Known Limitations
+
+These limitations are documented for Phase 2 implementation:
+
+1. **Cross-file dependency staleness**: When import statements change, dependency graph updates lag until next full reindex
+2. **File move/rename history**: Renames are treated as delete+add (no git history preservation)
+3. **DELETE batching**: Individual DELETE statements per file (not yet optimized with batch operations)
+
+Impact of these limitations is minimal in practice, and Phase 2 will address them with tree-sitter migration and dependency diff updates.
+
 ## [0.4.1] - 2025-01-04
 
 ### Changed

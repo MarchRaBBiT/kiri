@@ -174,13 +174,15 @@ kiri-server --repo . --db .kiri/index.duckdb --port 8765 --watch
 
 ### MCP Client Integration
 
-#### Option 1: Global Installation (Recommended for End Users)
+#### For Claude Desktop (JSON)
+
+Configure KIRI in `.claude/mcp.json`:
+
+**Option 1: Global Installation**
 
 ```bash
 npm install -g kiri-mcp-server
 ```
-
-Create `~/.config/codex/mcp.json` or `.claude/mcp.json`:
 
 ```json
 {
@@ -199,7 +201,7 @@ Create `~/.config/codex/mcp.json` or `.claude/mcp.json`:
 }
 ```
 
-#### Option 2: npx (No Installation Required)
+**Option 2: npx (No Installation Required)**
 
 ```json
 {
@@ -219,9 +221,7 @@ Create `~/.config/codex/mcp.json` or `.claude/mcp.json`:
 }
 ```
 
-**Note**: `npx` automatically downloads and caches the package on first use. Subsequent starts are faster.
-
-#### Option 3: Local Development (with npm link)
+**Option 3: Local Development (with npm link)**
 
 After running `npm link` in the KIRI repository:
 
@@ -242,11 +242,9 @@ After running `npm link` in the KIRI repository:
 }
 ```
 
-**Note**: The `kiri` command will use the symlinked version from your local development directory. Changes require rebuilding with `pnpm run build`.
+**Environment Variables (Claude Desktop)**
 
-#### Environment Variables
-
-You can configure KIRI's behavior using environment variables in your MCP configuration:
+You can override the default timeout using environment variables:
 
 ```json
 {
@@ -262,13 +260,39 @@ You can configure KIRI's behavior using environment variables in your MCP config
 }
 ```
 
-**Available Environment Variables:**
-
 | Variable                    | Default | Description                                                                                    |
 | --------------------------- | ------- | ---------------------------------------------------------------------------------------------- |
 | `KIRI_DAEMON_READY_TIMEOUT` | `240`   | Daemon initialization timeout in seconds. Increase for very large repositories (10,000+ files) |
 
-**Note**: The default timeout was increased from 30s to 240s in v0.3.0 to support large repositories. Most projects no longer need to set this variable manually.
+#### For Codex CLI (TOML)
+
+Configure KIRI in `~/.config/codex/mcp.toml`:
+
+**Basic Configuration**
+
+```toml
+[mcp_servers.kiri]
+command = "npx"
+args = ["kiri-mcp-server@latest", "--repo", ".", "--db", ".kiri/index.duckdb", "--watch"]
+startup_timeout_sec = 240
+```
+
+**With Global Installation**
+
+```toml
+[mcp_servers.kiri]
+command = "kiri"
+args = ["--repo", ".", "--db", ".kiri/index.duckdb", "--watch"]
+startup_timeout_sec = 240
+```
+
+**Configuration Parameters (Codex CLI)**
+
+| Parameter             | Default | Description                                                                                   |
+| --------------------- | ------- | --------------------------------------------------------------------------------------------- |
+| `startup_timeout_sec` | `30`    | Daemon initialization timeout in seconds. Set to `240` for large repositories (10,000+ files) |
+
+**Note**: The default internal timeout was increased from 30s to 240s in v0.3.0, but Codex CLI's default `startup_timeout_sec` may still be 30s. We recommend setting it explicitly to 240 for large repositories.
 
 See [examples/README.md](examples/README.md) for detailed usage examples.
 

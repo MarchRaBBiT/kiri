@@ -253,22 +253,156 @@ function normalizeBundleLimit(limit?: number): number {
   return Math.min(Math.max(1, Math.floor(limit)), MAX_BUNDLE_LIMIT);
 }
 
-function extractKeywords(text: string): string[] {
+/**
+ * トークン化戦略
+ * - phrase-aware: ハイフン区切り用語を保持（例: "page-agent" を単一ユニットとして保持）
+ * - legacy: ハイフンで分割（例: "page-agent" → ["page", "agent"]）
+ * - hybrid: フレーズと分割キーワードの両方を出力
+ */
+type TokenizationStrategy = "phrase-aware" | "legacy" | "hybrid";
+
+/**
+ * キーワード抽出結果
+ */
+interface ExtractedTerms {
+  /** 引用符で囲まれたフレーズまたはハイフン区切り用語 */
+  phrases: string[];
+  /** 通常のキーワード（単語） */
+  keywords: string[];
+  /** パスセグメント（ディレクトリ/ファイル名など） */
+  pathSegments: string[];
+}
+
+/**
+ * トークン化戦略を取得
+ * 環境変数またはデフォルト値から決定
+ */
+function getTokenizationStrategy(): TokenizationStrategy {
+  const strategy = process.env.KIRI_TOKENIZATION_STRATEGY?.toLowerCase();
+  if (strategy === "legacy" || strategy === "hybrid") {
+    return strategy;
+  }
+  return "phrase-aware"; // デフォルト
+}
+
+/**
+ * 引用符で囲まれたフレーズを抽出
+ * 例: 'search "page-agent handler" test' → ["page-agent handler"]
+ */
+function extractQuotedPhrases(text: string): { phrases: string[]; remaining: string } {
+  const phrases: string[] = [];
+  const quotePattern = /"([^"]+)"|'([^']+)'/g;
+  let match: RegExpExecArray | null;
+  let remaining = text;
+
+  // eslint-disable-next-line no-cond-assign
+  while ((match = quotePattern.exec(text)) !== null) {
+    const phrase = (match[1] || match[2] || "").trim().toLowerCase();
+    if (phrase.length >= 3) {
+      phrases.push(phrase);
+    }
+    remaining = remaining.replace(match[0], " ");
+  }
+
+  return { phrases, remaining };
+}
+
+/**
+ * ハイフン区切り用語を抽出
+ * 例: "page-agent lambda-handler" → ["page-agent", "lambda-handler"]
+ */
+function extractHyphenatedTerms(text: string): string[] {
+  // マッチ条件: 英数字 + ハイフン + 英数字（少なくとも3文字以上）
+  const hyphenPattern = /\b[a-z0-9]+(?:-[a-z0-9]+)+\b/gi;
+  const matches = text.match(hyphenPattern) || [];
+  return matches
+    .map((term) => term.toLowerCase())
+    .filter((term) => term.length >= 3 && !STOP_WORDS.has(term));
+}
+
+/**
+ * パスライクな用語を抽出
+ * 例: "lambda/page-agent/handler" → ["lambda", "page-agent", "handler"]
+ */
+function extractPathSegments(text: string): string[] {
+  const pathPattern = /\b[a-z0-9_-]+(?:\/[a-z0-9_-]+)+\b/gi;
+  const matches = text.match(pathPattern) || [];
+  const segments: string[] = [];
+
+  for (const path of matches) {
+    const parts = path.toLowerCase().split("/");
+    for (const part of parts) {
+      if (part.length >= 3 && !STOP_WORDS.has(part) && !segments.includes(part)) {
+        segments.push(part);
+      }
+    }
+  }
+
+  return segments;
+}
+
+/**
+ * 通常の単語を抽出（レガシーロジック）
+ */
+function extractRegularWords(text: string, strategy: TokenizationStrategy): string[] {
+  const splitPattern = strategy === "legacy" ? /[^a-z0-9_]+/iu : /[^a-z0-9_-]+/iu;
   const words = text
     .toLowerCase()
-    .split(/[^a-z0-9_]+/iu)
+    .split(splitPattern)
     .map((word) => word.trim())
     .filter((word) => word.length >= 3 && !STOP_WORDS.has(word));
-  const unique: string[] = [];
-  for (const word of words) {
-    if (!unique.includes(word)) {
-      unique.push(word);
-      if (unique.length >= MAX_KEYWORDS) {
+
+  return words;
+}
+
+/**
+ * テキストからキーワード、フレーズ、パスセグメントを抽出
+ * トークン化戦略に基づいて、ハイフン区切り用語の処理方法を変更
+ */
+function extractKeywords(text: string): ExtractedTerms {
+  const strategy = getTokenizationStrategy();
+  const result: ExtractedTerms = {
+    phrases: [],
+    keywords: [],
+    pathSegments: [],
+  };
+
+  // Phase 1: 引用符で囲まれたフレーズを抽出
+  const { phrases: quotedPhrases, remaining: afterQuotes } = extractQuotedPhrases(text);
+  result.phrases.push(...quotedPhrases);
+
+  // Phase 2: パスセグメントを抽出
+  const pathSegments = extractPathSegments(afterQuotes);
+  result.pathSegments.push(...pathSegments);
+
+  // Phase 3: ハイフン区切り用語を抽出（phrase-aware または hybrid モード）
+  if (strategy === "phrase-aware" || strategy === "hybrid") {
+    const hyphenatedTerms = extractHyphenatedTerms(afterQuotes);
+    result.phrases.push(...hyphenatedTerms);
+
+    // hybrid モードの場合、ハイフン区切り用語を分割したキーワードも追加
+    if (strategy === "hybrid") {
+      for (const term of hyphenatedTerms) {
+        const parts = term.split("-").filter((part) => part.length >= 3 && !STOP_WORDS.has(part));
+        result.keywords.push(...parts);
+      }
+    }
+  }
+
+  // Phase 4: 通常の単語を抽出
+  const regularWords = extractRegularWords(afterQuotes, strategy);
+
+  // 重複を除去しながら、最大キーワード数まで追加
+  for (const word of regularWords) {
+    if (!result.keywords.includes(word) && !result.phrases.includes(word)) {
+      result.keywords.push(word);
+      if (result.keywords.length >= MAX_KEYWORDS) {
         break;
       }
     }
   }
-  return unique;
+
+  return result;
 }
 
 function ensureCandidate(map: Map<string, CandidateInfo>, filePath: string): CandidateInfo {
@@ -552,7 +686,9 @@ function applyFileTypeBoost(
 function applyBoostProfile(
   candidate: CandidateInfo,
   row: { path: string; ext: string | null },
-  profile: "default" | "docs" | "none"
+  profile: "default" | "docs" | "none",
+  extractedTerms?: ExtractedTerms,
+  pathMatchWeight?: number
 ): void {
   if (profile === "none") {
     return;
@@ -561,6 +697,37 @@ function applyBoostProfile(
   const { path, ext } = row;
   const lowerPath = path.toLowerCase();
   const fileName = path.split("/").pop() ?? "";
+
+  // パスベースのスコアリング: goalのキーワード/フレーズがファイルパスに含まれる場合にブースト
+  if (extractedTerms && pathMatchWeight && pathMatchWeight > 0) {
+    // フレーズがパスに完全一致する場合（最高の重み）
+    for (const phrase of extractedTerms.phrases) {
+      if (lowerPath.includes(phrase)) {
+        candidate.score += pathMatchWeight * 1.5; // 1.5倍のブースト
+        candidate.reasons.add(`path-phrase:${phrase}`);
+        break; // 最初のマッチのみ適用
+      }
+    }
+
+    // パスセグメントがマッチする場合（中程度の重み）
+    const pathParts = lowerPath.split("/");
+    for (const segment of extractedTerms.pathSegments) {
+      if (pathParts.includes(segment)) {
+        candidate.score += pathMatchWeight;
+        candidate.reasons.add(`path-segment:${segment}`);
+        break; // 最初のマッチのみ適用
+      }
+    }
+
+    // 通常のキーワードがパスに含まれる場合（低い重み）
+    for (const keyword of extractedTerms.keywords) {
+      if (lowerPath.includes(keyword)) {
+        candidate.score += pathMatchWeight * 0.5; // 0.5倍のブースト
+        candidate.reasons.add(`path-keyword:${keyword}`);
+        break; // 最初のマッチのみ適用
+      }
+    }
+  }
 
   // Blacklisted directories that are almost always irrelevant for code context
   const blacklistedDirs = [
@@ -947,21 +1114,80 @@ export async function contextBundle(
   const semanticSeed = keywordSources.join(" ");
   const queryEmbedding = generateEmbedding(semanticSeed)?.values ?? null;
 
-  let keywords = extractKeywords(semanticSeed);
+  const extractedTerms = extractKeywords(semanticSeed);
 
-  if (keywords.length === 0 && artifacts.editing_path) {
+  // フォールバック: editing_pathからキーワードを抽出
+  if (
+    extractedTerms.phrases.length === 0 &&
+    extractedTerms.keywords.length === 0 &&
+    artifacts.editing_path
+  ) {
     const pathSegments = artifacts.editing_path
       .split(/[/_.-]/)
       .map((segment) => segment.toLowerCase())
       .filter((segment) => segment.length >= 3 && !STOP_WORDS.has(segment));
-    keywords = pathSegments.slice(0, MAX_KEYWORDS);
+    extractedTerms.pathSegments.push(...pathSegments.slice(0, MAX_KEYWORDS));
   }
 
   const candidates = new Map<string, CandidateInfo>();
   const stringMatchSeeds = new Set<string>();
   const fileCache = new Map<string, FileContentCacheEntry>();
 
-  for (const keyword of keywords) {
+  // フレーズマッチング（高い重み: textMatch × 2）
+  for (const phrase of extractedTerms.phrases) {
+    const rows = await db.all<FileWithEmbeddingRow>(
+      `
+        SELECT f.path, f.lang, f.ext, f.is_binary, b.content, fe.vector_json, fe.dims AS vector_dims
+        FROM file f
+        JOIN blob b ON b.hash = f.blob_hash
+        LEFT JOIN file_embedding fe
+          ON fe.repo_id = f.repo_id
+         AND fe.path = f.path
+        WHERE f.repo_id = ?
+          AND f.is_binary = FALSE
+          AND b.content ILIKE '%' || ? || '%'
+        ORDER BY f.path
+        LIMIT ?
+      `,
+      [repoId, phrase, MAX_MATCHES_PER_KEYWORD]
+    );
+
+    for (const row of rows) {
+      if (row.content === null) {
+        continue;
+      }
+      const candidate = ensureCandidate(candidates, row.path);
+      // フレーズマッチは通常の2倍のスコア
+      candidate.score += weights.textMatch * 2.0;
+      candidate.reasons.add(`phrase:${phrase}`);
+
+      // Apply boost profile to prioritize/penalize files based on type and location
+      const boostProfile = params.boost_profile ?? "default";
+      applyBoostProfile(candidate, row, boostProfile, extractedTerms, weights.pathMatch);
+
+      const { line } = buildPreview(row.content, phrase);
+      candidate.matchLine =
+        candidate.matchLine === null ? line : Math.min(candidate.matchLine, line);
+      candidate.content ??= row.content;
+      candidate.lang ??= row.lang;
+      candidate.ext ??= row.ext;
+      candidate.totalLines ??= row.content.length === 0 ? 0 : row.content.split(/\r?\n/).length;
+      candidate.embedding ??= parseEmbedding(row.vector_json ?? null, row.vector_dims ?? null);
+      stringMatchSeeds.add(row.path);
+      if (!fileCache.has(row.path)) {
+        fileCache.set(row.path, {
+          content: row.content,
+          lang: row.lang,
+          ext: row.ext,
+          totalLines: candidate.totalLines ?? 0,
+          embedding: candidate.embedding,
+        });
+      }
+    }
+  }
+
+  // キーワードマッチング（通常の重み）
+  for (const keyword of extractedTerms.keywords) {
     const rows = await db.all<FileWithEmbeddingRow>(
       `
         SELECT f.path, f.lang, f.ext, f.is_binary, b.content, fe.vector_json, fe.dims AS vector_dims
@@ -989,7 +1215,7 @@ export async function contextBundle(
 
       // Apply boost profile to prioritize/penalize files based on type and location
       const boostProfile = params.boost_profile ?? "default";
-      applyBoostProfile(candidate, row, boostProfile);
+      applyBoostProfile(candidate, row, boostProfile, extractedTerms, weights.pathMatch);
 
       const { line } = buildPreview(row.content, keyword);
       candidate.matchLine =

@@ -20,6 +20,9 @@ importers:
       tree-sitter:
         specifier: ^0.22.0
         version: 0.22.4
+      tree-sitter-php:
+        specifier: ^0.22.8
+        version: 0.22.8(tree-sitter@0.22.4)
       tree-sitter-swift:
         specifier: 0.7.1
         version: 0.7.1(tree-sitter@0.22.4)
@@ -1294,6 +1297,10 @@ packages:
     resolution: {integrity: sha512-oahGvuMGQlPw/ivIYBjVSrWAfWLBeku5tpPE2fOPLi+WHffIWbuh2tCjhyQhTBPMf5E9jDEH4FOmTYgYwbKwtQ==}
     engines: {node: '>=18'}
 
+  globals@15.15.0:
+    resolution: {integrity: sha512-7ACyT3wmyp3I61S4fG682L0VA2RGD9otkqGJIwNUMF1SWUombIIk+af1unuDYgMm082aHYwD+mzJvv9Iu8dsgg==}
+    engines: {node: '>=18'}
+
   globalthis@1.0.4:
     resolution: {integrity: sha512-DpLKbNU4WylpxJykQujfCcwYWiV/Jhm50Goo0wrVILAv5jOr9d+H+UR3PhSCD2rCCEIg0uc+G+muBTwD54JhDQ==}
     engines: {node: '>= 0.4'}
@@ -2179,6 +2186,15 @@ packages:
     resolution: {integrity: sha512-kPPXprOqREX+C/FgUp2Qpt9jd0vSwn+hOgjzVv/7hapdoWpa+VeWId53rf4oNNd29ikheF12BYtGD/W90feMbA==}
     engines: {node: '>=12.0.0'}
     hasBin: true
+
+  tree-sitter-php@0.22.8:
+    resolution: {integrity: sha512-X3VeTwgofcRaR1+GQBBkA0dGdS8MntAPjkgmsqmYtx2Jh/+bYzvc8/nM+D5S6HQW7npvAIf6DzP1DADP5xooSw==}
+    peerDependencies:
+      tree-sitter: ^0.21.1
+      tree_sitter: '*'
+    peerDependenciesMeta:
+      tree_sitter:
+        optional: true
 
   tree-sitter-swift@0.7.1:
     resolution: {integrity: sha512-pneKVTuGamaBsqqqfB9BvNQjktzh/0IVPR54jLB5Fq/JTDQwYHd0Wo6pVyZ5jAYpbztzq+rJ/rpL9ruxTmSoKw==}
@@ -3661,6 +3677,8 @@ snapshots:
 
   globals@14.0.0: {}
 
+  globals@15.15.0: {}
+
   globalthis@1.0.4:
     dependencies:
       define-properties: 1.2.1
@@ -4601,6 +4619,13 @@ snapshots:
   tr46@0.0.3: {}
 
   tree-sitter-cli@0.23.2: {}
+
+  tree-sitter-php@0.22.8(tree-sitter@0.22.4):
+    dependencies:
+      globals: 15.15.0
+      node-addon-api: 8.5.0
+      node-gyp-build: 4.8.4
+      tree-sitter: 0.22.4
 
   tree-sitter-swift@0.7.1(tree-sitter@0.22.4):
     dependencies:

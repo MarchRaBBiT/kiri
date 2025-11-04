@@ -183,6 +183,7 @@ Examples:
 2. **Language Detection**: Based on file extension mapping in `src/indexer/language.ts`. Currently supports symbol extraction for:
    - **TypeScript** (`.ts`, `.tsx`): Uses TypeScript Compiler API
    - **Swift** (`.swift`): Uses tree-sitter-swift
+   - **PHP** (`.php`): Uses tree-sitter-php
    - Other languages are detected but symbols are not extracted (fallback to full-file snippets)
 
 3. **Repo ID Resolution**: Each indexed repository gets an auto-incrementing ID. The server resolves `repoRoot` → `repoId` at startup and stores it in `ServerContext`.

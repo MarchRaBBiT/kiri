@@ -1,8 +1,19 @@
+import { createRequire } from "node:module";
 import path from "node:path";
 
 import Parser from "tree-sitter";
 import Swift from "tree-sitter-swift";
 import ts from "typescript";
+
+// tree-sitter-php is a CommonJS module, so import it using require.
+// Using version 0.22.8 for compatibility with tree-sitter 0.22.4.
+// Version 0.24.2 had a nodeTypeInfo bug that caused runtime errors.
+// php_only: for pure PHP files (<?php at start)
+// php: for HTML-mixed PHP files (HTML with <?php ... ?> tags)
+const require = createRequire(import.meta.url);
+const PHPModule = require("tree-sitter-php");
+const PHP_ONLY = PHPModule.php_only;
+const PHP_MIXED = PHPModule.php;
 
 export interface SymbolRecord {
   symbolId: number;
@@ -32,7 +43,7 @@ interface AnalysisResult {
   dependencies: DependencyRecord[];
 }
 
-const SUPPORTED_LANGUAGES = new Set(["TypeScript", "Swift"]);
+const SUPPORTED_LANGUAGES = new Set(["TypeScript", "Swift", "PHP"]);
 
 function sanitizeSignature(source: ts.SourceFile, node: ts.Node): string {
   const start = node.getStart(source);
@@ -141,6 +152,349 @@ function getSwiftDocComment(node: SwiftNode, content: string): string | null {
  */
 function toSwiftLineNumber(position: Parser.Point): number {
   return position.row + 1;
+}
+
+// ========================================
+// PHP analyzer helpers
+// ========================================
+
+type PHPNode = Parser.SyntaxNode;
+
+/**
+ * Detect whether PHP file is pure PHP or HTML-mixed.
+ * Pure PHP: starts with <?php tag (possibly after whitespace, shebang, or BOM)
+ * HTML-mixed: contains HTML content before <?php tag
+ *
+ * Handles:
+ * - Case-insensitive PHP tags (<?php, <?PHP)
+ * - Short tags (<?=)
+ * - Shebangs (#!/usr/bin/env php)
+ * - UTF-8 BOM (\uFEFF)
+ */
+function detectPHPType(content: string): "pure" | "html-mixed" {
+  // Regex to find the first PHP open tag, ignoring shebangs, whitespace, and BOM.
+  // It checks for <?php (case-insensitive), <?=, or <? (short tag)
+  const phpTagRegex = /^(?:\s*|#!\/.*?\n|\uFEFF)*<\?(?:php|=)?/i;
+  const match = content.match(phpTagRegex);
+
+  if (!match) {
+    // No PHP tags found at the beginning - treat as HTML-mixed
+    return "html-mixed";
+  }
+
+  // If the match occurs at or near the beginning (after only whitespace/shebang/BOM),
+  // it's a pure PHP file
+  return "pure";
+}
+
+/**
+ * Sanitize PHP signature (exclude body, limit to first 200 characters)
+ */
+function sanitizePHPSignature(node: PHPNode, content: string): string {
+  const nodeText = content.substring(node.startIndex, node.endIndex);
+  // 関数本体（{...}）を除外
+  const bodyIndex = nodeText.indexOf("{");
+  const signatureText = bodyIndex >= 0 ? nodeText.substring(0, bodyIndex) : nodeText;
+  // 最初の200文字に制限し、1行に圧縮
+  const truncated = signatureText.substring(0, 200);
+  return truncated.split(/\r?\n/)[0]?.trim().replace(/\s+/g, " ") ?? "";
+}
+
+/**
+ * PHPDocコメント（/＊＊ ＊/）を抽出
+ */
+function getPHPDocComment(node: PHPNode, content: string): string | null {
+  const parent = node.parent;
+  if (!parent) return null;
+
+  // 親ノードのすべての子から、このノードの直前にあるコメントを探す
+  const precedingComments: string[] = [];
+  const siblings = parent.children;
+  const nodeIndex = siblings.indexOf(node);
+
+  // このノードより前の兄弟を逆順で調べる
+  for (let i = nodeIndex - 1; i >= 0; i--) {
+    const sibling = siblings[i];
+    if (!sibling) continue;
+
+    // commentをチェック
+    if (sibling.type === "comment") {
+      const commentText = content.substring(sibling.startIndex, sibling.endIndex);
+      // /** */ 形式のPHPDocコメントのみ抽出
+      if (commentText.startsWith("/**") && commentText.endsWith("*/")) {
+        const cleanedComment = commentText
+          .replace(/^\/\*\*\s?|\s?\*\/$/g, "")
+          .replace(/^\s*\*\s?/gm, "")
+          .trim();
+        precedingComments.unshift(cleanedComment);
+      }
+    } else if (sibling.type !== "text" && !sibling.text.trim().match(/^\s*$/)) {
+      // コメント以外の実質的なノードに到達したら終了
+      break;
+    }
+  }
+
+  if (precedingComments.length === 0) {
+    return null;
+  }
+
+  return precedingComments.join("\n");
+}
+
+/**
+ * tree-sitterの位置情報から行番号を取得（1-based）
+ */
+function toPHPLineNumber(position: Parser.Point): number {
+  return position.row + 1;
+}
+
+/**
+ * PHPのシンボルレコードを作成
+ */
+function createPHPSymbolRecords(tree: Parser.Tree, content: string): SymbolRecord[] {
+  const results: Array<Omit<SymbolRecord, "symbolId">> = [];
+
+  /**
+   * 子ノードから名前を抽出
+   */
+  function extractName(node: PHPNode): string | null {
+    function findName(n: PHPNode): PHPNode | null {
+      if (n.type === "name") {
+        return n;
+      }
+      for (const child of n.namedChildren) {
+        const found = findName(child);
+        if (found) return found;
+      }
+      return null;
+    }
+
+    const nameNode = findName(node);
+    return nameNode ? content.substring(nameNode.startIndex, nameNode.endIndex) : null;
+  }
+
+  /**
+   * ツリーを再帰的にトラバースしてシンボルを抽出
+   */
+  function visit(node: PHPNode): void {
+    // class_declaration: クラス宣言
+    if (node.type === "class_declaration") {
+      const name = extractName(node);
+      if (name) {
+        results.push({
+          name,
+          kind: "class",
+          rangeStartLine: toPHPLineNumber(node.startPosition),
+          rangeEndLine: toPHPLineNumber(node.endPosition),
+          signature: sanitizePHPSignature(node, content),
+          doc: getPHPDocComment(node, content),
+        });
+      }
+    }
+    // interface_declaration: インターフェース宣言
+    else if (node.type === "interface_declaration") {
+      const name = extractName(node);
+      if (name) {
+        results.push({
+          name,
+          kind: "interface",
+          rangeStartLine: toPHPLineNumber(node.startPosition),
+          rangeEndLine: toPHPLineNumber(node.endPosition),
+          signature: sanitizePHPSignature(node, content),
+          doc: getPHPDocComment(node, content),
+        });
+      }
+    }
+    // trait_declaration: トレイト宣言
+    else if (node.type === "trait_declaration") {
+      const name = extractName(node);
+      if (name) {
+        results.push({
+          name,
+          kind: "trait",
+          rangeStartLine: toPHPLineNumber(node.startPosition),
+          rangeEndLine: toPHPLineNumber(node.endPosition),
+          signature: sanitizePHPSignature(node, content),
+          doc: getPHPDocComment(node, content),
+        });
+      }
+    }
+    // function_definition: トップレベル関数またはメソッド
+    else if (node.type === "function_definition" || node.type === "method_declaration") {
+      const name = extractName(node);
+      if (name) {
+        // 親がclass_declaration/trait_declaration/interface_declarationの子孫の場合はmethod、それ以外はfunction
+        let isMethod = false;
+        let parentNode = node.parent;
+        while (parentNode) {
+          if (
+            parentNode.type === "class_declaration" ||
+            parentNode.type === "trait_declaration" ||
+            parentNode.type === "interface_declaration"
+          ) {
+            isMethod = true;
+            break;
+          }
+          parentNode = parentNode.parent;
+        }
+        const kind = isMethod ? "method" : "function";
+        results.push({
+          name,
+          kind,
+          rangeStartLine: toPHPLineNumber(node.startPosition),
+          rangeEndLine: toPHPLineNumber(node.endPosition),
+          signature: sanitizePHPSignature(node, content),
+          doc: getPHPDocComment(node, content),
+        });
+      }
+    }
+    // property_declaration: プロパティ
+    else if (node.type === "property_declaration") {
+      // property_element から変数名を抽出
+      const propertyElement = node.namedChildren.find((child) => child.type === "property_element");
+      if (propertyElement) {
+        const variableNameNode = propertyElement.namedChildren.find(
+          (child) => child.type === "variable_name"
+        );
+        if (variableNameNode) {
+          const name = content
+            .substring(variableNameNode.startIndex, variableNameNode.endIndex)
+            .replace(/^\$/, ""); // $を除去
+          results.push({
+            name,
+            kind: "property",
+            rangeStartLine: toPHPLineNumber(node.startPosition),
+            rangeEndLine: toPHPLineNumber(node.endPosition),
+            signature: sanitizePHPSignature(node, content),
+            doc: getPHPDocComment(node, content),
+          });
+        }
+      }
+    }
+    // const_declaration: 定数（クラス定数）
+    else if (node.type === "const_declaration") {
+      const constElement = node.namedChildren.find((child) => child.type === "const_element");
+      if (constElement) {
+        const name = extractName(constElement);
+        if (name) {
+          results.push({
+            name,
+            kind: "constant",
+            rangeStartLine: toPHPLineNumber(node.startPosition),
+            rangeEndLine: toPHPLineNumber(node.endPosition),
+            signature: sanitizePHPSignature(node, content),
+            doc: getPHPDocComment(node, content),
+          });
+        }
+      }
+    }
+    // namespace_definition: 名前空間
+    else if (node.type === "namespace_definition") {
+      const namespaceName = node.namedChildren.find((child) => child.type === "namespace_name");
+      if (namespaceName) {
+        const name = content.substring(namespaceName.startIndex, namespaceName.endIndex);
+        results.push({
+          name,
+          kind: "namespace",
+          rangeStartLine: toPHPLineNumber(node.startPosition),
+          rangeEndLine: toPHPLineNumber(node.endPosition),
+          signature: sanitizePHPSignature(node, content),
+          doc: getPHPDocComment(node, content),
+        });
+      }
+    }
+
+    // 子ノードを再帰的に訪問
+    for (const child of node.namedChildren) {
+      visit(child);
+    }
+  }
+
+  visit(tree.rootNode);
+
+  return results
+    .sort((a, b) => a.rangeStartLine - b.rangeStartLine)
+    .map((item, index) => ({ symbolId: index + 1, ...item }));
+}
+
+/**
+ * PHPのuse文を解析して依存関係を収集
+ */
+function collectPHPDependencies(
+  sourcePath: string,
+  tree: Parser.Tree,
+  content: string,
+  _fileSet: Set<string>
+): DependencyRecord[] {
+  const dependencies = new Map<string, DependencyRecord>();
+
+  const record = (kind: "path" | "package", dst: string) => {
+    const key = `${kind}:${dst}`;
+    if (!dependencies.has(key)) {
+      dependencies.set(key, { dstKind: kind, dst, rel: "import" });
+    }
+  };
+
+  function visit(node: PHPNode): void {
+    // namespace_use_declaration: use文
+    if (node.type === "namespace_use_declaration") {
+      // namespace_use_clauseを探す（通常のuse文）
+      const useClauses = node.namedChildren.filter(
+        (child) => child.type === "namespace_use_clause"
+      );
+      for (const useClause of useClauses) {
+        // qualified_nameまたはnameを抽出
+        const qualifiedName = useClause.namedChildren.find(
+          (child) => child.type === "qualified_name" || child.type === "name"
+        );
+        if (qualifiedName) {
+          const importName = content.substring(qualifiedName.startIndex, qualifiedName.endIndex);
+          // Treat all namespaced imports as packages until composer.json parsing is implemented.
+          // PSR-4 maps namespace prefixes to base directories (e.g., App\ -> src/),
+          // not relative paths from the current file's directory.
+          // TODO: Implement proper PSR-4 resolution by parsing composer.json
+          record("package", importName);
+        }
+      }
+
+      // namespace_use_groupを探す（グループ化されたuse文: use Foo\{Bar, Baz};）
+      const useGroups = node.namedChildren.filter((child) => child.type === "namespace_use_group");
+      if (useGroups.length > 0) {
+        // プレフィックスを取得（例: App\Services）
+        const prefixNode = node.namedChildren.find((child) => child.type === "namespace_name");
+        const prefix = prefixNode
+          ? content.substring(prefixNode.startIndex, prefixNode.endIndex)
+          : "";
+
+        for (const useGroup of useGroups) {
+          // namespace_use_group_clauseを処理
+          const groupClauses = useGroup.namedChildren.filter(
+            (child) => child.type === "namespace_use_group_clause"
+          );
+          for (const groupClause of groupClauses) {
+            const namespaceName = groupClause.namedChildren.find(
+              (child) => child.type === "namespace_name" || child.type === "name"
+            );
+            if (namespaceName) {
+              const suffix = content.substring(namespaceName.startIndex, namespaceName.endIndex);
+              const fullName = prefix ? `${prefix}\\${suffix}` : suffix;
+              // Treat all namespaced imports as packages (same reasoning as above)
+              record("package", fullName);
+            }
+          }
+        }
+      }
+    }
+
+    // 子ノードを再帰的に訪問
+    for (const child of node.namedChildren) {
+      visit(child);
+    }
+  }
+
+  visit(tree.rootNode);
+
+  return Array.from(dependencies.values());
 }
 
 function createSymbolRecords(source: ts.SourceFile): SymbolRecord[] {
@@ -503,11 +857,55 @@ export function analyzeSource(
     return { symbols: [], snippets: [], dependencies: [] };
   }
 
+  // PHP language: use tree-sitter
+  if (normalizedLang === "PHP") {
+    try {
+      // Create new parser instance for each file (thread-safety for concurrent processing)
+      const parser = new Parser();
+
+      // tree-sitter-php provides two parsers:
+      // - php_only: for pure PHP files (<?php at start)
+      // - php: for HTML-mixed PHP files (HTML with <?php ... ?> tags)
+      const phpType = detectPHPType(content);
+      const language = phpType === "html-mixed" ? PHP_MIXED : PHP_ONLY;
+
+      // Validate language object before setting it
+      if (!language || typeof language !== "object") {
+        throw new Error(`Tree-sitter language for PHP type "${phpType}" is invalid or undefined`);
+      }
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      parser.setLanguage(language as any);
+      const tree = parser.parse(content);
+      const symbols = createPHPSymbolRecords(tree, content);
+
+      const snippets: SnippetRecord[] = symbols.map((symbol) => ({
+        startLine: symbol.rangeStartLine,
+        endLine: symbol.rangeEndLine,
+        symbolId: symbol.symbolId,
+      }));
+
+      const dependencies = collectPHPDependencies(pathInRepo, tree, content, fileSet);
+
+      return { symbols, snippets, dependencies };
+    } catch (error) {
+      // パース失敗時は空の結果を返して他のファイルの処理を継続
+      console.error(`Failed to parse PHP file ${pathInRepo}:`, error);
+      return { symbols: [], snippets: [], dependencies: [] };
+    }
+  }
+
   // Swift言語の場合、tree-sitterを使用
   if (normalizedLang === "Swift") {
     try {
       // 各ファイルごとに新しいパーサーインスタンスを作成（並行処理の安全性のため）
       const parser = new Parser();
+
+      // Validate language object before setting it
+      if (!Swift || typeof Swift !== "object") {
+        throw new Error("Tree-sitter language for Swift is invalid or undefined");
+      }
+
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       parser.setLanguage(Swift as any);
       const tree = parser.parse(content);

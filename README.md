@@ -244,6 +244,32 @@ After running `npm link` in the KIRI repository:
 
 **Note**: The `kiri` command will use the symlinked version from your local development directory. Changes require rebuilding with `pnpm run build`.
 
+#### Environment Variables
+
+You can configure KIRI's behavior using environment variables in your MCP configuration:
+
+```json
+{
+  "mcpServers": {
+    "kiri": {
+      "command": "kiri",
+      "args": ["--repo", "/path/to/project", "--db", ".kiri/index.duckdb", "--watch"],
+      "env": {
+        "KIRI_DAEMON_READY_TIMEOUT": "240"
+      }
+    }
+  }
+}
+```
+
+**Available Environment Variables:**
+
+| Variable                    | Default | Description                                                                                    |
+| --------------------------- | ------- | ---------------------------------------------------------------------------------------------- |
+| `KIRI_DAEMON_READY_TIMEOUT` | `240`   | Daemon initialization timeout in seconds. Increase for very large repositories (10,000+ files) |
+
+**Note**: The default timeout was increased from 30s to 240s in v0.3.0 to support large repositories. Most projects no longer need to set this variable manually.
+
 See [examples/README.md](examples/README.md) for detailed usage examples.
 
 ## 🏗️ Architecture

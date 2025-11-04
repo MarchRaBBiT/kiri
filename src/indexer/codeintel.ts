@@ -162,19 +162,29 @@ type PHPNode = Parser.SyntaxNode;
 
 /**
  * Detect whether PHP file is pure PHP or HTML-mixed.
- * Pure PHP: starts with <?php tag (possibly after whitespace)
+ * Pure PHP: starts with <?php tag (possibly after whitespace, shebang, or BOM)
  * HTML-mixed: contains HTML content before <?php tag
+ *
+ * Handles:
+ * - Case-insensitive PHP tags (<?php, <?PHP)
+ * - Short tags (<?=)
+ * - Shebangs (#!/usr/bin/env php)
+ * - UTF-8 BOM (\uFEFF)
  */
 function detectPHPType(content: string): "pure" | "html-mixed" {
-  const phpTagIndex = content.indexOf("<?php");
-  if (phpTagIndex === -1) {
-    // No <?php tag found - treat as HTML-mixed (likely template file)
+  // Regex to find the first PHP open tag, ignoring shebangs, whitespace, and BOM.
+  // It checks for <?php (case-insensitive), <?=, or <? (short tag)
+  const phpTagRegex = /^(?:\s*|#!\/.*?\n|\uFEFF)*<\?(?:php|=)?/i;
+  const match = content.match(phpTagRegex);
+
+  if (!match) {
+    // No PHP tags found at the beginning - treat as HTML-mixed
     return "html-mixed";
   }
 
-  // Check if there's non-whitespace content before <?php tag
-  const beforeTag = content.substring(0, phpTagIndex).trim();
-  return beforeTag.length > 0 ? "html-mixed" : "pure";
+  // If the match occurs at or near the beginning (after only whitespace/shebang/BOM),
+  // it's a pure PHP file
+  return "pure";
 }
 
 /**
@@ -439,18 +449,11 @@ function collectPHPDependencies(
         );
         if (qualifiedName) {
           const importName = content.substring(qualifiedName.startIndex, qualifiedName.endIndex);
-          // PSR-4準拠のため、基本的にpackageとして扱う
-          // ただし、ローカルファイルの可能性もチェック
-          const baseDir = path.posix.dirname(sourcePath);
-          const phpPath = path.posix.normalize(
-            path.posix.join(baseDir, `${importName.replace(/\\/g, "/")}.php`)
-          );
-
-          if (fileSet.has(phpPath)) {
-            record("path", phpPath);
-          } else {
-            record("package", importName);
-          }
+          // Treat all namespaced imports as packages until composer.json parsing is implemented.
+          // PSR-4 maps namespace prefixes to base directories (e.g., App\ -> src/),
+          // not relative paths from the current file's directory.
+          // TODO: Implement proper PSR-4 resolution by parsing composer.json
+          record("package", importName);
         }
       }
 
@@ -475,17 +478,8 @@ function collectPHPDependencies(
             if (namespaceName) {
               const suffix = content.substring(namespaceName.startIndex, namespaceName.endIndex);
               const fullName = prefix ? `${prefix}\\${suffix}` : suffix;
-
-              const baseDir = path.posix.dirname(sourcePath);
-              const phpPath = path.posix.normalize(
-                path.posix.join(baseDir, `${fullName.replace(/\\/g, "/")}.php`)
-              );
-
-              if (fileSet.has(phpPath)) {
-                record("path", phpPath);
-              } else {
-                record("package", fullName);
-              }
+              // Treat all namespaced imports as packages (same reasoning as above)
+              record("package", fullName);
             }
           }
         }
@@ -875,6 +869,11 @@ export function analyzeSource(
       const phpType = detectPHPType(content);
       const language = phpType === "html-mixed" ? PHP_MIXED : PHP_ONLY;
 
+      // Validate language object before setting it
+      if (!language || typeof language !== "object") {
+        throw new Error(`Tree-sitter language for PHP type "${phpType}" is invalid or undefined`);
+      }
+
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       parser.setLanguage(language as any);
       const tree = parser.parse(content);
@@ -901,6 +900,12 @@ export function analyzeSource(
     try {
       // 各ファイルごとに新しいパーサーインスタンスを作成（並行処理の安全性のため）
       const parser = new Parser();
+
+      // Validate language object before setting it
+      if (!Swift || typeof Swift !== "object") {
+        throw new Error("Tree-sitter language for Swift is invalid or undefined");
+      }
+
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       parser.setLanguage(Swift as any);
       const tree = parser.parse(content);

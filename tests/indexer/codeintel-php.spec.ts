@@ -409,15 +409,18 @@ class MyClass {
       expect(result.dependencies[0]?.dst).toContain("LongServiceName");
     });
 
-    it("detects local file dependencies if they exist in fileSet", () => {
+    it("treats all namespaced imports as packages (interim until composer.json parsing)", () => {
       const phpCode = `<?php
 use App\\Services\\MyService;`;
 
+      // Even if the file exists in fileSet, it should be treated as a package
+      // until proper PSR-4 resolution via composer.json is implemented
       const fileSet = new Set(["App/Services/MyService.php"]);
       const result = analyzeSource("test.php", "PHP", phpCode, fileSet);
 
       expect(result.dependencies).toHaveLength(1);
-      expect(result.dependencies[0]?.dstKind).toBe("path");
+      expect(result.dependencies[0]?.dstKind).toBe("package");
+      expect(result.dependencies[0]?.dst).toBe("App\\Services\\MyService");
     });
   });
 
@@ -715,6 +718,99 @@ class MyClass {
 
       // Should parse without errors but extract no symbols
       expect(result.symbols).toHaveLength(0);
+    });
+  });
+
+  describe("edge cases for PHP type detection", () => {
+    it("correctly detects pure PHP file with shebang", () => {
+      const shebangCode = `#!/usr/bin/env php
+<?php
+class MyCliTool {
+  public function run() {
+    echo "Hello CLI";
+  }
+}`;
+
+      const result = analyzeSource("test.php", "PHP", shebangCode, new Set());
+
+      // Should detect as pure PHP and extract symbols correctly
+      expect(result.symbols).toHaveLength(2);
+      expect(result.symbols[0]).toMatchObject({
+        name: "MyCliTool",
+        kind: "class",
+      });
+      expect(result.symbols[1]).toMatchObject({
+        name: "run",
+        kind: "method",
+      });
+    });
+
+    it("correctly detects pure PHP file with UTF-8 BOM", () => {
+      // UTF-8 BOM is \uFEFF
+      const bomCode = `\uFEFF<?php
+class BomClass {
+  public function test() {}
+}`;
+
+      const result = analyzeSource("test.php", "PHP", bomCode, new Set());
+
+      // Should detect as pure PHP and extract symbols correctly
+      expect(result.symbols).toHaveLength(2);
+      expect(result.symbols[0]).toMatchObject({
+        name: "BomClass",
+        kind: "class",
+      });
+    });
+
+    it("correctly handles short echo tag", () => {
+      const shortTagCode = `<?= "Hello World" ?>
+<?php
+class ShortTagClass {
+  public function test() {}
+}`;
+
+      const result = analyzeSource("test.php", "PHP", shortTagCode, new Set());
+
+      // Should parse and extract class symbol
+      expect(result.symbols.length).toBeGreaterThanOrEqual(1);
+      const classSymbol = result.symbols.find((s) => s.kind === "class");
+      expect(classSymbol).toBeDefined();
+      expect(classSymbol?.name).toBe("ShortTagClass");
+    });
+
+    it("correctly handles case-insensitive PHP tags", () => {
+      // PHP tags are case-insensitive
+      const upperCaseCode = `<?PHP
+class UpperCaseTag {
+  public function test() {}
+}`;
+
+      const result = analyzeSource("test.php", "PHP", upperCaseCode, new Set());
+
+      // Should detect as pure PHP and extract symbols correctly
+      expect(result.symbols).toHaveLength(2);
+      expect(result.symbols[0]).toMatchObject({
+        name: "UpperCaseTag",
+        kind: "class",
+      });
+    });
+
+    it("correctly handles whitespace before PHP tag", () => {
+      const whitespaceCode = `
+
+<?php
+class WhitespaceClass {
+  public function test() {}
+}`;
+
+      const result = analyzeSource("test.php", "PHP", whitespaceCode, new Set());
+
+      // Should detect as pure PHP (whitespace is allowed)
+      expect(result.symbols).toHaveLength(2);
+      expect(result.symbols[0]).toMatchObject({
+        name: "WhitespaceClass",
+        kind: "class",
+      });
     });
   });
 });

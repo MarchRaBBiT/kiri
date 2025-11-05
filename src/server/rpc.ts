@@ -30,7 +30,17 @@ import { withSpan } from "./observability/tracing.js";
 export class WarningManager {
   private readonly shownWarnings = new Set<string>();
   public readonly responseWarnings: string[] = [];
-  private static readonly MAX_UNIQUE_WARNINGS = 1000;
+  private readonly maxUniqueWarnings: number;
+  private limitReachedWarningShown = false;
+
+  /**
+   * WarningManagerを構築します
+   *
+   * @param maxUniqueWarnings - 追跡する一意の警告の最大数（デフォルト: 1000）
+   */
+  constructor(maxUniqueWarnings: number = 1000) {
+    this.maxUniqueWarnings = maxUniqueWarnings;
+  }
 
   /**
    * 指定されたキーの警告をまだ表示していない場合にのみ表示します
@@ -46,12 +56,12 @@ export class WarningManager {
     }
 
     // メモリリーク防止: 上限に達したら新しい警告を追加しない
-    if (this.shownWarnings.size >= WarningManager.MAX_UNIQUE_WARNINGS) {
-      if (!this.shownWarnings.has("__WARNING_LIMIT_REACHED__")) {
+    if (this.shownWarnings.size >= this.maxUniqueWarnings) {
+      if (!this.limitReachedWarningShown) {
         console.warn(
           "WarningManager: Unique warning limit reached. No new warnings will be shown."
         );
-        this.shownWarnings.add("__WARNING_LIMIT_REACHED__");
+        this.limitReachedWarningShown = true;
       }
       return false;
     }
@@ -72,6 +82,7 @@ export class WarningManager {
   reset(): void {
     this.shownWarnings.clear();
     this.responseWarnings.length = 0;
+    this.limitReachedWarningShown = false;
   }
 }
 

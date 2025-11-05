@@ -168,7 +168,8 @@ function isConfigFile(path: string, fileName: string): boolean {
   // Check if file is in a config directory using exact path segment matching
   // Split path into segments and check for exact matches to prevent false positives
   // e.g., "bootstrap" won't match "my-bootstrap-theme" in path segments
-  const pathSegments = new Set(normalizedPath.split("/"));
+  // Filter empty strings to handle absolute paths (e.g., "/src/app" → ["", "src", "app"] → ["src", "app"])
+  const pathSegments = new Set(normalizedPath.split("/").filter(Boolean));
   const isInConfigDirectory = (CONFIG_DIRECTORIES as readonly string[]).some((dir) =>
     pathSegments.has(dir)
   );

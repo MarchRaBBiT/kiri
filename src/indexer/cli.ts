@@ -189,8 +189,8 @@ async function persistInBatches<T>(
     try {
       await db.run(sql, params);
     } catch (error) {
-      // バッチインデックスとサイズを含むエラーメッセージ
-      const batchInfo = `Batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(records.length / batchSize)} (records ${i}-${Math.min(i + batchSize, records.length)})`;
+      // バッチインデックスとサイズを含むエラーメッセージ（0-indexedの正確な範囲）
+      const batchInfo = `Batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(records.length / batchSize)} (records ${i}-${i + batch.length - 1})`;
       throw new Error(
         `Failed to persist batch: ${batchInfo}. Original error: ${error instanceof Error ? error.message : String(error)}`
       );

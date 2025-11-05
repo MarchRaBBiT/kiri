@@ -33,12 +33,26 @@ describe("Batch Processing for Large Datasets", () => {
   });
 
   afterEach(async () => {
-    // Cleanup
-    if (db) {
-      await db.close();
+    // Cleanup - each operation is independent to ensure all resources are freed
+    try {
+      if (db) {
+        await db.close();
+      }
+    } catch (error) {
+      console.error("Failed to close database:", error);
     }
-    rmSync(repoDir, { recursive: true, force: true });
-    rmSync(dbPath, { force: true });
+
+    try {
+      rmSync(repoDir, { recursive: true, force: true });
+    } catch (error) {
+      console.error("Failed to remove repository directory:", error);
+    }
+
+    try {
+      rmSync(dbPath, { force: true });
+    } catch (error) {
+      console.error("Failed to remove database file:", error);
+    }
   });
 
   it("handles exactly batch boundary (7500 files for 4-column table)", async () => {

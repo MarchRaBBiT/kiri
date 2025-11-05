@@ -74,8 +74,21 @@ const SCAN_BATCH_SIZE = 100; // Process files in batches to limit memory usage
 
 /**
  * Maximum number of SQL placeholders per INSERT statement.
- * Based on common limits across SQL engines (DuckDB supports 65535, but we use conservative value).
- * This prevents "Maximum call stack size exceeded" errors when building large SQL strings.
+ *
+ * DuckDB's internal limit is 65535 placeholders, but we use a conservative value of 30000 for:
+ * 1. Safety margin: Prevents stack overflow when building large SQL strings in JavaScript
+ * 2. Performance: Smaller batches reduce memory pressure and provide better error granularity
+ * 3. Compatibility: Works safely across different DuckDB versions and system configurations
+ *
+ * This value has been validated with real-world testing:
+ * - Successfully handles 10000+ files in batch-processing.spec.ts
+ * - Prevents "Maximum call stack size exceeded" errors (Issue #39)
+ * - Balances transaction throughput vs. individual batch size
+ *
+ * Example batch sizes with this limit:
+ * - 4-column table (blob): 7500 records per batch
+ * - 5-column table (dependency): 6000 records per batch
+ * - 9-column table (symbol): 3333 records per batch
  */
 const MAX_SQL_PLACEHOLDERS = 30000;
 
@@ -83,10 +96,14 @@ const MAX_SQL_PLACEHOLDERS = 30000;
  * Calculate safe batch size for SQL INSERT operations based on columns per record.
  * Ensures total placeholders per statement stays under MAX_SQL_PLACEHOLDERS.
  *
- * @param columnsPerRecord - Number of columns in the INSERT statement
+ * @param columnsPerRecord - Number of columns in the INSERT statement (must be positive)
  * @returns Safe batch size that won't exceed placeholder limit
+ * @throws {Error} If columnsPerRecord is not a positive integer
  */
 function calculateBatchSize(columnsPerRecord: number): number {
+  if (columnsPerRecord <= 0 || !Number.isInteger(columnsPerRecord)) {
+    throw new Error(`columnsPerRecord must be a positive integer, got: ${columnsPerRecord}`);
+  }
   return Math.floor(MAX_SQL_PLACEHOLDERS / columnsPerRecord);
 }
 
@@ -168,7 +185,16 @@ async function persistInBatches<T>(
   for (let i = 0; i < records.length; i += batchSize) {
     const batch = records.slice(i, i + batchSize);
     const { sql, params } = buildInsert(batch);
-    await db.run(sql, params);
+
+    try {
+      await db.run(sql, params);
+    } catch (error) {
+      // バッチインデックスとサイズを含むエラーメッセージ
+      const batchInfo = `Batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(records.length / batchSize)} (records ${i}-${Math.min(i + batchSize, records.length)})`;
+      throw new Error(
+        `Failed to persist batch: ${batchInfo}. Original error: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
   }
 }
 
@@ -256,102 +282,79 @@ async function persistFiles(
   }));
 }
 
+/**
+ * Persist symbol records to database in batches to prevent stack overflow.
+ *
+ * IMPORTANT: This function must be called within an active database transaction.
+ * See runIndexer() for transaction management context.
+ *
+ * @param db - Database client (must be within an active transaction)
+ * @param repoId - Repository ID
+ * @param records - Symbol records to persist
+ */
 async function persistSymbols(
   db: DuckDBClient,
   repoId: number,
   records: SymbolRow[]
 ): Promise<void> {
-  if (records.length === 0) return;
+  const BATCH_SIZE = calculateBatchSize(9); // symbol table has 9 columns
 
-  // バッチサイズを1000に制限してスタックオーバーフローを防ぐ
-  const BATCH_SIZE = 1000;
-  for (let i = 0; i < records.length; i += BATCH_SIZE) {
-    const batch = records.slice(i, i + BATCH_SIZE);
-    const placeholders = batch.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
-    const sql = `
-      INSERT OR REPLACE INTO symbol (
-        repo_id, path, symbol_id, name, kind, range_start_line, range_end_line, signature, doc
-      ) VALUES ${placeholders}
-    `;
-
-    const params: unknown[] = [];
-    for (const record of batch) {
-      params.push(
-        repoId,
-        record.path,
-        record.symbolId,
-        record.name,
-        record.kind,
-        record.rangeStartLine,
-        record.rangeEndLine,
-        record.signature,
-        record.doc
-      );
-    }
-
-    await db.run(sql, params);
-  }
+  await persistInBatches(db, records, BATCH_SIZE, (batch) => ({
+    sql: `INSERT OR REPLACE INTO symbol (repo_id, path, symbol_id, name, kind, range_start_line, range_end_line, signature, doc) VALUES ${batch.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ")}`,
+    params: batch.flatMap((r) => [
+      repoId,
+      r.path,
+      r.symbolId,
+      r.name,
+      r.kind,
+      r.rangeStartLine,
+      r.rangeEndLine,
+      r.signature,
+      r.doc,
+    ]),
+  }));
 }
 
+/**
+ * Persist snippet records to database in batches to prevent stack overflow.
+ *
+ * IMPORTANT: This function must be called within an active database transaction.
+ * See runIndexer() for transaction management context.
+ *
+ * @param db - Database client (must be within an active transaction)
+ * @param repoId - Repository ID
+ * @param records - Snippet records to persist
+ */
 async function persistSnippets(
   db: DuckDBClient,
   repoId: number,
   records: SnippetRow[]
 ): Promise<void> {
-  if (records.length === 0) return;
+  const BATCH_SIZE = calculateBatchSize(6); // snippet table has 6 columns
 
-  // バッチサイズを1000に制限してスタックオーバーフローを防ぐ
-  const BATCH_SIZE = 1000;
-  for (let i = 0; i < records.length; i += BATCH_SIZE) {
-    const batch = records.slice(i, i + BATCH_SIZE);
-    const placeholders = batch.map(() => "(?, ?, ?, ?, ?, ?)").join(", ");
-    const sql = `
-      INSERT OR REPLACE INTO snippet (
-        repo_id, path, snippet_id, start_line, end_line, symbol_id
-      ) VALUES ${placeholders}
-    `;
-
-    const params: unknown[] = [];
-    for (const record of batch) {
-      params.push(
-        repoId,
-        record.path,
-        record.snippetId,
-        record.startLine,
-        record.endLine,
-        record.symbolId
-      );
-    }
-
-    await db.run(sql, params);
-  }
+  await persistInBatches(db, records, BATCH_SIZE, (batch) => ({
+    sql: `INSERT OR REPLACE INTO snippet (repo_id, path, snippet_id, start_line, end_line, symbol_id) VALUES ${batch.map(() => "(?, ?, ?, ?, ?, ?)").join(", ")}`,
+    params: batch.flatMap((r) => [repoId, r.path, r.snippetId, r.startLine, r.endLine, r.symbolId]),
+  }));
 }
 
+/**
+ * Persist file dependency records to database in batches to prevent stack overflow.
+ *
+ * MUST be called within a transaction.
+ * Batch size is dynamically calculated based on MAX_SQL_PLACEHOLDERS.
+ */
 async function persistDependencies(
   db: DuckDBClient,
   repoId: number,
   records: DependencyRow[]
 ): Promise<void> {
-  if (records.length === 0) return;
+  const BATCH_SIZE = calculateBatchSize(5); // dependency table has 5 columns
 
-  // バッチサイズを1000に制限してスタックオーバーフローを防ぐ
-  const BATCH_SIZE = 1000;
-  for (let i = 0; i < records.length; i += BATCH_SIZE) {
-    const batch = records.slice(i, i + BATCH_SIZE);
-    const placeholders = batch.map(() => "(?, ?, ?, ?, ?)").join(", ");
-    const sql = `
-      INSERT OR REPLACE INTO dependency (
-        repo_id, src_path, dst_kind, dst, rel
-      ) VALUES ${placeholders}
-    `;
-
-    const params: unknown[] = [];
-    for (const record of batch) {
-      params.push(repoId, record.srcPath, record.dstKind, record.dst, record.rel);
-    }
-
-    await db.run(sql, params);
-  }
+  await persistInBatches(db, records, BATCH_SIZE, (batch) => ({
+    sql: `INSERT OR REPLACE INTO dependency (repo_id, src_path, dst_kind, dst, rel) VALUES ${batch.map(() => "(?, ?, ?, ?, ?)").join(", ")}`,
+    params: batch.flatMap((r) => [repoId, r.srcPath, r.dstKind, r.dst, r.rel]),
+  }));
 }
 
 /**

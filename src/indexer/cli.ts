@@ -72,6 +72,24 @@ const MAX_SAMPLE_BYTES = 32_768;
 const MAX_FILE_BYTES = 32 * 1024 * 1024; // 32MB limit to prevent memory exhaustion
 const SCAN_BATCH_SIZE = 100; // Process files in batches to limit memory usage
 
+/**
+ * Maximum number of SQL placeholders per INSERT statement.
+ * Based on common limits across SQL engines (DuckDB supports 65535, but we use conservative value).
+ * This prevents "Maximum call stack size exceeded" errors when building large SQL strings.
+ */
+const MAX_SQL_PLACEHOLDERS = 30000;
+
+/**
+ * Calculate safe batch size for SQL INSERT operations based on columns per record.
+ * Ensures total placeholders per statement stays under MAX_SQL_PLACEHOLDERS.
+ *
+ * @param columnsPerRecord - Number of columns in the INSERT statement
+ * @returns Safe batch size that won't exceed placeholder limit
+ */
+function calculateBatchSize(columnsPerRecord: number): number {
+  return Math.floor(MAX_SQL_PLACEHOLDERS / columnsPerRecord);
+}
+
 function countLines(content: string): number {
   if (content.length === 0) {
     return 0;
@@ -127,89 +145,115 @@ async function ensureRepo(
   return row.id;
 }
 
-async function persistBlobs(db: DuckDBClient, blobs: Map<string, BlobRecord>): Promise<void> {
-  if (blobs.size === 0) return;
+/**
+ * Generic helper function to persist records in batches to prevent stack overflow.
+ * Splits large datasets into smaller batches and executes INSERT statements sequentially.
+ *
+ * IMPORTANT: This function must be called within an active database transaction.
+ * See runIndexer() for transaction management context.
+ *
+ * @param db - Database client (must be within an active transaction)
+ * @param records - Array of records to persist
+ * @param batchSize - Maximum number of records per INSERT statement
+ * @param buildInsert - Function that builds SQL and params for a batch
+ */
+async function persistInBatches<T>(
+  db: DuckDBClient,
+  records: T[],
+  batchSize: number,
+  buildInsert: (batch: T[]) => { sql: string; params: unknown[] }
+): Promise<void> {
+  if (records.length === 0) return;
 
-  // バッチサイズを1000に制限してスタックオーバーフローを防ぐ
-  const BATCH_SIZE = 1000;
-  const blobArray = Array.from(blobs.values());
-
-  for (let i = 0; i < blobArray.length; i += BATCH_SIZE) {
-    const batch = blobArray.slice(i, i + BATCH_SIZE);
-    const placeholders = batch.map(() => "(?, ?, ?, ?)").join(", ");
-    const sql = `INSERT OR REPLACE INTO blob (hash, size_bytes, line_count, content) VALUES ${placeholders}`;
-
-    const params: unknown[] = [];
-    for (const blob of batch) {
-      params.push(blob.hash, blob.sizeBytes, blob.lineCount, blob.content);
-    }
-
+  for (let i = 0; i < records.length; i += batchSize) {
+    const batch = records.slice(i, i + batchSize);
+    const { sql, params } = buildInsert(batch);
     await db.run(sql, params);
   }
 }
 
+/**
+ * Persist blob records to database in batches to prevent stack overflow.
+ *
+ * IMPORTANT: This function must be called within an active database transaction.
+ * See runIndexer() for transaction management context.
+ *
+ * @param db - Database client (must be within an active transaction)
+ * @param blobs - Map of blob records to persist
+ */
+async function persistBlobs(db: DuckDBClient, blobs: Map<string, BlobRecord>): Promise<void> {
+  const blobArray = Array.from(blobs.values());
+  const BATCH_SIZE = calculateBatchSize(4); // blob table has 4 columns
+
+  await persistInBatches(db, blobArray, BATCH_SIZE, (batch) => ({
+    sql: `INSERT OR REPLACE INTO blob (hash, size_bytes, line_count, content) VALUES ${batch.map(() => "(?, ?, ?, ?)").join(", ")}`,
+    params: batch.flatMap((blob) => [blob.hash, blob.sizeBytes, blob.lineCount, blob.content]),
+  }));
+}
+
+/**
+ * Persist tree records to database in batches to prevent stack overflow.
+ *
+ * IMPORTANT: This function must be called within an active database transaction.
+ * See runIndexer() for transaction management context.
+ *
+ * @param db - Database client (must be within an active transaction)
+ * @param repoId - Repository ID
+ * @param commitHash - Git commit hash
+ * @param records - File records to persist
+ */
 async function persistTrees(
   db: DuckDBClient,
   repoId: number,
   commitHash: string,
   records: FileRecord[]
 ): Promise<void> {
-  if (records.length === 0) return;
+  const BATCH_SIZE = calculateBatchSize(8); // tree table has 8 columns
 
-  // バッチサイズを1000に制限してスタックオーバーフローを防ぐ
-  const BATCH_SIZE = 1000;
-  for (let i = 0; i < records.length; i += BATCH_SIZE) {
-    const batch = records.slice(i, i + BATCH_SIZE);
-    const placeholders = batch.map(() => "(?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
-    const sql = `INSERT OR REPLACE INTO tree (repo_id, commit_hash, path, blob_hash, ext, lang, is_binary, mtime) VALUES ${placeholders}`;
-
-    const params: unknown[] = [];
-    for (const record of batch) {
-      params.push(
-        repoId,
-        commitHash,
-        record.path,
-        record.blobHash,
-        record.ext,
-        record.lang,
-        record.isBinary,
-        record.mtimeIso
-      );
-    }
-
-    await db.run(sql, params);
-  }
+  await persistInBatches(db, records, BATCH_SIZE, (batch) => ({
+    sql: `INSERT OR REPLACE INTO tree (repo_id, commit_hash, path, blob_hash, ext, lang, is_binary, mtime) VALUES ${batch.map(() => "(?, ?, ?, ?, ?, ?, ?, ?)").join(", ")}`,
+    params: batch.flatMap((record) => [
+      repoId,
+      commitHash,
+      record.path,
+      record.blobHash,
+      record.ext,
+      record.lang,
+      record.isBinary,
+      record.mtimeIso,
+    ]),
+  }));
 }
 
+/**
+ * Persist file records to database in batches to prevent stack overflow.
+ *
+ * IMPORTANT: This function must be called within an active database transaction.
+ * See runIndexer() for transaction management context.
+ *
+ * @param db - Database client (must be within an active transaction)
+ * @param repoId - Repository ID
+ * @param records - File records to persist
+ */
 async function persistFiles(
   db: DuckDBClient,
   repoId: number,
   records: FileRecord[]
 ): Promise<void> {
-  if (records.length === 0) return;
+  const BATCH_SIZE = calculateBatchSize(7); // file table has 7 columns
 
-  // バッチサイズを1000に制限してスタックオーバーフローを防ぐ
-  const BATCH_SIZE = 1000;
-  for (let i = 0; i < records.length; i += BATCH_SIZE) {
-    const batch = records.slice(i, i + BATCH_SIZE);
-    const placeholders = batch.map(() => "(?, ?, ?, ?, ?, ?, ?)").join(", ");
-    const sql = `INSERT OR REPLACE INTO file (repo_id, path, blob_hash, ext, lang, is_binary, mtime) VALUES ${placeholders}`;
-
-    const params: unknown[] = [];
-    for (const record of batch) {
-      params.push(
-        repoId,
-        record.path,
-        record.blobHash,
-        record.ext,
-        record.lang,
-        record.isBinary,
-        record.mtimeIso
-      );
-    }
-
-    await db.run(sql, params);
-  }
+  await persistInBatches(db, records, BATCH_SIZE, (batch) => ({
+    sql: `INSERT OR REPLACE INTO file (repo_id, path, blob_hash, ext, lang, is_binary, mtime) VALUES ${batch.map(() => "(?, ?, ?, ?, ?, ?, ?)").join(", ")}`,
+    params: batch.flatMap((record) => [
+      repoId,
+      record.path,
+      record.blobHash,
+      record.ext,
+      record.lang,
+      record.isBinary,
+      record.mtimeIso,
+    ]),
+  }));
 }
 
 async function persistSymbols(
@@ -310,31 +354,32 @@ async function persistDependencies(
   }
 }
 
+/**
+ * Persist file embedding records to database in batches to prevent stack overflow.
+ *
+ * IMPORTANT: This function must be called within an active database transaction.
+ * See runIndexer() for transaction management context.
+ *
+ * @param db - Database client (must be within an active transaction)
+ * @param repoId - Repository ID
+ * @param records - Embedding records to persist
+ */
 async function persistEmbeddings(
   db: DuckDBClient,
   repoId: number,
   records: EmbeddingRow[]
 ): Promise<void> {
-  if (records.length === 0) return;
+  const BATCH_SIZE = calculateBatchSize(4); // file_embedding table has 4 parameterized columns
 
-  // バッチサイズを1000に制限してスタックオーバーフローを防ぐ
-  const BATCH_SIZE = 1000;
-  for (let i = 0; i < records.length; i += BATCH_SIZE) {
-    const batch = records.slice(i, i + BATCH_SIZE);
-    const placeholders = batch.map(() => "(?, ?, ?, ?, CURRENT_TIMESTAMP)").join(", ");
-    const sql = `
-      INSERT OR REPLACE INTO file_embedding (
-        repo_id, path, dims, vector_json, updated_at
-      ) VALUES ${placeholders}
-    `;
-
-    const params: unknown[] = [];
-    for (const record of batch) {
-      params.push(repoId, record.path, record.dims, JSON.stringify(record.vector));
-    }
-
-    await db.run(sql, params);
-  }
+  await persistInBatches(db, records, BATCH_SIZE, (batch) => ({
+    sql: `INSERT OR REPLACE INTO file_embedding (repo_id, path, dims, vector_json, updated_at) VALUES ${batch.map(() => "(?, ?, ?, ?, CURRENT_TIMESTAMP)").join(", ")}`,
+    params: batch.flatMap((record) => [
+      repoId,
+      record.path,
+      record.dims,
+      JSON.stringify(record.vector),
+    ]),
+  }));
 }
 
 function buildCodeIntel(

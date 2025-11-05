@@ -765,7 +765,10 @@ function collectJavaDependencies(
         let kind: "path" | "package" = "package";
         if (!hasAsterisk) {
           const filePath = importName.replace(/\./g, "/") + ".java";
-          kind = fileSet.has(filePath) ? "path" : "package";
+          // fileSetから末尾がfilePathにマッチするものを探す
+          // Maven/Gradle構造 (src/main/java/com/example/MyClass.java) に対応
+          const matchingFile = Array.from(fileSet).find((f) => f.endsWith(filePath));
+          kind = matchingFile ? "path" : "package";
         }
 
         record(kind, importName);

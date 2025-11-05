@@ -257,6 +257,40 @@ public class MyClass {}
       });
     });
 
+    it("detects local file imports with Maven/Gradle directory structure", () => {
+      const javaCode = `
+import com.example.MyOtherClass;
+import com.example.util.Helper;
+
+public class MyClass {}
+`.trim();
+
+      // Maven/Gradleの標準的なディレクトリ構造
+      const fileSet = new Set([
+        "src/main/java/com/example/MyOtherClass.java",
+        "src/main/java/com/example/util/Helper.java",
+        "src/test/java/com/example/MyClassTest.java",
+      ]);
+      const result = analyzeSource(
+        "src/main/java/com/example/MyClass.java",
+        "Java",
+        javaCode,
+        fileSet
+      );
+
+      expect(result.dependencies).toHaveLength(2);
+      expect(result.dependencies[0]).toMatchObject({
+        dstKind: "path",
+        dst: "com.example.MyOtherClass",
+        rel: "import",
+      });
+      expect(result.dependencies[1]).toMatchObject({
+        dstKind: "path",
+        dst: "com.example.util.Helper",
+        rel: "import",
+      });
+    });
+
     it("handles wildcard imports", () => {
       const javaCode = `
 import java.util.*;

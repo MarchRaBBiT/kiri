@@ -299,4 +299,82 @@ describe("Unified Boosting Logic (v0.7.0+)", () => {
       expect(scoreRatioDefault).toBeGreaterThan(scoreRatioNone);
     }
   });
+
+  // ✅ NEW (v0.9.0): Test that boost_profile="docs" allows docs/ directory files
+  it("boost_profile='docs' allows docs/ directory files to be ranked", async () => {
+    const repo = await createTempRepo({
+      "src/feature.ts": `export function feature() {\n  return "implementation";\n}\n`,
+      "docs/guide.md": `# Feature Guide\n\nHow to use the feature.\n`,
+      "README.md": `# Project\n\nOverview.\n`,
+    });
+    cleanupTargets.push({ dispose: repo.cleanup });
+
+    const dbDir = await mkdtemp(join(tmpdir(), "kiri-docs-profile-"));
+    const dbPath = join(dbDir, "index.duckdb");
+    cleanupTargets.push({ dispose: async () => await rm(dbDir, { recursive: true, force: true }) });
+
+    await runIndexer({ repoRoot: repo.path, databasePath: dbPath, full: true });
+
+    const db = await DuckDBClient.connect({ databasePath: dbPath });
+    cleanupTargets.push({ dispose: async () => await db.close() });
+
+    const repoId = await resolveRepoId(db, repo.path);
+    const context: ServerContext = { db, repoId, warningManager: new WarningManager() };
+
+    // Test with boost_profile="docs" - should include docs/ files
+    const bundleResults = await contextBundle(context, {
+      goal: "feature guide",
+      boost_profile: "docs",
+      limit: 10,
+    });
+
+    const docsFile = bundleResults.context.find((r) => r.path === "docs/guide.md");
+    expect(docsFile).toBeDefined(); // ← docs/ should be found
+    expect(docsFile?.score).toBeGreaterThan(0); // ← Should have positive score
+
+    // filesSearch should also respect boost_profile
+    const filesResults = await filesSearch(context, {
+      query: "feature guide",
+      boost_profile: "docs",
+    });
+
+    const docsFileInSearch = filesResults.find((r) => r.path === "docs/guide.md");
+    expect(docsFileInSearch).toBeDefined(); // ← docs/ should be found in filesSearch too
+  });
+
+  // ✅ NEW (v0.9.0): Test that default profile still blacklists docs/ directory
+  it("default profile still blacklists docs/ directory", async () => {
+    const repo = await createTempRepo({
+      "src/feature.ts": `export function feature() {\n  return "implementation";\n}\n`,
+      "docs/guide.md": `# Feature Guide\n\nHow to use the feature.\n`,
+      "README.md": `# Project\n\nOverview.\n`,
+    });
+    cleanupTargets.push({ dispose: repo.cleanup });
+
+    const dbDir = await mkdtemp(join(tmpdir(), "kiri-docs-blacklist-"));
+    const dbPath = join(dbDir, "index.duckdb");
+    cleanupTargets.push({ dispose: async () => await rm(dbDir, { recursive: true, force: true }) });
+
+    await runIndexer({ repoRoot: repo.path, databasePath: dbPath, full: true });
+
+    const db = await DuckDBClient.connect({ databasePath: dbPath });
+    cleanupTargets.push({ dispose: async () => await db.close() });
+
+    const repoId = await resolveRepoId(db, repo.path);
+    const context: ServerContext = { db, repoId, warningManager: new WarningManager() };
+
+    // Test with default profile - should blacklist docs/
+    const bundleResults = await contextBundle(context, {
+      goal: "feature guide",
+      // boost_profile defaults to "default"
+      limit: 10,
+    });
+
+    const docsFile = bundleResults.context.find((r) => r.path === "docs/guide.md");
+    // docs/ should be blacklisted (filtered out or negative score)
+    if (docsFile) {
+      expect(docsFile.score).toBeLessThan(0); // If present, should have negative score
+    }
+    // Most likely it will be filtered out entirely, which is also correct
+  });
 });

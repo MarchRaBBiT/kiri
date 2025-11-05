@@ -7,6 +7,182 @@ import { encode as encodeGPT, tokenizeText } from "../shared/tokenizer.js";
 import { ServerContext } from "./context.js";
 import { coerceProfileName, loadScoringProfile, type ScoringWeights } from "./scoring.js";
 
+// Configuration file patterns (v0.8.0+: consolidated to avoid duplication)
+// Comprehensive list covering multiple languages and tools
+const CONFIG_FILES = [
+  // JavaScript/TypeScript/Node.js
+  "package.json",
+  "package-lock.json",
+  "npm-shrinkwrap.json",
+  "tsconfig.json",
+  "jsconfig.json",
+  "pnpm-lock.yaml",
+  "yarn.lock",
+  "bun.lockb",
+
+  // Python
+  "requirements.txt",
+  "pyproject.toml",
+  "setup.py",
+  "setup.cfg",
+  "Pipfile",
+  "Pipfile.lock",
+  "poetry.lock",
+  "pytest.ini",
+  "tox.ini",
+  ".python-version",
+
+  // Ruby
+  "Gemfile",
+  "Gemfile.lock",
+  ".ruby-version",
+  "Rakefile",
+
+  // Go
+  "go.mod",
+  "go.sum",
+  "Makefile",
+
+  // PHP
+  "composer.json",
+  "composer.lock",
+  "phpunit.xml",
+
+  // Java/Kotlin/Gradle/Maven
+  "pom.xml",
+  "build.gradle",
+  "build.gradle.kts",
+  "settings.gradle",
+  "settings.gradle.kts",
+  "gradle.properties",
+
+  // Rust
+  "Cargo.toml",
+  "Cargo.lock",
+
+  // Swift
+  "Package.swift",
+  "Package.resolved",
+
+  // .NET
+  "packages.lock.json",
+  "global.json",
+
+  // C/C++
+  "CMakeLists.txt",
+  "Makefile.am",
+  "configure.ac",
+
+  // Docker
+  "Dockerfile",
+  "docker-compose.yml",
+  "docker-compose.yaml",
+  ".dockerignore",
+
+  // CI/CD
+  ".travis.yml",
+  ".gitlab-ci.yml",
+  "Jenkinsfile",
+  "azure-pipelines.yml",
+
+  // Git
+  ".gitignore",
+  ".gitattributes",
+  ".gitmodules",
+
+  // Editor config
+  ".editorconfig",
+
+  // Webserver config
+  "Caddyfile",
+  "nginx.conf",
+  ".htaccess",
+  "httpd.conf",
+  "apache2.conf",
+  "lighttpd.conf",
+] as const;
+
+// Configuration directories (files inside these directories are treated as config)
+// Note: No trailing slashes - exact segment matching prevents false positives
+const CONFIG_DIRECTORIES = [
+  "bootstrap", // Laravel/Symfony framework bootstrap
+  "config", // Generic config directory (all frameworks)
+  "migrations", // Database migrations
+  "db/migrate", // Ruby on Rails migrations
+  "alembic/versions", // Python Alembic migrations
+  "seeds", // Database seeds
+  "fixtures", // Test fixtures
+  "test-data", // Test data
+  "locales", // i18n translations
+  "i18n", // i18n translations
+  "translations", // i18n translations
+  "lang", // i18n translations
+  ".terraform", // Terraform state
+  "terraform", // Terraform configs
+  "k8s", // Kubernetes manifests
+  "kubernetes", // Kubernetes manifests
+  "ansible", // Ansible playbooks
+  "cloudformation", // CloudFormation templates
+  "pulumi", // Pulumi infrastructure
+] as const;
+
+const CONFIG_EXTENSIONS = [".lock", ".env", ".conf"] as const;
+
+const CONFIG_PATTERNS = [
+  // Generic config patterns (any language)
+  ".config.js",
+  ".config.ts",
+  ".config.mjs",
+  ".config.cjs",
+  ".config.json",
+  ".config.yaml",
+  ".config.yml",
+  ".config.toml",
+
+  // Linter/Formatter configs
+  ".eslintrc",
+  ".prettierrc",
+  ".stylelintrc",
+  ".pylintrc",
+  ".flake8",
+  ".rubocop.yml",
+
+  // CI config files
+  ".circleci/config.yml",
+  ".github/workflows",
+] as const;
+
+/**
+ * Check if a file path represents a configuration file
+ * Supports multiple languages: JS/TS, Python, Ruby, Go, PHP, Java, Rust, C/C++, Docker, CI/CD
+ * Also checks if file is in a config directory (bootstrap/, config/, migrations/, etc.)
+ * Uses exact path segment matching to prevent false positives (e.g., "myconfig/" won't match "config/")
+ * @param path - Full file path
+ * @param fileName - File name only (extracted from path)
+ * @returns true if the file is a configuration file
+ */
+function isConfigFile(path: string, fileName: string): boolean {
+  // Normalize path separators (Windows compatibility)
+  const normalizedPath = path.replace(/\\/g, "/");
+
+  // Check if file is in a config directory using exact path segment matching
+  // Split path into segments and check for exact matches to prevent false positives
+  // e.g., "bootstrap" won't match "my-bootstrap-theme" in path segments
+  // Filter empty strings to handle absolute paths (e.g., "/src/app" → ["", "src", "app"] → ["src", "app"])
+  const pathSegments = new Set(normalizedPath.split("/").filter(Boolean));
+  const isInConfigDirectory = (CONFIG_DIRECTORIES as readonly string[]).some((dir) =>
+    pathSegments.has(dir)
+  );
+
+  return (
+    (CONFIG_FILES as readonly string[]).includes(fileName) ||
+    CONFIG_EXTENSIONS.some((ce) => path.endsWith(ce)) ||
+    CONFIG_PATTERNS.some((pattern) => path.includes(pattern)) ||
+    fileName.startsWith(".env") ||
+    isInConfigDirectory
+  );
+}
+
 export interface FilesSearchParams {
   query: string;
   lang?: string;
@@ -67,6 +243,7 @@ export interface ContextBundleItem {
 export interface ContextBundleResult {
   context: ContextBundleItem[];
   tokens_estimate: number;
+  warnings?: string[]; // Client-visible warnings (e.g., breaking changes, deprecations)
 }
 
 export interface SemanticRerankCandidateInput {
@@ -669,15 +846,22 @@ function applyFileTypeBoost(
 
   // Default profile: Use configurable multiplicative penalties
   let multiplier = 1.0;
+  const fileName = path.split("/").pop() ?? "";
 
-  // Documentation files: apply docPenaltyMultiplier
-  const docExtensions = [".md", ".yaml", ".yml", ".mdc", ".json"];
-  if (docExtensions.some((docExt) => path.endsWith(docExt))) {
-    multiplier *= weights.docPenaltyMultiplier; // 0.3 = 70% reduction (Phase 1)
+  // ✅ Step 1: Config files get strongest penalty (95% reduction)
+  if (isConfigFile(path, fileName)) {
+    multiplier *= weights.configPenaltyMultiplier; // 0.05 = 95% reduction
     return baseScore * multiplier;
   }
 
-  // Implementation file boosts: apply implBoostMultiplier with path-based scaling
+  // ✅ Step 2: Documentation files get moderate penalty (50% reduction)
+  const docExtensions = [".md", ".yaml", ".yml", ".mdc"];
+  if (docExtensions.some((docExt) => path.endsWith(docExt))) {
+    multiplier *= weights.docPenaltyMultiplier; // 0.5 = 50% reduction
+    return baseScore * multiplier;
+  }
+
+  // ✅ Step 3: Implementation file boosts
   if (path.startsWith("src/app/")) {
     multiplier *= weights.implBoostMultiplier * 1.4; // Extra boost for app files
   } else if (path.startsWith("src/components/")) {
@@ -870,17 +1054,26 @@ function applyFileTypeMultipliers(
     return;
   }
 
-  // DEFAULT PROFILE: Use MULTIPLICATIVE penalties for docs, MULTIPLICATIVE boosts for impl files
+  // DEFAULT PROFILE: Use MULTIPLICATIVE penalties for config/docs, MULTIPLICATIVE boosts for impl files
   if (profile === "default") {
-    const docExtensions = [".md", ".yaml", ".yml", ".mdc", ".json"];
+    const fileName = path.split("/").pop() ?? "";
+
+    // ✅ Step 1: Config files get strongest penalty (95% reduction)
+    if (isConfigFile(path, fileName)) {
+      candidate.scoreMultiplier *= weights.configPenaltyMultiplier; // 0.05 = 95% reduction
+      candidate.reasons.add("penalty:config-file");
+      return; // Don't apply impl boosts to config files
+    }
+
+    // ✅ Step 2: Documentation files get moderate penalty (50% reduction)
+    const docExtensions = [".md", ".yaml", ".yml", ".mdc"];
     if (docExtensions.some((docExt) => path.endsWith(docExt))) {
-      // ✅ MULTIPLICATIVE penalty (v0.7.0): 70% reduction (Phase 1 conservative)
-      candidate.scoreMultiplier *= weights.docPenaltyMultiplier;
+      candidate.scoreMultiplier *= weights.docPenaltyMultiplier; // 0.5 = 50% reduction
       candidate.reasons.add("penalty:doc-file");
       return; // Don't apply impl boosts to docs
     }
 
-    // ✅ MULTIPLICATIVE boost for implementation files
+    // ✅ Step 3: Implementation files get multiplicative boost
     if (path.startsWith("src/app/")) {
       candidate.scoreMultiplier *= weights.implBoostMultiplier * 1.4; // Extra boost for app files
       candidate.reasons.add("boost:app-file");
@@ -1484,7 +1677,13 @@ export async function contextBundle(
   }
 
   if (materializedCandidates.length === 0) {
-    return { context: [], tokens_estimate: 0 };
+    // Get warnings from WarningManager (includes breaking change notification if applicable)
+    const warnings = [...context.warningManager.responseWarnings];
+    return {
+      context: [],
+      tokens_estimate: 0,
+      ...(warnings.length > 0 && { warnings }),
+    };
   }
 
   applyStructuralScores(materializedCandidates, queryEmbedding, weights.structural);
@@ -1582,7 +1781,14 @@ export async function contextBundle(
     return acc + lineCount * 4;
   }, 0);
 
-  return { context: results, tokens_estimate: tokensEstimate };
+  // Get warnings from WarningManager (includes breaking change notification if applicable)
+  const warnings = [...context.warningManager.responseWarnings];
+
+  return {
+    context: results,
+    tokens_estimate: tokensEstimate,
+    ...(warnings.length > 0 && { warnings }),
+  };
 }
 
 export async function semanticRerank(

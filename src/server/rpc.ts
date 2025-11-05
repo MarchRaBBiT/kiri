@@ -18,6 +18,74 @@ import {
 import { MetricsRegistry } from "./observability/metrics.js";
 import { withSpan } from "./observability/tracing.js";
 
+/**
+ * WarningManager - 警告メッセージの表示を管理するクラス
+ *
+ * 各警告を一度だけ表示するための状態管理を提供します。
+ * グローバル変数を使わずにServerContextにカプセル化することで、
+ * テスタビリティと並行性を改善します。
+ *
+ * メモリリーク防止のため、保持する警告キーの数に上限を設定しています。
+ */
+export class WarningManager {
+  private readonly shownWarnings = new Set<string>();
+  public readonly responseWarnings: string[] = [];
+  private readonly maxUniqueWarnings: number;
+  private limitReachedWarningShown = false;
+
+  /**
+   * WarningManagerを構築します
+   *
+   * @param maxUniqueWarnings - 追跡する一意の警告の最大数（デフォルト: 1000）
+   */
+  constructor(maxUniqueWarnings: number = 1000) {
+    this.maxUniqueWarnings = maxUniqueWarnings;
+  }
+
+  /**
+   * 指定されたキーの警告をまだ表示していない場合にのみ表示します
+   *
+   * @param key - 警告を識別するユニークなキー
+   * @param message - 表示する警告メッセージ
+   * @param forResponse - true の場合、警告をAPIレスポンスに含める
+   * @returns 警告が表示された場合はtrue、既に表示済みの場合はfalse
+   */
+  warnOnce(key: string, message: string, forResponse: boolean = false): boolean {
+    if (this.shownWarnings.has(key)) {
+      return false;
+    }
+
+    // メモリリーク防止: 上限に達したら新しい警告を追加しない
+    if (this.shownWarnings.size >= this.maxUniqueWarnings) {
+      if (!this.limitReachedWarningShown) {
+        console.warn(
+          "WarningManager: Unique warning limit reached. No new warnings will be shown."
+        );
+        this.limitReachedWarningShown = true;
+      }
+      return false;
+    }
+
+    console.warn(message);
+    this.shownWarnings.add(key);
+
+    if (forResponse) {
+      this.responseWarnings.push(message);
+    }
+
+    return true;
+  }
+
+  /**
+   * テスト用：表示済み警告の履歴をクリアします
+   */
+  reset(): void {
+    this.shownWarnings.clear();
+    this.responseWarnings.length = 0;
+    this.limitReachedWarningShown = false;
+  }
+}
+
 export interface JsonRpcRequest {
   jsonrpc?: string;
   id?: unknown;
@@ -93,6 +161,11 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       "- goal='authentication' (noun only, what about it?)\n\n" +
       "TOKEN OPTIMIZATION: Use 'compact: true' to reduce token consumption by ~95%. Returns only metadata (path, range, why, score) without preview field. " +
       "Combine with snippets.get for two-tier approach: first get candidate list (compact), then fetch selected content.\n\n" +
+      "Example workflow:\n" +
+      "  1. context_bundle({goal: 'auth handler', compact: true, limit: 10}) → ~2,500 tokens\n" +
+      "  2. Review paths and scores from results\n" +
+      "  3. snippets.get({path: result.context[0].path}) → Get only needed files\n" +
+      "Total: ~5K tokens instead of 55K tokens (90% savings)\n\n" +
       "Returns ranked code snippets with explanations (e.g., 'phrase:page-agent', 'path-keyword:auth', 'dep:login.ts', 'boost:app-file') and automatically optimizes token usage.",
     inputSchema: {
       type: "object",
@@ -118,7 +191,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
           description:
             "If true, omits the 'preview' field to drastically reduce token consumption (~95% reduction). " +
             "Returns only metadata: path, range, why, score. Use with snippets.get for two-tier approach. " +
-            "Default: false (includes preview for backward compatibility).",
+            "Default: true (v0.8.0+). Set to false if you need immediate code previews.",
         },
         profile: {
           type: "string",
@@ -381,7 +454,7 @@ function parseDepsClosureParams(input: unknown): DepsClosureParams {
   return params;
 }
 
-function parseContextBundleParams(input: unknown): ContextBundleParams {
+function parseContextBundleParams(input: unknown, context: ServerContext): ContextBundleParams {
   if (!input || typeof input !== "object") {
     return { goal: "" };
   }
@@ -442,9 +515,21 @@ function parseContextBundleParams(input: unknown): ContextBundleParams {
     params.boost_profile = boostProfile;
   }
 
-  // Parse compact parameter
+  // Parse compact parameter (default: true for token efficiency)
   if (typeof record.compact === "boolean") {
     params.compact = record.compact;
+  } else {
+    params.compact = true; // Default to compact mode (v0.8.0+: breaking change)
+
+    // Show one-time warning about breaking change using WarningManager
+    // forResponse: true adds this warning to the API response
+    context.warningManager.warnOnce(
+      "compact-default-v0.8.0",
+      "BREAKING CHANGE (v0.8.0): compact mode is now default. " +
+        "Set compact: false to restore previous behavior. " +
+        "See CHANGELOG.md for details.",
+      true // Add to API response
+    );
   }
 
   return params;
@@ -535,7 +620,7 @@ async function executeToolByName(
 ): Promise<unknown> {
   switch (toolName) {
     case "context_bundle": {
-      const params = parseContextBundleParams(toolParams);
+      const params = parseContextBundleParams(toolParams, context);
       const handler = async () =>
         await withSpan("context_bundle", async () => await contextBundle(context, params));
       return await degrade.withResource(handler, "duckdb:context_bundle");

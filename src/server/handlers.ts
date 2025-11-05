@@ -103,26 +103,27 @@ const CONFIG_FILES = [
 ] as const;
 
 // Configuration directories (files inside these directories are treated as config)
+// Note: No trailing slashes - exact segment matching prevents false positives
 const CONFIG_DIRECTORIES = [
-  "bootstrap/", // Laravel/Symfony framework bootstrap
-  "config/", // Generic config directory (all frameworks)
-  "migrations/", // Database migrations
-  "db/migrate/", // Ruby on Rails migrations
-  "alembic/versions/", // Python Alembic migrations
-  "seeds/", // Database seeds
-  "fixtures/", // Test fixtures
-  "test-data/", // Test data
-  "locales/", // i18n translations
-  "i18n/", // i18n translations
-  "translations/", // i18n translations
-  "lang/", // i18n translations
-  ".terraform/", // Terraform state
-  "terraform/", // Terraform configs
-  "k8s/", // Kubernetes manifests
-  "kubernetes/", // Kubernetes manifests
-  "ansible/", // Ansible playbooks
-  "cloudformation/", // CloudFormation templates
-  "pulumi/", // Pulumi infrastructure
+  "bootstrap", // Laravel/Symfony framework bootstrap
+  "config", // Generic config directory (all frameworks)
+  "migrations", // Database migrations
+  "db/migrate", // Ruby on Rails migrations
+  "alembic/versions", // Python Alembic migrations
+  "seeds", // Database seeds
+  "fixtures", // Test fixtures
+  "test-data", // Test data
+  "locales", // i18n translations
+  "i18n", // i18n translations
+  "translations", // i18n translations
+  "lang", // i18n translations
+  ".terraform", // Terraform state
+  "terraform", // Terraform configs
+  "k8s", // Kubernetes manifests
+  "kubernetes", // Kubernetes manifests
+  "ansible", // Ansible playbooks
+  "cloudformation", // CloudFormation templates
+  "pulumi", // Pulumi infrastructure
 ] as const;
 
 const CONFIG_EXTENSIONS = [".lock", ".env", ".conf"] as const;
@@ -155,15 +156,25 @@ const CONFIG_PATTERNS = [
  * Check if a file path represents a configuration file
  * Supports multiple languages: JS/TS, Python, Ruby, Go, PHP, Java, Rust, C/C++, Docker, CI/CD
  * Also checks if file is in a config directory (bootstrap/, config/, migrations/, etc.)
+ * Uses exact path segment matching to prevent false positives (e.g., "myconfig/" won't match "config/")
  * @param path - Full file path
  * @param fileName - File name only (extracted from path)
  * @returns true if the file is a configuration file
  */
 function isConfigFile(path: string, fileName: string): boolean {
-  // Check if file is in a config directory
-  const isInConfigDirectory = (CONFIG_DIRECTORIES as readonly string[]).some((dir) =>
-    path.includes(dir)
-  );
+  // Normalize path separators (Windows compatibility)
+  const normalizedPath = path.replace(/\\/g, "/");
+
+  // Check if file is in a config directory using exact path segment matching
+  // This prevents false positives like "myconfig/" matching "config/"
+  const isInConfigDirectory = (CONFIG_DIRECTORIES as readonly string[]).some((dir) => {
+    // Match if path starts with "dir/" or contains "/dir/"
+    return (
+      normalizedPath === dir ||
+      normalizedPath.startsWith(dir + "/") ||
+      normalizedPath.includes("/" + dir + "/")
+    );
+  });
 
   return (
     (CONFIG_FILES as readonly string[]).includes(fileName) ||
@@ -221,6 +232,7 @@ export interface ContextBundleParams {
   profile?: string;
   boost_profile?: "default" | "docs" | "none";
   compact?: boolean; // If true, omit preview field to reduce token usage
+  _compactDefaulted?: boolean; // Internal: true if compact was defaulted to true (v0.8.0 breaking change)
 }
 
 export interface ContextBundleItem {
@@ -234,6 +246,7 @@ export interface ContextBundleItem {
 export interface ContextBundleResult {
   context: ContextBundleItem[];
   tokens_estimate: number;
+  warnings?: string[]; // Client-visible warnings (e.g., breaking changes, deprecations)
 }
 
 export interface SemanticRerankCandidateInput {
@@ -1667,7 +1680,19 @@ export async function contextBundle(
   }
 
   if (materializedCandidates.length === 0) {
-    return { context: [], tokens_estimate: 0 };
+    // Add warning if compact was defaulted (v0.8.0 breaking change notification)
+    const warnings: string[] = [];
+    if (params._compactDefaulted) {
+      warnings.push(
+        "BREAKING CHANGE (v0.8.0): compact mode is now default. " +
+          "Set compact: false to restore previous behavior. See CHANGELOG.md for details."
+      );
+    }
+    return {
+      context: [],
+      tokens_estimate: 0,
+      ...(warnings.length > 0 && { warnings }),
+    };
   }
 
   applyStructuralScores(materializedCandidates, queryEmbedding, weights.structural);
@@ -1765,7 +1790,20 @@ export async function contextBundle(
     return acc + lineCount * 4;
   }, 0);
 
-  return { context: results, tokens_estimate: tokensEstimate };
+  // Add warning if compact was defaulted (v0.8.0 breaking change notification)
+  const warnings: string[] = [];
+  if (params._compactDefaulted) {
+    warnings.push(
+      "BREAKING CHANGE (v0.8.0): compact mode is now default. " +
+        "Set compact: false to restore previous behavior. See CHANGELOG.md for details."
+    );
+  }
+
+  return {
+    context: results,
+    tokens_estimate: tokensEstimate,
+    ...(warnings.length > 0 && { warnings }),
+  };
 }
 
 export async function semanticRerank(

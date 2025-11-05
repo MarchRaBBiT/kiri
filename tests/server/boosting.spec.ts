@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { runIndexer } from "../../src/indexer/cli.js";
 import { ServerContext } from "../../src/server/context.js";
+import { WarningManager } from "../../src/server/rpc.js";
 import { contextBundle, filesSearch, resolveRepoId } from "../../src/server/handlers.js";
 import { DuckDBClient } from "../../src/shared/duckdb.js";
 import { createTempRepo } from "../helpers/test-repo.js";
@@ -45,7 +46,7 @@ describe("Unified Boosting Logic (v0.7.0+)", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
-    const context: ServerContext = { db, repoId };
+    const context: ServerContext = { db, repoId, warningManager: new WarningManager() };
 
     // Run both tools with default profile
     const filesResults = await filesSearch(context, {
@@ -95,7 +96,7 @@ describe("Unified Boosting Logic (v0.7.0+)", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
-    const context: ServerContext = { db, repoId };
+    const context: ServerContext = { db, repoId, warningManager: new WarningManager() };
 
     // Test with 'docs' profile - should boost documentation
     const filesResultsDocs = await filesSearch(context, {
@@ -147,7 +148,7 @@ describe("Unified Boosting Logic (v0.7.0+)", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
-    const context: ServerContext = { db, repoId };
+    const context: ServerContext = { db, repoId, warningManager: new WarningManager() };
 
     // Use a generic query that matches all files
     const results = await filesSearch(context, {
@@ -201,7 +202,7 @@ describe("Unified Boosting Logic (v0.7.0+)", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
-    const context: ServerContext = { db, repoId };
+    const context: ServerContext = { db, repoId, warningManager: new WarningManager() };
 
     const results = await filesSearch(context, {
       query: "test",
@@ -236,7 +237,7 @@ describe("Unified Boosting Logic (v0.7.0+)", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
-    const context: ServerContext = { db, repoId };
+    const context: ServerContext = { db, repoId, warningManager: new WarningManager() };
 
     const bundle = await contextBundle(context, {
       goal: "package configuration",
@@ -268,7 +269,7 @@ describe("Unified Boosting Logic (v0.7.0+)", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
-    const context: ServerContext = { db, repoId };
+    const context: ServerContext = { db, repoId, warningManager: new WarningManager() };
 
     const resultsNone = await filesSearch(context, {
       query: "feature",

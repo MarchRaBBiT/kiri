@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { runIndexer } from "../../src/indexer/cli.js";
 import { ServerContext } from "../../src/server/context.js";
+import { WarningManager } from "../../src/server/rpc.js";
 import { filesSearch, resolveRepoId } from "../../src/server/handlers.js";
 import { DuckDBClient } from "../../src/shared/duckdb.js";
 import { createTempRepo } from "../helpers/test-repo.js";
@@ -40,7 +41,7 @@ describe("files_search", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
-    const context: ServerContext = { db, repoId };
+    const context: ServerContext = { db, repoId, warningManager: new WarningManager() };
 
     const results = await filesSearch(context, { query: "meaning" });
     expect(results.length).toBeGreaterThan(0);
@@ -69,7 +70,7 @@ describe("files_search", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
-    const context: ServerContext = { db, repoId };
+    const context: ServerContext = { db, repoId, warningManager: new WarningManager() };
 
     // Multi-word query: should split into "tools" OR "call" OR "implementation"
     const results = await filesSearch(context, { query: "tools/call implementation" });
@@ -99,7 +100,7 @@ describe("files_search", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
-    const context: ServerContext = { db, repoId };
+    const context: ServerContext = { db, repoId, warningManager: new WarningManager() };
 
     // Hyphen-separated query: should split into "MCP" OR "server" OR "handler"
     const results = await filesSearch(context, { query: "MCP-server-handler" });
@@ -132,7 +133,7 @@ describe("files_search", () => {
       cleanupTargets.push({ dispose: async () => await db.close() });
 
       const repoId = await resolveRepoId(db, repo.path);
-      const context: ServerContext = { db, repoId };
+      const context: ServerContext = { db, repoId, warningManager: new WarningManager() };
 
       const results = await filesSearch(context, {
         query: "route",
@@ -176,7 +177,7 @@ describe("files_search", () => {
       cleanupTargets.push({ dispose: async () => await db.close() });
 
       const repoId = await resolveRepoId(db, repo.path);
-      const context: ServerContext = { db, repoId };
+      const context: ServerContext = { db, repoId, warningManager: new WarningManager() };
 
       const results = await filesSearch(context, {
         query: "routing",
@@ -221,7 +222,7 @@ describe("files_search", () => {
       cleanupTargets.push({ dispose: async () => await db.close() });
 
       const repoId = await resolveRepoId(db, repo.path);
-      const context: ServerContext = { db, repoId };
+      const context: ServerContext = { db, repoId, warningManager: new WarningManager() };
 
       const resultsNone = await filesSearch(context, {
         query: "routing",

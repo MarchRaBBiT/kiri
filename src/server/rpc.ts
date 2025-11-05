@@ -18,8 +18,39 @@ import {
 import { MetricsRegistry } from "./observability/metrics.js";
 import { withSpan } from "./observability/tracing.js";
 
-// Track if compact mode warning has been shown (v0.8.0 breaking change)
-let compactWarningShown = false;
+/**
+ * WarningManager - 警告メッセージの表示を管理するクラス
+ *
+ * 各警告を一度だけ表示するための状態管理を提供します。
+ * グローバル変数を使わずにServerContextにカプセル化することで、
+ * テスタビリティと並行性を改善します。
+ */
+export class WarningManager {
+  private readonly shownWarnings = new Set<string>();
+
+  /**
+   * 指定されたキーの警告をまだ表示していない場合にのみ表示します
+   *
+   * @param key - 警告を識別するユニークなキー
+   * @param message - 表示する警告メッセージ
+   * @returns 警告が表示された場合はtrue、既に表示済みの場合はfalse
+   */
+  warnOnce(key: string, message: string): boolean {
+    if (this.shownWarnings.has(key)) {
+      return false;
+    }
+    console.warn(message);
+    this.shownWarnings.add(key);
+    return true;
+  }
+
+  /**
+   * テスト用：表示済み警告の履歴をクリアします
+   */
+  reset(): void {
+    this.shownWarnings.clear();
+  }
+}
 
 export interface JsonRpcRequest {
   jsonrpc?: string;
@@ -389,7 +420,7 @@ function parseDepsClosureParams(input: unknown): DepsClosureParams {
   return params;
 }
 
-function parseContextBundleParams(input: unknown): ContextBundleParams {
+function parseContextBundleParams(input: unknown, context: ServerContext): ContextBundleParams {
   if (!input || typeof input !== "object") {
     return { goal: "" };
   }
@@ -453,18 +484,18 @@ function parseContextBundleParams(input: unknown): ContextBundleParams {
   // Parse compact parameter (default: true for token efficiency)
   if (typeof record.compact === "boolean") {
     params.compact = record.compact;
+    params._compactDefaulted = false; // User explicitly set compact
   } else {
     params.compact = true; // Default to compact mode (v0.8.0+: breaking change)
+    params._compactDefaulted = true; // Track that we defaulted to compact
 
-    // Show one-time warning about breaking change
-    if (!compactWarningShown) {
-      console.warn(
-        "⚠️  BREAKING CHANGE (v0.8.0): compact mode is now default. " +
-          "Set compact: false to restore previous behavior. " +
-          "See CHANGELOG.md for details."
-      );
-      compactWarningShown = true;
-    }
+    // Show one-time warning about breaking change using WarningManager
+    context.warningManager.warnOnce(
+      "compact-default-v0.8.0",
+      "⚠️  BREAKING CHANGE (v0.8.0): compact mode is now default. " +
+        "Set compact: false to restore previous behavior. " +
+        "See CHANGELOG.md for details."
+    );
   }
 
   return params;
@@ -555,7 +586,7 @@ async function executeToolByName(
 ): Promise<unknown> {
   switch (toolName) {
     case "context_bundle": {
-      const params = parseContextBundleParams(toolParams);
+      const params = parseContextBundleParams(toolParams, context);
       const handler = async () =>
         await withSpan("context_bundle", async () => await contextBundle(context, params));
       return await degrade.withResource(handler, "duckdb:context_bundle");

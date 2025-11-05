@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { runIndexer } from "../../src/indexer/cli.js";
 import { ServerContext } from "../../src/server/context.js";
+import { WarningManager } from "../../src/server/rpc.js";
 import { resolveRepoId, snippetsGet } from "../../src/server/handlers.js";
 import { DuckDBClient } from "../../src/shared/duckdb.js";
 import { createTempRepo } from "../helpers/test-repo.js";
@@ -59,7 +60,7 @@ describe("snippets_get", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
-    const context: ServerContext = { db, repoId };
+    const context: ServerContext = { db, repoId, warningManager: new WarningManager() };
 
     const snippet = await snippetsGet(context, { path: "src/main.ts", start_line: 5 });
     expect(snippet.path).toBe("src/main.ts");
@@ -90,7 +91,7 @@ describe("snippets_get", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
-    const context: ServerContext = { db, repoId };
+    const context: ServerContext = { db, repoId, warningManager: new WarningManager() };
 
     const snippet = await snippetsGet(context, { path: "src/util.ts", start_line: 2, end_line: 3 });
     expect(snippet.startLine).toBe(2);

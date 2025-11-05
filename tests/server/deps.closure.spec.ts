@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { runIndexer } from "../../src/indexer/cli.js";
 import { ServerContext } from "../../src/server/context.js";
+import { WarningManager } from "../../src/server/rpc.js";
 import { depsClosure, resolveRepoId } from "../../src/server/handlers.js";
 import { DuckDBClient } from "../../src/shared/duckdb.js";
 import { createTempRepo } from "../helpers/test-repo.js";
@@ -53,7 +54,7 @@ describe("deps_closure", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
-    const context: ServerContext = { db, repoId };
+    const context: ServerContext = { db, repoId, warningManager: new WarningManager() };
 
     const closure = await depsClosure(context, { path: "src/a.ts", max_depth: 5 });
     expect(closure.root).toBe("src/a.ts");
@@ -94,7 +95,7 @@ describe("deps_closure", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
-    const context: ServerContext = { db, repoId };
+    const context: ServerContext = { db, repoId, warningManager: new WarningManager() };
 
     // src/c.ts を使用しているファイルを探す (inbound)
     const closure = await depsClosure(context, {
@@ -137,7 +138,7 @@ describe("deps_closure", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
-    const context: ServerContext = { db, repoId };
+    const context: ServerContext = { db, repoId, warningManager: new WarningManager() };
 
     // src/a.ts はどのファイルからも使用されていない
     const closure = await depsClosure(context, {

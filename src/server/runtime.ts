@@ -8,6 +8,7 @@ import { ServerContext } from "./context.js";
 import { DegradeController } from "./fallbacks/degradeController.js";
 import { resolveRepoId } from "./handlers.js";
 import { MetricsRegistry } from "./observability/metrics.js";
+import { WarningManager } from "./rpc.js";
 
 export interface CommonServerOptions {
   databasePath: string;
@@ -57,6 +58,7 @@ export async function createServerRuntime(options: CommonServerOptions): Promise
       features: {
         fts: hasFTS,
       },
+      warningManager: new WarningManager(),
     };
 
     const degrade = new DegradeController(repoRoot);

@@ -130,17 +130,22 @@ async function ensureRepo(
 async function persistBlobs(db: DuckDBClient, blobs: Map<string, BlobRecord>): Promise<void> {
   if (blobs.size === 0) return;
 
-  // Use bulk insert for better performance
+  // バッチサイズを1000に制限してスタックオーバーフローを防ぐ
+  const BATCH_SIZE = 1000;
   const blobArray = Array.from(blobs.values());
-  const placeholders = blobArray.map(() => "(?, ?, ?, ?)").join(", ");
-  const sql = `INSERT OR REPLACE INTO blob (hash, size_bytes, line_count, content) VALUES ${placeholders}`;
 
-  const params: unknown[] = [];
-  for (const blob of blobArray) {
-    params.push(blob.hash, blob.sizeBytes, blob.lineCount, blob.content);
+  for (let i = 0; i < blobArray.length; i += BATCH_SIZE) {
+    const batch = blobArray.slice(i, i + BATCH_SIZE);
+    const placeholders = batch.map(() => "(?, ?, ?, ?)").join(", ");
+    const sql = `INSERT OR REPLACE INTO blob (hash, size_bytes, line_count, content) VALUES ${placeholders}`;
+
+    const params: unknown[] = [];
+    for (const blob of batch) {
+      params.push(blob.hash, blob.sizeBytes, blob.lineCount, blob.content);
+    }
+
+    await db.run(sql, params);
   }
-
-  await db.run(sql, params);
 }
 
 async function persistTrees(
@@ -151,25 +156,29 @@ async function persistTrees(
 ): Promise<void> {
   if (records.length === 0) return;
 
-  // Use bulk insert for better performance
-  const placeholders = records.map(() => "(?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
-  const sql = `INSERT OR REPLACE INTO tree (repo_id, commit_hash, path, blob_hash, ext, lang, is_binary, mtime) VALUES ${placeholders}`;
+  // バッチサイズを1000に制限してスタックオーバーフローを防ぐ
+  const BATCH_SIZE = 1000;
+  for (let i = 0; i < records.length; i += BATCH_SIZE) {
+    const batch = records.slice(i, i + BATCH_SIZE);
+    const placeholders = batch.map(() => "(?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
+    const sql = `INSERT OR REPLACE INTO tree (repo_id, commit_hash, path, blob_hash, ext, lang, is_binary, mtime) VALUES ${placeholders}`;
 
-  const params: unknown[] = [];
-  for (const record of records) {
-    params.push(
-      repoId,
-      commitHash,
-      record.path,
-      record.blobHash,
-      record.ext,
-      record.lang,
-      record.isBinary,
-      record.mtimeIso
-    );
+    const params: unknown[] = [];
+    for (const record of batch) {
+      params.push(
+        repoId,
+        commitHash,
+        record.path,
+        record.blobHash,
+        record.ext,
+        record.lang,
+        record.isBinary,
+        record.mtimeIso
+      );
+    }
+
+    await db.run(sql, params);
   }
-
-  await db.run(sql, params);
 }
 
 async function persistFiles(
@@ -179,24 +188,28 @@ async function persistFiles(
 ): Promise<void> {
   if (records.length === 0) return;
 
-  // Use bulk insert for better performance
-  const placeholders = records.map(() => "(?, ?, ?, ?, ?, ?, ?)").join(", ");
-  const sql = `INSERT OR REPLACE INTO file (repo_id, path, blob_hash, ext, lang, is_binary, mtime) VALUES ${placeholders}`;
+  // バッチサイズを1000に制限してスタックオーバーフローを防ぐ
+  const BATCH_SIZE = 1000;
+  for (let i = 0; i < records.length; i += BATCH_SIZE) {
+    const batch = records.slice(i, i + BATCH_SIZE);
+    const placeholders = batch.map(() => "(?, ?, ?, ?, ?, ?, ?)").join(", ");
+    const sql = `INSERT OR REPLACE INTO file (repo_id, path, blob_hash, ext, lang, is_binary, mtime) VALUES ${placeholders}`;
 
-  const params: unknown[] = [];
-  for (const record of records) {
-    params.push(
-      repoId,
-      record.path,
-      record.blobHash,
-      record.ext,
-      record.lang,
-      record.isBinary,
-      record.mtimeIso
-    );
+    const params: unknown[] = [];
+    for (const record of batch) {
+      params.push(
+        repoId,
+        record.path,
+        record.blobHash,
+        record.ext,
+        record.lang,
+        record.isBinary,
+        record.mtimeIso
+      );
+    }
+
+    await db.run(sql, params);
   }
-
-  await db.run(sql, params);
 }
 
 async function persistSymbols(
@@ -304,19 +317,24 @@ async function persistEmbeddings(
 ): Promise<void> {
   if (records.length === 0) return;
 
-  const placeholders = records.map(() => "(?, ?, ?, ?, CURRENT_TIMESTAMP)").join(", ");
-  const sql = `
-    INSERT OR REPLACE INTO file_embedding (
-      repo_id, path, dims, vector_json, updated_at
-    ) VALUES ${placeholders}
-  `;
+  // バッチサイズを1000に制限してスタックオーバーフローを防ぐ
+  const BATCH_SIZE = 1000;
+  for (let i = 0; i < records.length; i += BATCH_SIZE) {
+    const batch = records.slice(i, i + BATCH_SIZE);
+    const placeholders = batch.map(() => "(?, ?, ?, ?, CURRENT_TIMESTAMP)").join(", ");
+    const sql = `
+      INSERT OR REPLACE INTO file_embedding (
+        repo_id, path, dims, vector_json, updated_at
+      ) VALUES ${placeholders}
+    `;
 
-  const params: unknown[] = [];
-  for (const record of records) {
-    params.push(repoId, record.path, record.dims, JSON.stringify(record.vector));
+    const params: unknown[] = [];
+    for (const record of batch) {
+      params.push(repoId, record.path, record.dims, JSON.stringify(record.vector));
+    }
+
+    await db.run(sql, params);
   }
-
-  await db.run(sql, params);
 }
 
 function buildCodeIntel(

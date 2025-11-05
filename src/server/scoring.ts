@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { parseSimpleYaml } from "../shared/utils/simpleYaml.js";
@@ -72,10 +72,10 @@ function loadProfilesFromConfig(): Record<ScoringProfileName, ScoringWeights> {
 
   try {
     // 環境変数でカスタムパスを指定可能
-    // 本番環境（npm install）では dist/config/ を、開発環境では config/ を参照
+    // 開発環境（src/）と本番環境（dist/src/）の両方で動作するようにdirname(__filename)から相対パス解決
+    const __dirname = dirname(fileURLToPath(import.meta.url));
     const configPath =
-      process.env.KIRI_SCORING_CONFIG ??
-      join(fileURLToPath(import.meta.url), "../../config/scoring-profiles.yml");
+      process.env.KIRI_SCORING_CONFIG ?? join(__dirname, "../../../config/scoring-profiles.yml");
 
     const configContent = readFileSync(configPath, "utf-8");
     const parsed = parseSimpleYaml(configContent) as unknown as Record<string, ScoringWeights>;

@@ -296,7 +296,6 @@ function extractQuotedPhrases(text: string): { phrases: string[]; remaining: str
   let match: RegExpExecArray | null;
   let remaining = text;
 
-  // eslint-disable-next-line no-cond-assign
   while ((match = quotePattern.exec(text)) !== null) {
     const phrase = (match[1] || match[2] || "").trim().toLowerCase();
     if (phrase.length >= 3) {

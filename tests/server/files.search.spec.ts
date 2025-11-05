@@ -191,10 +191,14 @@ describe("files_search", () => {
       const docsIndex = results.findIndex((r) => r.path === "docs/routing.md");
 
       expect(readmeIndex).toBeGreaterThanOrEqual(0);
+      expect(docsIndex).toBeGreaterThanOrEqual(0);
 
       // At least one doc file should rank higher than implementation
       if (routerIndex >= 0 && readmeIndex >= 0) {
         expect(readmeIndex).toBeLessThan(routerIndex);
+      }
+      if (routerIndex >= 0 && docsIndex >= 0) {
+        expect(docsIndex).toBeLessThan(routerIndex);
       }
     });
 

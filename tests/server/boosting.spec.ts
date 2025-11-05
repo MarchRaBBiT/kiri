@@ -377,4 +377,52 @@ describe("Unified Boosting Logic (v0.7.0+)", () => {
     }
     // Most likely it will be filtered out entirely, which is also correct
   });
+
+  // ✅ NEW (v0.9.0): Test that boost_profile="docs" still blacklists other directories
+  it("boost_profile='docs' still blacklists other directories (node_modules, .git)", async () => {
+    const repo = await createTempRepo({
+      "src/feature.ts": `export function feature() {\n  return "implementation";\n}\n`,
+      "docs/guide.md": `# Feature Guide\n\nHow to use the feature.\n`,
+      "node_modules/package/index.js": `module.exports = { feature: true };\n`,
+      ".git/config": `[core]\n  repositoryformatversion = 0\n`,
+      "README.md": `# Project\n\nOverview.\n`,
+    });
+    cleanupTargets.push({ dispose: repo.cleanup });
+
+    const dbDir = await mkdtemp(join(tmpdir(), "kiri-docs-other-blacklist-"));
+    const dbPath = join(dbDir, "index.duckdb");
+    cleanupTargets.push({ dispose: async () => await rm(dbDir, { recursive: true, force: true }) });
+
+    await runIndexer({ repoRoot: repo.path, databasePath: dbPath, full: true });
+
+    const db = await DuckDBClient.connect({ databasePath: dbPath });
+    cleanupTargets.push({ dispose: async () => await db.close() });
+
+    const repoId = await resolveRepoId(db, repo.path);
+    const context: ServerContext = { db, repoId, warningManager: new WarningManager() };
+
+    // Test with boost_profile="docs" - other blacklisted dirs should still be excluded
+    const bundleResults = await contextBundle(context, {
+      goal: "feature guide",
+      boost_profile: "docs",
+      limit: 10,
+    });
+
+    // docs/ should be allowed (positive score or included)
+    const docsFile = bundleResults.context.find((r) => r.path === "docs/guide.md");
+    expect(docsFile).toBeDefined();
+    expect(docsFile?.score).toBeGreaterThan(0);
+
+    // node_modules/ should still be blacklisted (negative score or excluded)
+    const nodeModulesFile = bundleResults.context.find((r) => r.path.startsWith("node_modules/"));
+    if (nodeModulesFile) {
+      expect(nodeModulesFile.score).toBeLessThan(0);
+    }
+
+    // .git/ should still be blacklisted (negative score or excluded)
+    const gitFile = bundleResults.context.find((r) => r.path.startsWith(".git/"));
+    if (gitFile) {
+      expect(gitFile.score).toBeLessThan(0);
+    }
+  });
 });

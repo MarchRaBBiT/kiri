@@ -13,7 +13,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Symbol extraction for classes, interfaces, enums, annotations, methods, constructors, and fields
   - Javadoc comment parsing
   - Import dependency resolution with wildcard and static import support
-  - Full test coverage with 18 test cases
+  - Full test coverage with 23 test cases
+
+## [0.9.4] - 2025-11-06
+
+### Fixed
+
+- **Removed non-standard `outputSchema` and `annotations` from MCP tool descriptors**
+  - **Issue**: v0.9.3 introduced `outputSchema` and `annotations` fields which are not part of the MCP 2024-11-05 specification
+  - **Impact**: MCP clients performing strict schema validation rejected tools with these unknown fields
+  - **Solution**: Removed `outputSchema` and `annotations` from `ToolDescriptor` interface and all tool definitions
+  - **Result**: Full compliance with MCP 2024-11-05 protocol specification, restoring compatibility with MCP clients
+  - **Note**: Output format information remains documented in tool `description` fields
+
+## [0.9.3] - 2025-11-06
+
+### Changed
+
+- Aligned the default `security.lock` location with the DuckDB database path and extended the `kiri security verify` CLI to accept `--db` / `--security-lock` overrides for reproducible deployments.
+- Clarified MCP tool descriptors by documenting output schemas, read-only annotations, and degrade-mode behaviour for `files_search`.
+
+### Fixed
+
+- Ensured `files_search` returns the documented array shape even when DuckDB is unavailable and the server is running in degrade mode, preventing schema mismatches in MCP clients.
+- Added integration coverage that verifies degrade-mode compatibility for MCP `tools/call` responses.
+
+## [0.9.2] - 2025-11-06
+
+### Changed
+
+- Documented how `artifacts.editing_path` anchors related files in `context_bundle` responses (English/Japanese API guide) for more discoverable workflows.
+- Added tool descriptor guidance highlighting `artifacts.editing_path` usage within the MCP server metadata.
+
+### Fixed
+
+- Forced Vitest to run with a single fork in config and npm scripts to eliminate tree-sitter/DuckDB worker crashes during CI.
 
 ## [0.9.0] - 2025-11-05
 

@@ -18,14 +18,14 @@ export function outlineToSymbols(
 ): { symbols: SymbolRecord[]; snippets: SnippetRecord[] } {
   const symbols: Array<Omit<SymbolRecord, "symbolId">> = [];
 
-  // offset → line 変換のためのマップを事前構築
-  const offsetToLine = buildOffsetToLineMap(content);
+  // offset → line 変換のための行開始位置配列を事前構築
+  const lineStarts = buildLineStartsArray(content);
 
   function visit(node: Outline): void {
     const kind = mapElementKind(node.element.kind as ElementKind);
     if (kind) {
-      const startLine = offsetToLine.get(node.offset) ?? 1;
-      const endLine = offsetToLine.get(node.offset + node.length) ?? startLine;
+      const startLine = offsetToLine(lineStarts, node.offset);
+      const endLine = offsetToLine(lineStarts, node.offset + node.length);
 
       symbols.push({
         name: node.element.name,
@@ -143,45 +143,48 @@ function buildSignature(node: Outline): string | null {
 }
 
 /**
- * ファイル内容から offset → line 番号のマップを構築
+ * ファイル内容から各行の開始オフセット配列を構築
+ *
+ * メモリ効率改善: Map(O(n))の代わりに配列(O(m))を使用（n=ファイルサイズ、m=行数）
  *
  * @param content - ファイル内容
- * @returns offset → line (1-based) のMap
+ * @returns 各行の開始オフセット配列（0-based offset, 1-based line number）
  */
-function buildOffsetToLineMap(content: string): Map<number, number> {
-  const map = new Map<number, number>();
-  let offset = 0;
-  let line = 1;
-
-  map.set(0, 1); // offset 0 は 1 行目
+function buildLineStartsArray(content: string): number[] {
+  const lineStarts: number[] = [0]; // 1行目は offset 0 から開始
 
   for (let i = 0; i < content.length; i++) {
     if (content[i] === "\n") {
-      line++;
-      map.set(i + 1, line); // 改行の次の文字から新しい行
+      lineStarts.push(i + 1); // 改行の次の文字が次の行の開始
     }
   }
 
-  // 全ての offset に対応できるよう、中間の offset を補完
-  const offsets = Array.from(map.keys()).sort((a, b) => a - b);
-  for (let i = 0; i < offsets.length - 1; i++) {
-    const startOffset = offsets[i]!;
-    const endOffset = offsets[i + 1]!;
-    const lineNumber = map.get(startOffset)!;
+  return lineStarts;
+}
 
-    for (let offset = startOffset; offset < endOffset; offset++) {
-      map.set(offset, lineNumber);
+/**
+ * オフセットから行番号を二分探索で取得
+ *
+ * 時間計算量: O(log m) （m=行数）
+ *
+ * @param lineStarts - 各行の開始オフセット配列
+ * @param offset - 検索対象のオフセット（0-based）
+ * @returns 行番号（1-based）
+ */
+function offsetToLine(lineStarts: number[], offset: number): number {
+  // 二分探索: offset 以下の最大のインデックスを探す
+  let left = 0;
+  let right = lineStarts.length - 1;
+
+  while (left < right) {
+    const mid = Math.floor((left + right + 1) / 2);
+    if (lineStarts[mid]! <= offset) {
+      left = mid;
+    } else {
+      right = mid - 1;
     }
   }
 
-  // 最後のオフセット以降も最後の行番号で埋める
-  const lastOffset = offsets[offsets.length - 1] ?? 0;
-  const lastLine = map.get(lastOffset) ?? 1;
-  for (let offset = lastOffset; offset <= content.length; offset++) {
-    if (!map.has(offset)) {
-      map.set(offset, lastLine);
-    }
-  }
-
-  return map;
+  // インデックスは0-based、行番号は1-basedなので+1
+  return left + 1;
 }

@@ -53,11 +53,14 @@ export class DartAnalysisClient {
   >();
   private serverVersion: string | null = null;
   private initialized = false;
+  private initializePromise: Promise<void> | null = null;
 
   constructor(private options: DartAnalysisClientOptions) {}
 
   /**
    * Analysis Server プロセスを起動し初期化する
+   *
+   * 並行呼び出しを安全に処理: 既に初期化中の場合は同じPromiseを返す
    *
    * @throws MissingToolError - Dart SDK が見つからない場合
    * @throws DAPProtocolError - サーバー起動失敗時
@@ -67,66 +70,86 @@ export class DartAnalysisClient {
       return;
     }
 
-    // Dart SDK 検出
-    const sdkInfo = detectDartSdk();
-    console.log(`[DartAnalysisClient] Detected Dart SDK ${sdkInfo.version} at ${sdkInfo.sdkPath}`);
-
-    // Analysis Server プロセス起動
-    const args = ["--disable-dart-dev", sdkInfo.analysisServerPath, "--protocol=instrumentation"];
-
-    if (this.options.logPath) {
-      args.push(`--instrumentation-log-file=${this.options.logPath}`);
+    // 既に初期化中なら、そのPromiseを返す（並行初期化の競合を防ぐ）
+    if (this.initializePromise) {
+      return this.initializePromise;
     }
 
-    this.process = spawn("dart", args, {
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    this.initializePromise = (async () => {
+      try {
+        // Dart SDK 検出
+        const sdkInfo = detectDartSdk();
+        console.log(
+          `[DartAnalysisClient] Detected Dart SDK ${sdkInfo.version} at ${sdkInfo.sdkPath}`
+        );
 
-    if (!this.process.stdout || !this.process.stdin) {
-      throw new DAPProtocolError("Failed to spawn Analysis Server: stdio not available");
-    }
+        // Analysis Server プロセス起動
+        const args = [
+          "--disable-dart-dev",
+          sdkInfo.analysisServerPath,
+          "--protocol=instrumentation",
+        ];
 
-    // readline で行単位で JSON を読み取る
-    this.readline = createInterface({
-      input: this.process.stdout,
-      crlfDelay: Infinity,
-    });
+        if (this.options.logPath) {
+          args.push(`--instrumentation-log-file=${this.options.logPath}`);
+        }
 
-    this.readline.on("line", (line) => {
-      this.handleMessage(line);
-    });
+        this.process = spawn("dart", args, {
+          stdio: ["pipe", "pipe", "pipe"],
+        });
 
-    this.process.stderr?.on("data", (data) => {
-      console.error(`[DartAnalysisClient] stderr: ${data}`);
-    });
+        if (!this.process.stdout || !this.process.stdin) {
+          throw new DAPProtocolError("Failed to spawn Analysis Server: stdio not available");
+        }
 
-    this.process.on("error", (error) => {
-      console.error(`[DartAnalysisClient] process error:`, error);
-      this.rejectAllPending(
-        new DAPProtocolError(`Analysis Server process error: ${error.message}`)
-      );
-    });
+        // readline で行単位で JSON を読み取る
+        this.readline = createInterface({
+          input: this.process.stdout,
+          crlfDelay: Infinity,
+        });
 
-    this.process.on("exit", (code, signal) => {
-      console.log(`[DartAnalysisClient] process exited: code=${code}, signal=${signal}`);
-      this.rejectAllPending(
-        new DAPProtocolError(`Analysis Server exited unexpectedly: code=${code}`)
-      );
-    });
+        this.readline.on("line", (line) => {
+          this.handleMessage(line);
+        });
 
-    // server.setSubscriptions で接続通知を受け取る
-    await this.sendRequest("server.setSubscriptions", {
-      subscriptions: ["STATUS"],
-    });
+        this.process.stderr?.on("data", (data) => {
+          console.error(`[DartAnalysisClient] stderr: ${data}`);
+        });
 
-    // analysis.setAnalysisRoots でワークスペースルートを設定
-    await this.sendRequest("analysis.setAnalysisRoots", {
-      included: this.options.workspaceRoots,
-      excluded: [],
-    });
+        this.process.on("error", (error) => {
+          console.error(`[DartAnalysisClient] process error:`, error);
+          this.rejectAllPending(
+            new DAPProtocolError(`Analysis Server process error: ${error.message}`)
+          );
+        });
 
-    this.initialized = true;
-    console.log(`[DartAnalysisClient] Initialized with roots:`, this.options.workspaceRoots);
+        this.process.on("exit", (code, signal) => {
+          console.log(`[DartAnalysisClient] process exited: code=${code}, signal=${signal}`);
+          this.rejectAllPending(
+            new DAPProtocolError(`Analysis Server exited unexpectedly: code=${code}`)
+          );
+        });
+
+        // server.setSubscriptions で接続通知を受け取る
+        await this.sendRequest("server.setSubscriptions", {
+          subscriptions: ["STATUS"],
+        });
+
+        // analysis.setAnalysisRoots でワークスペースルートを設定
+        await this.sendRequest("analysis.setAnalysisRoots", {
+          included: this.options.workspaceRoots,
+          excluded: [],
+        });
+
+        this.initialized = true;
+        console.log(`[DartAnalysisClient] Initialized with roots:`, this.options.workspaceRoots);
+      } finally {
+        // 初期化完了（成功/失敗問わず）後はPromiseをリセット
+        this.initializePromise = null;
+      }
+    })();
+
+    await this.initializePromise;
   }
 
   /**

@@ -2,7 +2,7 @@
  * Dart SDK detection and validation utilities
  */
 
-import { execSync } from "node:child_process";
+import { execSync, execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
 
@@ -83,8 +83,9 @@ export function detectDartSdk(): DartSdkInfo {
  */
 function getDartVersion(dartExecutable: string): string {
   try {
-    // dart --version は stderr に出力するため stdio で stderr を取得
-    const output = execSync(`"${dartExecutable}" --version`, {
+    // execFileSync を使用してコマンドインジェクションを防ぐ
+    // 引数を配列で渡すことで安全に実行
+    const output = execFileSync(dartExecutable, ["--version"], {
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -95,7 +96,7 @@ function getDartVersion(dartExecutable: string): string {
     }
     return "unknown";
   } catch (error) {
-    // execSync は stderr に出力する場合でも error.stderr で取得可能
+    // execFileSync は stderr に出力する場合でも error.stderr で取得可能
     if (error && typeof error === "object" && "stderr" in error) {
       const stderr = String(error.stderr);
       const match = stderr.match(/Dart SDK version:\s+(\S+)/);

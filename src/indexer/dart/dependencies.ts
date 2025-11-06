@@ -78,10 +78,10 @@ function analyzeDependencyUri(
   // file: スキーム（ローカルファイル）
   if (uri.startsWith("file://")) {
     const filePath = uri.replace("file://", "");
-    const relativePath = path.posix.relative(workspaceRoot, filePath);
+    const relativePath = path.relative(workspaceRoot, filePath);
 
-    // ワークスペース外のファイルは無視
-    if (relativePath.startsWith("../")) {
+    // ワークスペース外のファイルは無視（Windows互換のため..を含むかチェック）
+    if (relativePath.startsWith("..")) {
       return null;
     }
 
@@ -94,12 +94,12 @@ function analyzeDependencyUri(
 
   // 相対パス（./lib/foo.dart など）
   if (uri.startsWith("./") || uri.startsWith("../")) {
-    const sourceDir = path.posix.dirname(sourceFilePath);
-    const absolutePath = path.posix.normalize(path.posix.join(sourceDir, uri));
-    const relativePath = path.posix.relative(workspaceRoot, absolutePath);
+    const sourceDir = path.dirname(sourceFilePath);
+    const absolutePath = path.normalize(path.join(sourceDir, uri));
+    const relativePath = path.relative(workspaceRoot, absolutePath);
 
-    // ワークスペース外のファイルは無視
-    if (relativePath.startsWith("../")) {
+    // ワークスペース外のファイルは無視（Windows互換のため..を含むかチェック）
+    if (relativePath.startsWith("..")) {
       return null;
     }
 

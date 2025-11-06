@@ -495,6 +495,33 @@ public class MyClass {
       expect(signature).not.toContain("return");
     });
 
+    it("handles multi-line method signatures correctly", () => {
+      const javaCode = `
+public class MyClass {
+  public String processData(
+    String param1,
+    int param2,
+    boolean param3
+  ) {
+    return "result";
+  }
+}
+`.trim();
+
+      const result = analyzeSource("test.java", "Java", javaCode, new Set());
+
+      expect(result.symbols).toHaveLength(2);
+      const signature = result.symbols[1]?.signature ?? "";
+      // 複数行シグネチャは1行に圧縮されるべき
+      expect(signature).toContain("processData");
+      expect(signature).toContain("param1");
+      expect(signature).toContain("param2");
+      expect(signature).toContain("param3");
+      expect(signature).not.toContain("return");
+      // 改行は空白に置き換えられるべき
+      expect(signature).not.toContain("\n");
+    });
+
     it("returns empty result for unsupported language", () => {
       const javaCode = `
 public class MyClass {}

@@ -512,9 +512,10 @@ function sanitizeJavaSignature(node: JavaNode, content: string): string {
   // メソッド本体（{...}）を除外
   const bodyIndex = nodeText.indexOf("{");
   const signatureText = bodyIndex >= 0 ? nodeText.substring(0, bodyIndex) : nodeText;
-  // 最初の200文字に制限し、1行に圧縮
-  const truncated = signatureText.substring(0, 200);
-  return truncated.split(/\r?\n/)[0]?.trim().replace(/\s+/g, " ") ?? "";
+  // 改行を空白に置き換えて1行に圧縮してから200文字に制限
+  // （先に改行処理することで、複数行シグネチャの情報が失われるのを防ぐ）
+  const normalized = signatureText.replace(/\s+/g, " ").trim();
+  return normalized.substring(0, 200);
 }
 
 /**

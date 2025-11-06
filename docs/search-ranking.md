@@ -73,7 +73,7 @@ contextBundle({ goal: "file_embedding vector generation" });
 
 ```typescript
 // 例: lambda/page-agent/handler からセグメント抽出
-contextBundle({ goal: "lambda/page-agent/handler implementation" });
+contextBundle({ goal: "lambda/page-agent/handler request processing error handling" });
 // → パスセグメント: ["lambda", "page-agent", "handler"]
 // → これらのセグメントがファイルパスに含まれる場合にブースト
 ```
@@ -158,6 +158,37 @@ filesSearch({ query: "setup instructions", boost_profile: "docs" });
 // 純粋なBM25スコア
 filesSearch({ query: "authentication", boost_profile: "none" });
 // → ファイルタイプ関係なく、BM25スコアのみ
+```
+
+### ブラックリスト動作（v0.9.0+）
+
+以下のディレクトリはデフォルトプロファイルで強いペナルティ（score = -100）が適用されます:
+
+| ディレクトリ        | デフォルトプロファイル | `boost_profile: "docs"` | 説明                                     |
+| ------------------- | ---------------------- | ----------------------- | ---------------------------------------- |
+| `docs/`             | ❌ score = -100        | ✅ **除外可能**         | ドキュメント専用ディレクトリ             |
+| `tests/`, `test/`   | ❌ score = -100        | ❌ score = -100         | テストファイル（常にペナルティ）         |
+| `node_modules/`     | ❌ score = -100        | ❌ score = -100         | 依存関係（常にペナルティ）               |
+| `.git/`, `.cursor/` | ❌ score = -100        | ❌ score = -100         | メタデータディレクトリ（常にペナルティ） |
+| `dist/`, `build/`   | ❌ score = -100        | ❌ score = -100         | ビルド成果物（常にペナルティ）           |
+| `coverage/`, `tmp/` | ❌ score = -100        | ❌ score = -100         | 一時ファイル（常にペナルティ）           |
+
+**重要な動作変更（v0.9.0）:**
+
+- ✅ **`boost_profile: "docs"` を指定すると `docs/` ディレクトリのブラックリストが解除される**
+- これにより、ドキュメント検索が正しく機能するようになりました（v0.7.0で主張された動作が実際に動作するように修正）
+- 他のブラックリストディレクトリ（`tests/`、`node_modules/` など）は常にペナルティが適用されます
+
+**使用例:**
+
+```typescript
+// デフォルトプロファイル: docs/ はブラックリスト
+contextBundle({ goal: "feature guide" });
+// → docs/guide.md は除外される（score = -100）
+
+// docsプロファイル: docs/ のブラックリストを解除
+contextBundle({ goal: "feature guide", boost_profile: "docs" });
+// → docs/guide.md が正常にランク付けされる（✅ v0.9.0で修正）
 ```
 
 ## スコア計算例

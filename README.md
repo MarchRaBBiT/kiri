@@ -2,7 +2,7 @@
 
 > Intelligent code context extraction for LLMs via Model Context Protocol
 
-[![Version](https://img.shields.io/badge/version-0.8.0-blue.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-0.9.5-blue.svg)](package.json)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.6-blue.svg)](https://www.typescriptlang.org/)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
@@ -157,6 +157,8 @@ KIRI provides 5 MCP tools for intelligent code exploration:
 
 The most powerful tool for getting started with unfamiliar code. Provide a task description, and KIRI returns the most relevant code snippets using phrase-aware tokenization and path-based scoring.
 
+Tip: Avoid leading command words like `find` or `show`; instead list concrete modules, files, and observed symptoms to keep rankings sharp.
+
 **v0.8.0 improvements:**
 
 - **⚡ Compact mode default (BREAKING)**: `compact: true` is now default, reducing token usage by ~95% (55K → 2.5K tokens). Set `compact: false` to restore full preview mode.
@@ -183,7 +185,7 @@ The most powerful tool for getting started with unfamiliar code. Provide a task 
 ```typescript
 // Request
 {
-  "goal": "User authentication flow with JWT tokens",
+  "goal": "auth token refresh bug; file=src/server/auth/session.ts; symptom=expired tokens accepted",
   "limit": 10
 }
 
@@ -192,12 +194,12 @@ The most powerful tool for getting started with unfamiliar code. Provide a task 
 
 **Parameters:**
 
-| Parameter       | Type    | Required | Description                                                                        |
-| --------------- | ------- | -------- | ---------------------------------------------------------------------------------- |
-| `goal`          | string  | Yes      | Task description or question about the code                                        |
-| `limit`         | number  | No       | Max snippets to return (default: 12, max: 20)                                      |
-| `compact`       | boolean | No       | Return only metadata without preview (default: **true** in v0.8.0+, false in v0.7) |
-| `boost_profile` | string  | No       | File type boosting: "default", "docs", "none"                                      |
+| Parameter       | Type    | Required | Description                                                                                                                                                  |
+| --------------- | ------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `goal`          | string  | Yes      | Task description or question about the code                                                                                                                  |
+| `limit`         | number  | No       | Max snippets to return (default: 12, max: 20)                                                                                                                |
+| `compact`       | boolean | No       | Return only metadata without preview (default: **true** in v0.8.0+, false in v0.7)                                                                           |
+| `boost_profile` | string  | No       | File type boosting: `"default"` (prioritizes src/, blacklists docs/), `"docs"` **(prioritizes .md/.yaml, includes docs/ directory)**, `"none"` (no boosting) |
 
 ### 2. files_search
 
@@ -231,14 +233,14 @@ Fast search across all indexed files. Supports multi-word queries, hyphenated te
 
 **Parameters:**
 
-| Parameter       | Type   | Required | Description                                       |
-| --------------- | ------ | -------- | ------------------------------------------------- |
-| `query`         | string | Yes      | Search keywords or phrase                         |
-| `limit`         | number | No       | Max results to return (default: 50, max: 200)     |
-| `lang`          | string | No       | Filter by language (e.g., "typescript", "python") |
-| `ext`           | string | No       | Filter by extension (e.g., ".ts", ".md")          |
-| `path_prefix`   | string | No       | Filter by path prefix (e.g., "src/auth/")         |
-| `boost_profile` | string | No       | File type boosting: "default", "docs", "none"     |
+| Parameter       | Type   | Required | Description                                                                                                                                                  |
+| --------------- | ------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `query`         | string | Yes      | Search keywords or phrase                                                                                                                                    |
+| `limit`         | number | No       | Max results to return (default: 50, max: 200)                                                                                                                |
+| `lang`          | string | No       | Filter by language (e.g., "typescript", "python")                                                                                                            |
+| `ext`           | string | No       | Filter by extension (e.g., ".ts", ".md")                                                                                                                     |
+| `path_prefix`   | string | No       | Filter by path prefix (e.g., "src/auth/")                                                                                                                    |
+| `boost_profile` | string | No       | File type boosting: `"default"` (prioritizes src/, blacklists docs/), `"docs"` **(prioritizes .md/.yaml, includes docs/ directory)**, `"none"` (no boosting) |
 
 ### 3. snippets_get
 
@@ -359,7 +361,7 @@ Refine search results by semantic relevance to your specific query. Useful when 
 You: "How does user authentication work in this project?"
 
 Claude (using KIRI):
-1. Uses context_bundle with goal "user authentication implementation"
+1. Uses context_bundle with goal "user authentication flow JWT validation session management"
 2. Analyzes returned snippets
 3. Explains the authentication flow with code references
 ```

@@ -157,6 +157,8 @@ KIRI provides 5 MCP tools for intelligent code exploration:
 
 The most powerful tool for getting started with unfamiliar code. Provide a task description, and KIRI returns the most relevant code snippets using phrase-aware tokenization and path-based scoring.
 
+Tip: Avoid leading command words like `find` or `show`; instead list concrete modules, files, and observed symptoms to keep rankings sharp.
+
 **v0.8.0 improvements:**
 
 - **⚡ Compact mode default (BREAKING)**: `compact: true` is now default, reducing token usage by ~95% (55K → 2.5K tokens). Set `compact: false` to restore full preview mode.
@@ -183,7 +185,7 @@ The most powerful tool for getting started with unfamiliar code. Provide a task 
 ```typescript
 // Request
 {
-  "goal": "User authentication flow with JWT tokens",
+  "goal": "auth token refresh bug; file=src/server/auth/session.ts; symptom=expired tokens accepted",
   "limit": 10
 }
 

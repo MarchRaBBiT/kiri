@@ -127,6 +127,8 @@ interface ToolDescriptor {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
+  annotations?: Record<string, unknown>;
 }
 
 const SERVER_INFO = {
@@ -138,40 +140,9 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: "context_bundle",
     description:
-      "🎯 PRIMARY TOOL: Extracts relevant code context for a specific task or question.\n\n" +
-      "Use this tool as your first step for any code-related task. It intelligently finds and ranks relevant files and code snippets using:\n" +
-      "- **Phrase-aware tokenization**: Recognizes compound terms (kebab-case like 'page-agent', snake_case like 'user_profile') as single phrases with 2× scoring weight\n" +
-      "- **Path-based scoring**: Boosts files when keywords appear in their path (e.g., searching 'auth' prioritizes src/auth/login.ts)\n" +
-      "- **File type prioritization**: Uses boost_profile to prioritize implementation files over docs (configurable)\n" +
-      "- **Dependency analysis**: Considers import relationships between files\n" +
-      "- **Semantic similarity**: Ranks by structural similarity to your query\n\n" +
-      "IMPORTANT: The 'goal' parameter MUST be a clear and specific description of your objective. Use concrete keywords, not abstract verbs.\n\n" +
-      "PRO TIP: When you already know the file you're touching, pass it through artifacts.editing_path to anchor the search and surface that file together with its dependency neighborhood.\n\n" +
-      "✅ GOOD EXAMPLES (use specific keywords):\n" +
-      "- goal='User authentication flow, JWT token validation'\n" +
-      "- goal='Canvas page routing, API endpoints, navigation patterns'\n" +
-      "- goal='Fix pagination off-by-one error in product listing'\n" +
-      "- goal='Database connection pooling, retry logic'\n" +
-      "- goal='page-agent Lambda handler request processing error handling'  (hyphenated terms recognized as phrases)\n" +
-      "- goal='context_bundle scoring logic'  (underscore terms recognized as phrases)\n\n" +
-      "❌ BAD EXAMPLES (too vague, avoid these):\n" +
-      "- goal='Understand how canvas pages are accessed' (starts with abstract verb)\n" +
-      "- goal='understand' (single word, no context)\n" +
-      "- goal='explore the authentication system' (vague verb + long sentence)\n" +
-      "- goal='fix bug' (which bug? be specific)\n" +
-      "- goal='authentication' (noun only, what about it?)\n" +
-      "- goal='authentication implementation' (too generic - specify: handler? validator? storage?)\n" +
-      "- goal='search implementation' (add concrete aspects: parser, ranking, indexer)\n\n" +
-      "GUIDELINE: Avoid generic terms like 'implementation', 'code', or 'logic' alone. " +
-      "Instead, specify concrete aspects: 'handler', 'validator', 'parser', 'storage', 'error handling', 'data flow'.\n\n" +
-      "TOKEN OPTIMIZATION: Use 'compact: true' to reduce token consumption by ~95%. Returns only metadata (path, range, why, score) without preview field. " +
-      "Combine with snippets.get for two-tier approach: first get candidate list (compact), then fetch selected content.\n\n" +
-      "Example workflow:\n" +
-      "  1. context_bundle({goal: 'auth handler', compact: true, limit: 10}) → ~2,500 tokens\n" +
-      "  2. Review paths and scores from results\n" +
-      "  3. snippets.get({path: result.context[0].path}) → Get only needed files\n" +
-      "Total: ~5K tokens instead of 55K tokens (90% savings)\n\n" +
-      "Returns ranked code snippets with explanations (e.g., 'phrase:page-agent', 'path-keyword:auth', 'dep:login.ts', 'boost:app-file') and automatically optimizes token usage.",
+      "Primary code discovery tool. Provide a concrete `goal` to receive ranked `context` entries containing `path`, `range`, optional `preview`, scoring `why`, and `score`.\n\n" +
+      "Returns {context, tokens_estimate, warnings?}; the tool only reads from the index. Empty or vague goals raise an MCP error that asks for specific keywords.\n\n" +
+      "Example: context_bundle({goal: 'Fix pagination off-by-one in src/catalog/products.ts'}) surfaces the affected files. Invalid: goal='debug' triggers a validation error.",
     inputSchema: {
       type: "object",
       required: ["goal"],
@@ -214,6 +185,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
           properties: {
             editing_path: {
               type: "string",
+              pattern: "^(?!.*\\.\\.)[A-Za-z0-9_./\\-]+$",
               description:
                 "Path to the file currently being edited. Strongly recommended to provide for better context; boosts that file and related dependencies in the bundle output.",
             },
@@ -230,11 +202,24 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         },
       },
     },
+    outputSchema: {
+      type: "object",
+      properties: {
+        context: { type: "array" },
+        tokens_estimate: { type: "number" },
+        warnings: { type: "array" },
+      },
+    },
+    annotations: {
+      readOnlyHint: true,
+    },
   },
   {
     name: "semantic_rerank",
     description:
-      "Re-rank a list of file candidates by semantic similarity to a query text. Uses structural embeddings to compute similarity scores and combines them with existing scores. Use as a REFINEMENT step after files.search or when you have a list of candidates and want to prioritize them by semantic relevance. Not needed with context.bundle (which already does semantic ranking internally). Returns candidates sorted by combined score (base + semantic similarity). Example: after getting 20 search results, rerank them by semantic similarity to 'user authentication flow' to surface the most contextually relevant files.",
+      "Reorders candidate files by embedding similarity to `text`. Use after keyword or heuristic search when you already have `candidates` and want a semantic ranking update without fetching new files.\n\n" +
+      "Returns {candidates: [{path, semantic, base, combined}]}; purely read-only. Missing `text` or an empty candidate list causes an MCP error describing the required inputs.\n\n" +
+      "Example: semantic_rerank({text: 'JWT login flow', candidates: [...]}) reprioritises auth code. Invalid: semantic_rerank({text: '', candidates: [...]}) raises a validation error.",
     inputSchema: {
       type: "object",
       required: ["text", "candidates"],
@@ -257,24 +242,22 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         profile: { type: "string" },
       },
     },
+    outputSchema: {
+      type: "object",
+      properties: {
+        candidates: { type: "array" },
+      },
+    },
+    annotations: {
+      readOnlyHint: true,
+    },
   },
   {
     name: "files_search",
     description:
-      "Search files by specific keywords or identifiers. Use when you know EXACT terms to search for: function names, class names, error messages, or code patterns.\n\n" +
-      "IMPORTANT: For broader exploration like 'understand feature X' or 'how does Y work', use context.bundle instead. This tool is for TARGETED searches with specific identifiers.\n\n" +
-      "✅ GOOD EXAMPLES (specific identifiers):\n" +
-      "- query='validateToken' (exact function name)\n" +
-      "- query='AuthenticationError' (specific class/error)\n" +
-      "- query='Cannot read property' (exact error message)\n" +
-      "- query='import { jwt }' (specific import pattern)\n" +
-      "- query='userId' (variable name)\n\n" +
-      "❌ BAD EXAMPLES (too vague or abstract):\n" +
-      "- query='understand authentication' (use context.bundle instead)\n" +
-      "- query='how login works' (use context.bundle instead)\n" +
-      "- query='explore' (no specific target)\n" +
-      "- query='auth' (too generic, will match too many files)\n\n" +
-      "Supports filters: lang (e.g., 'typescript'), ext (e.g., '.ts'), path_prefix (e.g., 'src/auth/'). Returns matching files with previews and line numbers.",
+      "Token-aware substring search for precise identifiers, error messages, or import fragments. Prefer this tool when you already know the exact string you need to locate; use `context_bundle` for exploratory work.\n\n" +
+      "Returns an array of `{path, preview, matchLine, lang, ext, score}` objects; the tool never mutates the repo. Empty queries raise an MCP error prompting you to provide a concrete keyword.\n\n" +
+      'Example: files_search({query: "AuthenticationError", path_prefix: "src/auth/"}) narrows to auth handlers. Invalid: files_search({query: ""}) reports that the query must be non-empty.',
     inputSchema: {
       type: "object",
       required: ["query"],
@@ -297,6 +280,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         },
         path_prefix: {
           type: "string",
+          pattern: "^(?!.*\\.\\.)[A-Za-z0-9_./\\-]+/?$",
           description: "Filter by path prefix (e.g., 'src/auth/', 'tests/'). No '..' allowed.",
         },
         limit: {
@@ -314,36 +298,90 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         },
       },
     },
+    outputSchema: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          path: { type: "string" },
+          preview: { type: "string" },
+          matchLine: { type: "number" },
+          lang: { type: ["string", "null"] },
+          ext: { type: ["string", "null"] },
+          score: { type: "number" },
+        },
+      },
+    },
+    annotations: {
+      readOnlyHint: true,
+    },
   },
   {
     name: "snippets_get",
     description:
-      "Retrieve code snippets from a specific file path. Intelligently extracts relevant code sections using symbol boundaries (functions, classes, methods) when available. Use when you already know the exact file path and want to read its content efficiently without loading the entire file. Automatically selects appropriate snippet based on start_line or returns symbol-aligned chunks. Reduces token usage compared to reading full files. Use context.bundle instead if you don't know which file to read. Example: path='src/auth/login.ts' returns the most relevant function or class in that file.",
+      "Focused snippet retrieval by file path. The tool uses recorded symbol boundaries to return the smallest readable span, or falls back to the requested line window.\n\n" +
+      "Returns {path, startLine, endLine, content, totalLines, symbolName, symbolKind}; this is a read-only lookup. Missing `path`, binary files, or absent index entries raise an MCP error with guidance to re-run the indexer.\n\n" +
+      "Example: snippets_get({path: 'src/auth/login.ts'}) surfaces the enclosing function. Invalid: snippets_get({path: 'assets/logo.png'}) reports that binary snippets are unsupported.",
     inputSchema: {
       type: "object",
       required: ["path"],
       additionalProperties: true,
       properties: {
-        path: { type: "string" },
+        path: {
+          type: "string",
+          pattern: "^(?!.*\\.\\.)[A-Za-z0-9_./\\-]+$",
+        },
         start_line: { type: "number", minimum: 0 },
         end_line: { type: "number", minimum: 0 },
       },
+    },
+    outputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string" },
+        startLine: { type: "number" },
+        endLine: { type: "number" },
+        content: { type: "string" },
+        totalLines: { type: "number" },
+        symbolName: { type: ["string", "null"] },
+        symbolKind: { type: ["string", "null"] },
+      },
+    },
+    annotations: {
+      readOnlyHint: true,
     },
   },
   {
     name: "deps_closure",
     description:
-      "Traverse the dependency graph from a starting file. Finds all files that depend on the target (inbound) or that the target depends on (outbound). Essential for impact analysis: understanding what breaks if you change a file, tracing import chains, or mapping module relationships. Returns nodes (files/packages) and edges (import statements) with depth levels. Use when: planning refactoring, understanding module boundaries, finding circular dependencies, or analyzing affected files. Example: path='src/utils.ts', direction='inbound' shows all files importing utils.ts. Set max_depth to limit traversal (default 3).",
+      "Dependency graph traversal from a starting file. Use it during impact analysis to map outbound imports or inbound dependents before large refactors.\n\n" +
+      "Returns {root, direction, nodes, edges}; nodes/edges include depth metadata and never mutate repository state. Invalid paths, excessive depth, or non-indexed files raise MCP errors with remediation tips.\n\n" +
+      "Example: deps_closure({path: 'src/shared/config.ts', direction: 'inbound', max_depth: 2}) lists consumers. Invalid: deps_closure({path: '../secret'}) fails path validation.",
     inputSchema: {
       type: "object",
       required: ["path"],
       additionalProperties: true,
       properties: {
-        path: { type: "string" },
+        path: {
+          type: "string",
+          pattern: "^(?!.*\\.\\.)[A-Za-z0-9_./\\-]+$",
+        },
         max_depth: { type: "number", minimum: 0 },
         direction: { type: "string", enum: ["outbound", "inbound"] },
         include_packages: { type: "boolean" },
       },
+    },
+    outputSchema: {
+      type: "object",
+      properties: {
+        root: { type: "string" },
+        direction: { type: "string" },
+        nodes: { type: "array" },
+        edges: { type: "array" },
+      },
+    },
+    annotations: {
+      readOnlyHint: true,
     },
   },
 ];

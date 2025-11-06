@@ -150,6 +150,7 @@ export interface AnalysisError {
 }
 
 // Dart Element Kinds (analysis server documentation)
+// Phase 2で追加: EXTENSION_TYPE, OPERATOR, TYPE_ALIAS
 export type ElementKind =
   | "CLASS"
   | "CLASS_TYPE_ALIAS"
@@ -158,6 +159,7 @@ export type ElementKind =
   | "ENUM"
   | "ENUM_CONSTANT"
   | "EXTENSION"
+  | "EXTENSION_TYPE" // Dart 3.0+
   | "FIELD"
   | "FUNCTION"
   | "FUNCTION_TYPE_ALIAS"
@@ -165,9 +167,11 @@ export type ElementKind =
   | "LIBRARY"
   | "METHOD"
   | "MIXIN"
+  | "OPERATOR" // オペレーターのオーバーロード
   | "PARAMETER"
   | "SETTER"
   | "TOP_LEVEL_VARIABLE"
+  | "TYPE_ALIAS" // type Foo = Bar;
   | "TYPE_PARAMETER"
   | "UNIT_TEST_GROUP"
   | "UNIT_TEST_TEST"

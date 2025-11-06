@@ -61,7 +61,7 @@ export function outlineToSymbols(
 /**
  * Dart ElementKind を KIRI の symbol kind にマッピング
  *
- * MVP では主要な要素のみ対応
+ * Phase 2: EXTENSION_TYPE, OPERATOR, TYPE_ALIAS を追加
  */
 function mapElementKind(kind: ElementKind): string | null {
   switch (kind) {
@@ -70,6 +70,7 @@ function mapElementKind(kind: ElementKind): string | null {
     case "ENUM":
     case "MIXIN":
     case "EXTENSION":
+    case "EXTENSION_TYPE": // Phase 2: Dart 3.0+ extension type
       return "class";
 
     case "FUNCTION":
@@ -77,6 +78,7 @@ function mapElementKind(kind: ElementKind): string | null {
     case "GETTER":
     case "SETTER":
     case "CONSTRUCTOR":
+    case "OPERATOR": // Phase 2: operator overloading
       return "function";
 
     case "FIELD":
@@ -85,6 +87,7 @@ function mapElementKind(kind: ElementKind): string | null {
       return "property";
 
     case "FUNCTION_TYPE_ALIAS":
+    case "TYPE_ALIAS": // Phase 2: type Foo = Bar;
       return "type";
 
     case "LIBRARY":
@@ -92,8 +95,16 @@ function mapElementKind(kind: ElementKind): string | null {
       // KIRI ではファイル単位なので個別に記録しない
       return null;
 
+    case "PARAMETER":
+    case "TYPE_PARAMETER":
+    case "UNIT_TEST_GROUP":
+    case "UNIT_TEST_TEST":
+    case "UNKNOWN":
+      // これらの要素は個別にシンボルとして記録しない
+      return null;
+
     default:
-      // その他の要素は MVP では無視
+      // その他の要素は無視
       return null;
   }
 }

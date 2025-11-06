@@ -6,6 +6,7 @@ import type { SymbolRecord, SnippetRecord, DependencyRecord } from "../codeintel
 import { DartAnalysisClient } from "./client.js";
 import { outlineToSymbols } from "./transform.js";
 import { isDartSdkAvailable } from "./sdk.js";
+import { extractDependencies } from "./dependencies.js";
 
 // グローバルな Analysis Client インスタンス（リポジトリ単位で共有）
 let globalClient: DartAnalysisClient | null = null;
@@ -68,8 +69,15 @@ export async function analyzeDartSource(
 
     const { symbols, snippets } = outlineToSymbols(payload.outline, content);
 
-    // MVP では dependencies は空配列（Phase 3 で実装）
-    const dependencies: DependencyRecord[] = [];
+    // Phase 3: 依存関係を取得
+    let dependencies: DependencyRecord[] = [];
+    try {
+      const dependenciesResult = await client.getLibraryDependencies(filePath);
+      dependencies = extractDependencies(filePath, dependenciesResult, workspaceRoot);
+    } catch (depError) {
+      // 依存関係の取得に失敗しても、シンボル情報は返す
+      console.warn(`[analyzeDartSource] Failed to get dependencies for ${filePath}:`, depError);
+    }
 
     return { symbols, snippets, dependencies };
   } catch (error) {

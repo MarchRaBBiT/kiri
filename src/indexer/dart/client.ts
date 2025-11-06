@@ -11,6 +11,7 @@ import type {
   RpcNotification,
   UpdateContentParams,
   GetOutlineResult,
+  GetLibraryDependenciesResult,
   DartAnalysisPayload,
   ServerConnectedParams,
   ServerErrorParams,
@@ -160,6 +161,25 @@ export class DartAnalysisClient {
     return {
       outline: outlineResult.outline,
     };
+  }
+
+  /**
+   * ライブラリの依存関係を取得（Phase 3）
+   *
+   * @param filePath - 解析対象ファイルの絶対パス
+   * @returns GetLibraryDependenciesResult
+   */
+  async getLibraryDependencies(filePath: string): Promise<GetLibraryDependenciesResult> {
+    if (!this.initialized) {
+      await this.initialize();
+    }
+
+    const result = await this.sendRequest<GetLibraryDependenciesResult>(
+      "analysis.getLibraryDependencies",
+      {}
+    );
+
+    return result;
   }
 
   /**

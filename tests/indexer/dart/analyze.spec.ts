@@ -227,6 +227,7 @@ describe("analyzeDartSource", () => {
     it("correctly handles initialization failure for concurrent waiters", async () => {
       // Fix #17: If initialization fails, all waiting requests should fail
       // and refs should not underflow
+      // Fix #26: Errors are now returned as status:"error" instead of throwing
 
       mockClient.initialize = vi.fn().mockRejectedValue(new Error("Init failed"));
 
@@ -236,9 +237,14 @@ describe("analyzeDartSource", () => {
       const request1 = analyzeDartSource("/test/file1.dart", "class A {}", "/test");
       const request2 = analyzeDartSource("/test/file2.dart", "class B {}", "/test");
 
-      // Both should fail with init error
-      await expect(request1).rejects.toThrow("Init failed");
-      await expect(request2).rejects.toThrow("Init failed");
+      // Both should return error status with init error message
+      const result1 = await request1;
+      const result2 = await request2;
+
+      expect(result1.status).toBe("error");
+      expect(result1.error).toContain("Init failed");
+      expect(result2.status).toBe("error");
+      expect(result2.error).toContain("Init failed");
 
       // Client should have been initialized once (and failed)
       expect(mockClient.initialize).toHaveBeenCalledTimes(1);

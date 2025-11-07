@@ -163,27 +163,40 @@ function getDartVersion(dartExecutable: string): string {
 }
 
 // Fix #5: SDK検出結果をメモ化（大量ファイル処理時の性能改善）
+// Fix #25 (Codex Critical Review Round 4): Don't cache failures permanently - allow retries
 let cachedSdkAvailable: boolean | null = null;
+let cacheTimestamp: number = 0;
+const CACHE_FAILURE_TTL_MS = 60000; // Re-check failed detection after 60 seconds
 
 /**
  * Dart SDK が利用可能かチェック（throws しない版）
  *
  * Fix #5: 結果をメモ化して複数回の子プロセス生成を防ぐ
+ * Fix #25: 失敗時は一定時間後に再検証を許可（一時的な環境問題からの回復を可能にする）
  *
  * @returns SDK が利用可能な場合 true
  */
 export function isDartSdkAvailable(): boolean {
-  // キャッシュがあればそれを返す
-  if (cachedSdkAvailable !== null) {
-    return cachedSdkAvailable;
+  const now = Date.now();
+
+  // Success cache is永続的（環境が変わらない限り有効）
+  if (cachedSdkAvailable === true) {
+    return true;
+  }
+
+  // Failure cache has TTL - retry after expiration
+  if (cachedSdkAvailable === false && now - cacheTimestamp < CACHE_FAILURE_TTL_MS) {
+    return false;
   }
 
   try {
     detectDartSdk();
     cachedSdkAvailable = true;
+    cacheTimestamp = now;
     return true;
   } catch {
     cachedSdkAvailable = false;
+    cacheTimestamp = now;
     return false;
   }
 }

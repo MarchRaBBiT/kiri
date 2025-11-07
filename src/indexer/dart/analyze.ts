@@ -41,6 +41,9 @@ const DART_ANALYSIS_CLIENT_WAIT_MS = parseClientWaitMs();
 // Fix #1 & #2: Pool capacity limiter to enforce MAX_CLIENTS
 const poolLimiter: CapacityLimiter = createCapacityLimiter(MAX_CLIENTS);
 
+// Fix #24 (Codex Critical Review Round 4): Shutdown flag to prevent client respawn during cleanup
+let isShuttingDown = false;
+
 /**
  * Dart Analysis Client の取得（参照カウント方式）
  *
@@ -51,6 +54,13 @@ const poolLimiter: CapacityLimiter = createCapacityLimiter(MAX_CLIENTS);
  * @returns DartAnalysisClient インスタンス
  */
 async function acquireClient(workspaceRoot: string): Promise<DartAnalysisClient> {
+  // Fix #24 (Codex Critical Review Round 4): Check shutdown flag
+  if (isShuttingDown) {
+    throw new Error(
+      `[acquireClient] System is shutting down. Cannot acquire new clients for ${workspaceRoot}.`
+    );
+  }
+
   // Fix #3: Normalize workspace path for Windows case-insensitivity
   const workspaceKey = normalizeWorkspaceKey(workspaceRoot);
   let entry = clients.get(workspaceKey);
@@ -105,16 +115,49 @@ async function acquireClient(workspaceRoot: string): Promise<DartAnalysisClient>
       poolLimiter.release();
       didAcquirePermit = false; // We released it
     } else {
-      // Fix #2: Check if pool is still full after acquiring permit
-      if (clients.size >= MAX_CLIENTS) {
-        // This can happen if all clients became active during our wait
-        poolLimiter.release();
-        didAcquirePermit = false;
-        throw new Error(
-          `[acquireClient] Dart Analysis Server pool is full with ${MAX_CLIENTS} active clients. ` +
-            `Cannot create new client for workspace ${workspaceRoot}. ` +
-            `Consider increasing DART_ANALYSIS_MAX_CLIENTS or reducing concurrent indexing.`
-        );
+      // Fix #23 (Codex Critical Review Round 4): Retry LRU eviction if pool is still full
+      // Instead of immediately throwing, try to evict idle clients and retry
+      while (clients.size >= MAX_CLIENTS) {
+        // Find least recently used idle client
+        let lruWorkspace: string | null = null;
+        let oldestTime = Infinity;
+
+        for (const [ws, ent] of clients.entries()) {
+          if (ent.refs === 0 && ent.lastUsed < oldestTime) {
+            oldestTime = ent.lastUsed;
+            lruWorkspace = ws;
+          }
+        }
+
+        if (lruWorkspace) {
+          // Evict LRU client to make space
+          const lruEntry = clients.get(lruWorkspace)!;
+          if (lruEntry.idleTimer) {
+            clearTimeout(lruEntry.idleTimer);
+          }
+          clients.delete(lruWorkspace);
+          console.log(
+            `[acquireClient] Pool full after acquire, evicting LRU client for ${lruWorkspace}`
+          );
+
+          await lruEntry.client.dispose({ timeoutMs: 2000 }).catch((error) => {
+            console.error(
+              `[acquireClient] Failed to dispose LRU client for ${lruWorkspace}:`,
+              error
+            );
+          });
+          // Note: We don't release permit here because we already acquired one
+          break; // Exit retry loop - we made space
+        } else {
+          // No idle clients available - all clients are active
+          poolLimiter.release();
+          didAcquirePermit = false;
+          throw new Error(
+            `[acquireClient] Dart Analysis Server pool is full with ${MAX_CLIENTS} active clients. ` +
+              `Cannot create new client for workspace ${workspaceRoot}. ` +
+              `Consider increasing DART_ANALYSIS_MAX_CLIENTS or reducing concurrent indexing.`
+          );
+        }
       }
 
       // Create new client only if we still don't have one
@@ -210,7 +253,27 @@ function releaseClient(workspaceRoot: string): void {
 
   // Fix #2: refs が 0 になったらアイドルタイマーを起動（即座に dispose しない）
   // Fix #20 (Codex Critical Review Round 3): IDLE_TTL_MS=0 means "disable TTL" (unlimited hold)
+  // Fix #22 (Codex Critical Review Round 4): Check queue depth - if waiters exist, skip TTL and release immediately
   if (entry.refs === 0) {
+    const stats = poolLimiter.stats();
+
+    // If there are waiters in the queue, skip TTL and release permit immediately
+    if (stats.queueDepth > 0) {
+      console.log(
+        `[releaseClient] Pool has ${stats.queueDepth} waiters, disposing idle client for ${workspaceRoot} immediately`
+      );
+      clients.delete(workspaceKey);
+      entry.client
+        .dispose({ timeoutMs: 2000 })
+        .catch((error) => {
+          console.error(`[releaseClient] Failed to dispose client for ${workspaceRoot}:`, error);
+        })
+        .finally(() => {
+          poolLimiter.release();
+        });
+      return;
+    }
+
     if (IDLE_TTL_MS === 0) {
       // TTL disabled: keep client alive indefinitely (LRU will handle eviction if pool full)
       return;
@@ -272,10 +335,14 @@ export async function analyzeDartSource(
     ? filePath
     : path.resolve(workspaceRoot, filePath);
 
-  // クライアントを取得（参照カウント増加）
-  const client = await acquireClient(workspaceRoot);
+  // Fix #26 (Codex Critical Review Round 4): Wrap acquireClient in try/catch to prevent index rollback
+  // Pool errors and initialization failures should not bubble up and rollback entire repository index
+  let client: DartAnalysisClient | null = null;
 
   try {
+    // クライアントを取得（参照カウント増加）
+    client = await acquireClient(workspaceRoot);
+
     const payload = await client.analyzeFile(absoluteFilePath, content);
 
     const { symbols, snippets } = outlineToSymbols(payload.outline, content);
@@ -292,6 +359,7 @@ export async function analyzeDartSource(
   } catch (error) {
     console.error(`[analyzeDartSource] Failed to analyze ${absoluteFilePath}:`, error);
     // Fix #5: エラー時はstatusとerrorフィールドを返して呼び出し元がリトライ可能にする
+    // Fix #26: This now includes pool acquisition errors and initialization failures
     return {
       symbols: [],
       snippets: [],
@@ -300,8 +368,10 @@ export async function analyzeDartSource(
       error: error instanceof Error ? error.message : String(error),
     };
   } finally {
-    // クライアントを解放（参照カウント減少）
-    releaseClient(workspaceRoot);
+    // Fix #26: Only release if client was successfully acquired
+    if (client) {
+      releaseClient(workspaceRoot);
+    }
   }
 }
 
@@ -321,6 +391,9 @@ export async function cleanup(): Promise<void> {
     return;
   }
   cleanupInProgress = true;
+
+  // Fix #24 (Codex Critical Review Round 4): Set shutdown flag to prevent new client acquisitions
+  isShuttingDown = true;
 
   try {
     const disposePromises: Promise<void>[] = [];
@@ -360,6 +433,8 @@ export async function cleanup(): Promise<void> {
     await Promise.allSettled(disposePromises);
   } finally {
     cleanupInProgress = false;
+    // Fix #24: Reset shutdown flag after cleanup completes (allows re-initialization in tests)
+    isShuttingDown = false;
   }
 }
 

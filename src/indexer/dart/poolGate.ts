@@ -104,6 +104,10 @@ export function createCapacityLimiter(maxCapacity: number): CapacityLimiter {
             )
           );
         }, timeoutMs);
+
+        // Fix #11 (Codex Critical Review): unref() to prevent blocking Node.js exit
+        // Consistent with idle timer pattern in analyze.ts
+        request.timeout.unref();
       }
 
       waitingQueue.push(request);

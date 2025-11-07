@@ -53,70 +53,69 @@ async function acquireClient(workspaceRoot: string): Promise<DartAnalysisClient>
   const workspaceKey = normalizeWorkspaceKey(workspaceRoot);
   let entry = clients.get(workspaceKey);
 
+  // Fix #9 (Codex Critical Review): Track whether this call acquired a permit
+  // to prevent double release when concurrent requests wait on existing initPromise
+  let didAcquirePermit = false;
+
   if (!entry) {
+    // Fix #10 (Codex Critical Review): Try LRU eviction BEFORE acquire()
+    // This ensures eviction actually runs when pool is full, instead of timing out
+    if (clients.size >= MAX_CLIENTS) {
+      // Find least recently used idle client
+      let lruWorkspace: string | null = null;
+      let oldestTime = Infinity;
+
+      for (const [ws, ent] of clients.entries()) {
+        if (ent.refs === 0 && ent.lastUsed < oldestTime) {
+          oldestTime = ent.lastUsed;
+          lruWorkspace = ws;
+        }
+      }
+
+      // Evict LRU client synchronously to free up permit slot
+      if (lruWorkspace) {
+        const lruEntry = clients.get(lruWorkspace)!;
+        if (lruEntry.idleTimer) {
+          clearTimeout(lruEntry.idleTimer);
+        }
+        clients.delete(lruWorkspace);
+        console.log(
+          `[acquireClient] Evicting LRU client for ${lruWorkspace} (pool size: ${MAX_CLIENTS})`
+        );
+
+        // Dispose synchronously and release permit immediately
+        await lruEntry.client.dispose({ timeoutMs: 2000 }).catch((error) => {
+          console.error(`[acquireClient] Failed to dispose LRU client for ${lruWorkspace}:`, error);
+        });
+        poolLimiter.release(); // Free up slot for new client
+      }
+    }
+
     // Fix #1 & #2: Acquire pool permit before creating new client
     // This enforces MAX_CLIENTS limit and provides waiting queue with timeout
     await poolLimiter.acquire({ timeoutMs: DART_ANALYSIS_CLIENT_WAIT_MS });
+    didAcquirePermit = true; // Mark that we acquired a permit
 
     // Re-check after await (another request might have created the same client)
     entry = clients.get(workspaceKey);
     if (entry) {
       // Client was created by concurrent request - release permit and use existing
       poolLimiter.release();
+      didAcquirePermit = false; // We released it
     } else {
-      // Fix #2: Try LRU eviction if pool is full (atomic with permit acquisition)
+      // Fix #2: Check if pool is still full after acquiring permit
       if (clients.size >= MAX_CLIENTS) {
-        // Find least recently used idle client
-        let lruWorkspace: string | null = null;
-        let oldestTime = Infinity;
-
-        for (const [ws, ent] of clients.entries()) {
-          if (ent.refs === 0 && ent.lastUsed < oldestTime) {
-            oldestTime = ent.lastUsed;
-            lruWorkspace = ws;
-          }
-        }
-
-        // Evict LRU client atomically
-        if (lruWorkspace) {
-          const lruEntry = clients.get(lruWorkspace)!;
-          if (lruEntry.idleTimer) {
-            clearTimeout(lruEntry.idleTimer);
-          }
-          clients.delete(lruWorkspace);
-          console.log(
-            `[acquireClient] Evicting LRU client for ${lruWorkspace} (pool size: ${MAX_CLIENTS})`
-          );
-
-          // Dispose in background (don't await to avoid blocking)
-          lruEntry.client
-            .dispose({ timeoutMs: 2000 })
-            .catch((error) => {
-              console.error(
-                `[acquireClient] Failed to dispose LRU client for ${lruWorkspace}:`,
-                error
-              );
-            })
-            .finally(() => {
-              // Fix #2: Release permit after disposal completes
-              poolLimiter.release();
-            });
-        } else {
-          // Fix #7 (Critical Review): No idle client to evict - cannot exceed MAX_CLIENTS
-          // All clients are actively processing files. Release permit and throw error.
-          poolLimiter.release();
-          throw new Error(
-            `[acquireClient] Dart Analysis Server pool is full with ${MAX_CLIENTS} active clients. ` +
-              `Cannot create new client for workspace ${workspaceRoot}. ` +
-              `Consider increasing DART_ANALYSIS_MAX_CLIENTS or reducing concurrent indexing.`
-          );
-        }
+        // This can happen if all clients became active during our wait
+        poolLimiter.release();
+        didAcquirePermit = false;
+        throw new Error(
+          `[acquireClient] Dart Analysis Server pool is full with ${MAX_CLIENTS} active clients. ` +
+            `Cannot create new client for workspace ${workspaceRoot}. ` +
+            `Consider increasing DART_ANALYSIS_MAX_CLIENTS or reducing concurrent indexing.`
+        );
       }
-    }
 
-    // Create new client only if we still don't have one
-    if (!entry) {
-      // 新しいクライアントエントリを作成
+      // Create new client only if we still don't have one
       const client = new DartAnalysisClient({
         workspaceRoots: [workspaceRoot],
       });
@@ -149,8 +148,12 @@ async function acquireClient(workspaceRoot: string): Promise<DartAnalysisClient>
       clients.delete(workspaceKey);
       // Fix #3: skipShutdown で即時強制終了（二重タイムアウト回避）
       await entry.client.dispose({ skipShutdown: true }).catch(() => {});
-      // Fix #1: Release permit on initialization failure
-      poolLimiter.release();
+
+      // Fix #9 (Codex Critical Review): Only release if WE acquired the permit
+      // Concurrent requests waiting on initPromise didn't acquire permits
+      if (didAcquirePermit) {
+        poolLimiter.release();
+      }
       throw error;
     }
   }
@@ -286,22 +289,25 @@ export async function cleanup(): Promise<void> {
       entry.idleTimer = null;
     }
 
-    // 初期化中なら待つ
-    if (entry.initPromise) {
-      disposePromises.push(
-        entry.initPromise
-          .then((client) => client.dispose({ timeoutMs: 2000 }))
-          .catch((error) => {
-            console.error(`[cleanup] Failed to dispose client for ${workspaceRoot}:`, error);
-          })
-      );
-    } else {
-      disposePromises.push(
-        entry.client.dispose({ timeoutMs: 2000 }).catch((error) => {
-          console.error(`[cleanup] Failed to dispose client for ${workspaceRoot}:`, error);
-        })
-      );
-    }
+    // Fix #8 (Codex Critical Review): cleanup() で各クライアント dispose 後に permit を release
+    // これにより cleanup() 後も poolLimiter が正常に機能し、再利用可能になる
+    const disposeAndRelease = async () => {
+      try {
+        if (entry.initPromise) {
+          const client = await entry.initPromise;
+          await client.dispose({ timeoutMs: 2000 });
+        } else {
+          await entry.client.dispose({ timeoutMs: 2000 });
+        }
+      } catch (error) {
+        console.error(`[cleanup] Failed to dispose client for ${workspaceRoot}:`, error);
+      } finally {
+        // Always release pool permit to prevent permit leak
+        poolLimiter.release();
+      }
+    };
+
+    disposePromises.push(disposeAndRelease());
   }
 
   await Promise.allSettled(disposePromises);

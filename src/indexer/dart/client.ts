@@ -2,7 +2,7 @@
  * DartAnalysisClient: Dart Analysis Server との JSON-RPC 通信クライアント
  */
 
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess, execSync } from "node:child_process";
 import { createInterface, type Interface } from "node:readline";
 import PQueue from "p-queue";
 import { detectDartSdk, MissingToolError } from "./sdk.js";
@@ -358,7 +358,7 @@ export class DartAnalysisClient {
               if (process.platform === "win32") {
                 // Windows: Use taskkill for forceful termination
                 // Fix #7 (Critical Review): More aggressive than default kill()
-                const { execSync } = require("node:child_process");
+                // Fix #11 (Codex Critical Review): Use ESM import instead of require()
                 execSync(`taskkill /PID ${this.process.pid} /F /T`, { stdio: "ignore" });
               } else {
                 // Unix: Use SIGKILL for force termination

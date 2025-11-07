@@ -23,6 +23,9 @@ importers:
       tree-sitter-php:
         specifier: ^0.22.8
         version: 0.22.8(tree-sitter@0.22.4)
+      tree-sitter-python:
+        specifier: ^0.23.6
+        version: 0.23.6(tree-sitter@0.22.4)
       tree-sitter-swift:
         specifier: 0.7.1
         version: 0.7.1(tree-sitter@0.22.4)
@@ -2194,6 +2197,14 @@ packages:
       tree_sitter: '*'
     peerDependenciesMeta:
       tree_sitter:
+        optional: true
+
+  tree-sitter-python@0.23.6:
+    resolution: {integrity: sha512-yIM9z0oxKIxT7bAtPOhgoVl6gTXlmlIhue7liFT4oBPF/lha7Ha4dQBS82Av6hMMRZoVnFJI8M6mL+SwWoLD3A==}
+    peerDependencies:
+      tree-sitter: ^0.22.1
+    peerDependenciesMeta:
+      tree-sitter:
         optional: true
 
   tree-sitter-swift@0.7.1:
@@ -4625,6 +4636,13 @@ snapshots:
       globals: 15.15.0
       node-addon-api: 8.5.0
       node-gyp-build: 4.8.4
+      tree-sitter: 0.22.4
+
+  tree-sitter-python@0.23.6(tree-sitter@0.22.4):
+    dependencies:
+      node-addon-api: 8.5.0
+      node-gyp-build: 4.8.4
+    optionalDependencies:
       tree-sitter: 0.22.4
 
   tree-sitter-swift@0.7.1(tree-sitter@0.22.4):

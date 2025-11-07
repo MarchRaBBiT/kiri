@@ -2,6 +2,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 
 import Parser from "tree-sitter";
+import Python from "tree-sitter-python";
 import Swift from "tree-sitter-swift";
 import ts from "typescript";
 
@@ -43,7 +44,7 @@ interface AnalysisResult {
   dependencies: DependencyRecord[];
 }
 
-const SUPPORTED_LANGUAGES = new Set(["TypeScript", "Swift", "PHP"]);
+const SUPPORTED_LANGUAGES = new Set(["TypeScript", "Swift", "PHP", "Python"]);
 
 function sanitizeSignature(source: ts.SourceFile, node: ts.Node): string {
   const start = node.getStart(source);
@@ -80,6 +81,232 @@ function getDocComment(node: ts.Node): string | null {
 
 function toLineNumber(source: ts.SourceFile, position: number): number {
   return source.getLineAndCharacterOfPosition(position).line + 1;
+}
+
+// ========================================
+// Python analyzer helpers
+// ========================================
+
+type PythonNode = Parser.SyntaxNode;
+
+function toPythonLineNumber(position: Parser.Point): number {
+  return position.row + 1;
+}
+
+function sanitizePythonSignature(node: PythonNode, content: string): string {
+  const nodeText = content.substring(node.startIndex, node.endIndex);
+  const newlineIndex = nodeText.indexOf("\n");
+  const signatureText = newlineIndex >= 0 ? nodeText.substring(0, newlineIndex) : nodeText;
+  const truncated = signatureText.substring(0, 200);
+  return truncated.trim().replace(/\s+/g, " ");
+}
+
+function normalizePythonDocstring(raw: string): string {
+  const prefixMatch = raw.match(/^[rRubfRUBF]*/);
+  const prefixLength = prefixMatch ? prefixMatch[0].length : 0;
+  let text = raw.slice(prefixLength);
+
+  const tripleDouble = text.startsWith('"""') && text.endsWith('"""');
+  const tripleSingle = text.startsWith("'''") && text.endsWith("'''");
+  const singleDouble = text.startsWith('"') && text.endsWith('"');
+  const singleSingle = text.startsWith("'") && text.endsWith("'");
+
+  if (tripleDouble || tripleSingle) {
+    text = text.slice(3, -3);
+  } else if (singleDouble || singleSingle) {
+    text = text.slice(1, -1);
+  }
+
+  const lines = text.split(/\r?\n/);
+  // Remove first/last empty lines introduced by triple quotes
+  while (lines.length > 0 && lines[0]?.trim() === "") {
+    lines.shift();
+  }
+  while (lines.length > 0 && lines[lines.length - 1]?.trim() === "") {
+    lines.pop();
+  }
+
+  if (lines.length === 0) {
+    return "";
+  }
+
+  // Dedent based on minimum indentation of non-empty lines
+  const indentation = lines
+    .filter((line) => line.trim() !== "")
+    .reduce((min, line) => {
+      const match = line.match(/^\s*/);
+      const indent = match ? match[0].length : 0;
+      return Math.min(min, indent);
+    }, Number.POSITIVE_INFINITY);
+
+  const dedented =
+    indentation === Number.POSITIVE_INFINITY
+      ? lines
+      : lines.map((line) => line.slice(Math.min(indentation, line.length)));
+
+  return dedented.join("\n").trim();
+}
+
+function getPythonDocstring(node: PythonNode, content: string): string | null {
+  const body = node.childForFieldName?.("body");
+  if (!body) {
+    return null;
+  }
+
+  for (const statement of body.namedChildren) {
+    if (statement.type === "expression_statement") {
+      const stringNode = statement.namedChildren.find((child) => child.type === "string");
+      if (stringNode) {
+        const raw = content.substring(stringNode.startIndex, stringNode.endIndex);
+        const normalized = normalizePythonDocstring(raw);
+        return normalized.length > 0 ? normalized : null;
+      }
+      break;
+    }
+
+    // If the first statement is not an expression statement containing a string literal,
+    // the block has no docstring.
+    if (statement.type !== "comment") {
+      break;
+    }
+  }
+
+  return null;
+}
+
+function isPythonMethod(node: PythonNode): boolean {
+  let current: PythonNode | null = node.parent as PythonNode | null;
+  while (current) {
+    if (current.type === "class_definition") {
+      return true;
+    }
+    current = current.parent as PythonNode | null;
+  }
+  return false;
+}
+
+function extractPythonName(node: PythonNode, content: string): string | null {
+  const nameNode = node.childForFieldName?.("name");
+  if (!nameNode) {
+    return null;
+  }
+  return content.substring(nameNode.startIndex, nameNode.endIndex);
+}
+
+function createPythonSymbolRecords(tree: Parser.Tree, content: string): SymbolRecord[] {
+  const results: Array<Omit<SymbolRecord, "symbolId">> = [];
+
+  const visit = (node: PythonNode): void => {
+    if (node.type === "decorated_definition") {
+      const definition = node.childForFieldName?.("definition");
+      if (definition) {
+        visit(definition);
+      }
+      return;
+    }
+
+    if (node.type === "class_definition") {
+      const name = extractPythonName(node, content);
+      if (name) {
+        results.push({
+          name,
+          kind: "class",
+          rangeStartLine: toPythonLineNumber(node.startPosition),
+          rangeEndLine: toPythonLineNumber(node.endPosition),
+          signature: sanitizePythonSignature(node, content),
+          doc: getPythonDocstring(node, content),
+        });
+      }
+    } else if (node.type === "function_definition") {
+      const name = extractPythonName(node, content);
+      if (name) {
+        const kind = isPythonMethod(node) ? "method" : "function";
+        results.push({
+          name,
+          kind,
+          rangeStartLine: toPythonLineNumber(node.startPosition),
+          rangeEndLine: toPythonLineNumber(node.endPosition),
+          signature: sanitizePythonSignature(node, content),
+          doc: getPythonDocstring(node, content),
+        });
+      }
+    }
+
+    for (const child of node.namedChildren) {
+      visit(child);
+    }
+  };
+
+  visit(tree.rootNode as PythonNode);
+
+  return results
+    .sort((a, b) => a.rangeStartLine - b.rangeStartLine)
+    .map((item, index) => ({ symbolId: index + 1, ...item }));
+}
+
+function collectPythonDependencies(
+  _sourcePath: string,
+  tree: Parser.Tree,
+  content: string,
+  _fileSet: Set<string>
+): DependencyRecord[] {
+  const dependencies = new Map<string, DependencyRecord>();
+
+  const record = (name: string) => {
+    if (!name) return;
+    const module = name.trim();
+    if (module.length === 0) {
+      return;
+    }
+    const key = `package:${module}`;
+    if (!dependencies.has(key)) {
+      dependencies.set(key, { dstKind: "package", dst: module, rel: "import" });
+    }
+  };
+
+  const visit = (node: PythonNode): void => {
+    if (node.type === "import_statement") {
+      for (const child of node.namedChildren) {
+        if (child.type === "aliased_import") {
+          const target = child.childForFieldName?.("name");
+          if (target) {
+            record(content.substring(target.startIndex, target.endIndex));
+          }
+        } else if (child.type === "dotted_name") {
+          record(content.substring(child.startIndex, child.endIndex));
+        }
+      }
+    } else if (node.type === "import_from_statement") {
+      const moduleNode = node.childForFieldName?.("module_name");
+      if (
+        moduleNode &&
+        content.substring(moduleNode.startIndex, moduleNode.endIndex).trim().startsWith(".")
+      ) {
+        // Skip relative imports until proper resolution is implemented.
+      } else if (moduleNode) {
+        record(content.substring(moduleNode.startIndex, moduleNode.endIndex));
+      }
+
+      for (const child of node.namedChildren) {
+        if (child.type === "aliased_import") {
+          const target = child.childForFieldName?.("name");
+          if (target) {
+            record(content.substring(target.startIndex, target.endIndex));
+          }
+        } else if (child.type === "dotted_name") {
+          record(content.substring(child.startIndex, child.endIndex));
+        }
+      }
+    }
+
+    for (const child of node.namedChildren) {
+      visit(child);
+    }
+  };
+
+  visit(tree.rootNode as PythonNode);
+
+  return Array.from(dependencies.values());
 }
 
 // ========================================
@@ -923,6 +1150,35 @@ export function analyzeSource(
     } catch (error) {
       // パース失敗時は空の結果を返して他のファイルの処理を継続
       console.error(`Failed to parse Swift file ${pathInRepo}:`, error);
+      return { symbols: [], snippets: [], dependencies: [] };
+    }
+  }
+
+  // Python言語の場合、tree-sitterを使用
+  if (normalizedLang === "Python") {
+    try {
+      const parser = new Parser();
+
+      if (!Python || typeof Python !== "object") {
+        throw new Error("Tree-sitter language for Python is invalid or undefined");
+      }
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      parser.setLanguage(Python as any);
+      const tree = parser.parse(content);
+      const symbols = createPythonSymbolRecords(tree, content);
+
+      const snippets: SnippetRecord[] = symbols.map((symbol) => ({
+        startLine: symbol.rangeStartLine,
+        endLine: symbol.rangeEndLine,
+        symbolId: symbol.symbolId,
+      }));
+
+      const dependencies = collectPythonDependencies(pathInRepo, tree, content, fileSet);
+
+      return { symbols, snippets, dependencies };
+    } catch (error) {
+      console.error(`Failed to parse Python file ${pathInRepo}:`, error);
       return { symbols: [], snippets: [], dependencies: [] };
     }
   }

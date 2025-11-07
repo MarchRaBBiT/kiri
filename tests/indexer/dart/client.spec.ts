@@ -68,7 +68,7 @@ describe("DartAnalysisClient", () => {
       await client.initialize();
 
       expect(childProcess.spawn).toHaveBeenCalledWith(
-        "dart",
+        "/mock/dart-sdk/bin/dart", // Uses dartExecutable from SDK info
         expect.arrayContaining(["--disable-dart-dev"]),
         expect.any(Object)
       );

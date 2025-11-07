@@ -77,5 +77,6 @@ export function createMockSdkInfo() {
     sdkPath: "/mock/dart-sdk",
     version: "3.2.0",
     analysisServerPath: "/mock/dart-sdk/bin/snapshots/analysis_server.dart.snapshot",
+    dartExecutable: "/mock/dart-sdk/bin/dart", // Windows fix: absolute path for spawn
   };
 }

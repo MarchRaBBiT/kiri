@@ -81,12 +81,13 @@ describe("analyzeDartSource", () => {
     expect(mockClient.analyzeFile).toHaveBeenCalledTimes(2);
   });
 
-  it("disposes old client when workspace root changes", async () => {
+  it("creates separate clients for different workspaces (reference counting)", async () => {
     await analyzeDartSource("/test1/file.dart", "class A {}", "/test1");
     await analyzeDartSource("/test2/file.dart", "class B {}", "/test2");
 
-    expect(mockClient.dispose).toHaveBeenCalledTimes(1);
-    expect(mockClient.initialize).toHaveBeenCalledTimes(2);
+    // Each workspace gets its own client, but they're kept alive for reuse (not disposed immediately)
+    expect(mockClient.dispose).toHaveBeenCalledTimes(0); // No disposal until cleanup()
+    expect(mockClient.initialize).toHaveBeenCalledTimes(2); // One client per workspace
   });
 
   it("returns empty result when Dart SDK is not available", async () => {

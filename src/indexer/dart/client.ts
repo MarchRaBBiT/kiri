@@ -84,6 +84,7 @@ export class DartAnalysisClient {
         );
 
         // Analysis Server プロセス起動
+        // Windows対応: dartExecutable の絶対パスを使用
         const args = [
           "--disable-dart-dev",
           sdkInfo.analysisServerPath,
@@ -94,7 +95,7 @@ export class DartAnalysisClient {
           args.push(`--instrumentation-log-file=${this.options.logPath}`);
         }
 
-        this.process = spawn("dart", args, {
+        this.process = spawn(sdkInfo.dartExecutable, args, {
           stdio: ["pipe", "pipe", "pipe"],
         });
 
@@ -176,14 +177,27 @@ export class DartAnalysisClient {
 
     await this.sendRequest("analysis.updateContent", updateParams);
 
-    // analysis.getOutline でシンボル階層を取得
-    const outlineResult = await this.sendRequest<GetOutlineResult>("analysis.getOutline", {
-      file: filePath,
-    });
+    try {
+      // analysis.getOutline でシンボル階層を取得
+      const outlineResult = await this.sendRequest<GetOutlineResult>("analysis.getOutline", {
+        file: filePath,
+      });
 
-    return {
-      outline: outlineResult.outline,
-    };
+      return {
+        outline: outlineResult.outline,
+      };
+    } finally {
+      // メモリリーク防止: オーバーレイを必ず削除
+      await this.sendRequest("analysis.updateContent", {
+        files: {
+          [filePath]: {
+            type: "remove",
+          },
+        },
+      }).catch((error) => {
+        console.warn(`[analyzeFile] Failed to remove overlay for ${filePath}:`, error);
+      });
+    }
   }
 
   /**

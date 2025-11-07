@@ -5,6 +5,7 @@
  */
 
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { DependencyRecord } from "../codeintel.js";
 import type { GetLibraryDependenciesResult } from "./types.js";
 
@@ -76,20 +77,26 @@ function analyzeDependencyUri(
   }
 
   // file: スキーム（ローカルファイル）
-  if (uri.startsWith("file://")) {
-    const filePath = uri.replace("file://", "");
-    const relativePath = path.relative(workspaceRoot, filePath);
+  if (uri.startsWith("file:")) {
+    try {
+      // fileURLToPath を使用してクロスプラットフォーム対応
+      // Windows: file:///C:/repo/lib/foo.dart → C:\repo\lib\foo.dart
+      // Unix: file:///repo/lib/foo.dart → /repo/lib/foo.dart
+      const absolutePath = fileURLToPath(uri);
+      const relativePath = path.relative(workspaceRoot, absolutePath);
 
-    // ワークスペース外のファイルは無視（Windows互換のため..を含むかチェック）
-    if (relativePath.startsWith("..")) {
-      return null;
+      // ワークスペース外のファイルは無視（クロスプラットフォーム対応）
+      if (!relativePath.startsWith("..") && !path.isAbsolute(relativePath)) {
+        return {
+          dstKind: "path",
+          dst: relativePath,
+          rel: "import",
+        };
+      }
+    } catch (error) {
+      console.warn(`[analyzeDependencyUri] Invalid file URI: ${uri}`, error);
     }
-
-    return {
-      dstKind: "path",
-      dst: relativePath,
-      rel: "import",
-    };
+    return null;
   }
 
   // 相対パス（./lib/foo.dart など）

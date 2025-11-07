@@ -52,6 +52,7 @@ describe("Dart SDK detection", () => {
       expect(result.sdkPath).toBe("/custom/dart-sdk");
       expect(result.version).toBe("3.2.0");
       expect(result.analysisServerPath).toContain("analysis_server.dart.snapshot");
+      expect(result.dartExecutable).toContain("/custom/dart-sdk/bin/dart");
     });
 
     it("detects SDK from PATH when DART_SDK not set", async () => {
@@ -65,6 +66,7 @@ describe("Dart SDK detection", () => {
 
       expect(result.sdkPath).toBe("/usr/local");
       expect(result.version).toBe("3.1.5");
+      expect(result.dartExecutable).toBe("/usr/local/bin/dart");
     });
 
     it("throws MissingToolError when SDK not found", async () => {

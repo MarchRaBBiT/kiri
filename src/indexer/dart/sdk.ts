@@ -10,6 +10,7 @@ export interface DartSdkInfo {
   sdkPath: string;
   version: string;
   analysisServerPath: string;
+  dartExecutable: string; // dart 実行ファイルの絶対パス（Windows対応）
 }
 
 /**
@@ -33,24 +34,35 @@ export class MissingToolError extends Error {
  * @throws MissingToolError - Dart SDKが見つからない場合
  */
 export function detectDartSdk(): DartSdkInfo {
+  // Windows判定
+  const isWindows = process.platform === "win32";
+  const dartExeName = isWindows ? "dart.exe" : "dart";
+
   // 1. DART_SDK 環境変数をチェック
   const dartSdkEnv = process.env.DART_SDK;
   if (dartSdkEnv) {
+    const dartPath = path.join(dartSdkEnv, "bin", dartExeName);
     const snapshotPath = path.join(dartSdkEnv, "bin", "snapshots", "analysis_server.dart.snapshot");
-    if (existsSync(snapshotPath)) {
-      const version = getDartVersion(path.join(dartSdkEnv, "bin", "dart"));
+
+    if (existsSync(snapshotPath) && existsSync(dartPath)) {
+      const version = getDartVersion(dartPath);
       return {
         sdkPath: dartSdkEnv,
         version,
         analysisServerPath: snapshotPath,
+        dartExecutable: dartPath,
       };
     }
   }
 
-  // 2. PATH から dart コマンドを検索
+  // 2. PATH から dart コマンドを検索（プラットフォーム別）
   try {
-    const dartPath = execSync("which dart", { encoding: "utf-8" }).trim();
-    if (dartPath) {
+    const whichCmd = isWindows ? "where" : "which";
+    const dartPathOutput = execSync(`${whichCmd} dart`, { encoding: "utf-8" }).trim();
+    // where は複数行返す可能性があるので最初の行を使用
+    const dartPath = dartPathOutput.split("\n")[0]?.trim();
+
+    if (dartPath && existsSync(dartPath)) {
       const version = getDartVersion(dartPath);
       // dart コマンドから SDK パスを推測
       // 通常 /path/to/dart-sdk/bin/dart なので bin の親ディレクトリ
@@ -62,11 +74,12 @@ export function detectDartSdk(): DartSdkInfo {
           sdkPath,
           version,
           analysisServerPath: snapshotPath,
+          dartExecutable: dartPath,
         };
       }
     }
   } catch {
-    // which dart が失敗した場合は次へ
+    // which/where dart が失敗した場合は次へ
   }
 
   // Dart SDK が見つからない

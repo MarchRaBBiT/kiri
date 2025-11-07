@@ -2,7 +2,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 
 import Parser from "tree-sitter";
-import Python from "tree-sitter-python";
+import Rust from "tree-sitter-rust";
 import Swift from "tree-sitter-swift";
 import ts from "typescript";
 
@@ -44,7 +44,7 @@ interface AnalysisResult {
   dependencies: DependencyRecord[];
 }
 
-const SUPPORTED_LANGUAGES = new Set(["TypeScript", "Swift", "PHP", "Python"]);
+const SUPPORTED_LANGUAGES = new Set(["TypeScript", "Swift", "PHP", "Rust"]);
 
 function sanitizeSignature(source: ts.SourceFile, node: ts.Node): string {
   const start = node.getStart(source);
@@ -84,167 +84,167 @@ function toLineNumber(source: ts.SourceFile, position: number): number {
 }
 
 // ========================================
-// Python analyzer helpers
+// Rust analyzer helpers
 // ========================================
 
-type PythonNode = Parser.SyntaxNode;
+type RustNode = Parser.SyntaxNode;
 
-function toPythonLineNumber(position: Parser.Point): number {
+function toRustLineNumber(position: Parser.Point): number {
   return position.row + 1;
 }
 
-function sanitizePythonSignature(node: PythonNode, content: string): string {
+function sanitizeRustSignature(node: RustNode, content: string): string {
   const nodeText = content.substring(node.startIndex, node.endIndex);
-  const newlineIndex = nodeText.indexOf("\n");
-  const signatureText = newlineIndex >= 0 ? nodeText.substring(0, newlineIndex) : nodeText;
+  const bodyIndex = nodeText.indexOf("{");
+  const signatureText = bodyIndex >= 0 ? nodeText.substring(0, bodyIndex) : nodeText;
   const truncated = signatureText.substring(0, 200);
-  return truncated.trim().replace(/\s+/g, " ");
+  return truncated.split(/\r?\n/)[0]?.trim().replace(/\s+/g, " ") ?? "";
 }
 
-function normalizePythonDocstring(raw: string): string {
-  const prefixMatch = raw.match(/^[rRubfRUBF]*/);
-  const prefixLength = prefixMatch ? prefixMatch[0].length : 0;
-  let text = raw.slice(prefixLength);
-
-  const tripleDouble = text.startsWith('"""') && text.endsWith('"""');
-  const tripleSingle = text.startsWith("'''") && text.endsWith("'''");
-  const singleDouble = text.startsWith('"') && text.endsWith('"');
-  const singleSingle = text.startsWith("'") && text.endsWith("'");
-
-  if (tripleDouble || tripleSingle) {
-    text = text.slice(3, -3);
-  } else if (singleDouble || singleSingle) {
-    text = text.slice(1, -1);
-  }
-
-  const lines = text.split(/\r?\n/);
-  // Remove first/last empty lines introduced by triple quotes
-  while (lines.length > 0 && lines[0]?.trim() === "") {
-    lines.shift();
-  }
-  while (lines.length > 0 && lines[lines.length - 1]?.trim() === "") {
-    lines.pop();
-  }
-
-  if (lines.length === 0) {
-    return "";
-  }
-
-  // Dedent based on minimum indentation of non-empty lines
-  const indentation = lines
-    .filter((line) => line.trim() !== "")
-    .reduce((min, line) => {
-      const match = line.match(/^\s*/);
-      const indent = match ? match[0].length : 0;
-      return Math.min(min, indent);
-    }, Number.POSITIVE_INFINITY);
-
-  const dedented =
-    indentation === Number.POSITIVE_INFINITY
-      ? lines
-      : lines.map((line) => line.slice(Math.min(indentation, line.length)));
-
-  return dedented.join("\n").trim();
-}
-
-function getPythonDocstring(node: PythonNode, content: string): string | null {
-  const body = node.childForFieldName?.("body");
-  if (!body) {
+function extractRustDocCommentText(node: RustNode, content: string): string | null {
+  if (node.type === "line_comment") {
+    const raw = content.substring(node.startIndex, node.endIndex);
+    if (raw.startsWith("///") || raw.startsWith("//!")) {
+      return raw.replace(/^\/\/[/!]\s?/, "");
+    }
     return null;
   }
 
-  for (const statement of body.namedChildren) {
-    if (statement.type === "expression_statement") {
-      const stringNode = statement.namedChildren.find((child) => child.type === "string");
-      if (stringNode) {
-        const raw = content.substring(stringNode.startIndex, stringNode.endIndex);
-        const normalized = normalizePythonDocstring(raw);
-        return normalized.length > 0 ? normalized : null;
+  if (node.type === "block_comment") {
+    const raw = content.substring(node.startIndex, node.endIndex).trim();
+    if (raw.startsWith("/**") || raw.startsWith("/*!")) {
+      let inner = raw.slice(3);
+      if (inner.endsWith("*/")) {
+        inner = inner.slice(0, -2);
       }
-      break;
-    }
-
-    // If the first statement is not an expression statement containing a string literal,
-    // the block has no docstring.
-    if (statement.type !== "comment") {
-      break;
+      inner = inner.replace(/^\s*\*\s?/gm, "");
+      return inner.trim();
     }
   }
 
   return null;
 }
 
-function isPythonMethod(node: PythonNode): boolean {
-  let current: PythonNode | null = node.parent as PythonNode | null;
+function getRustDocComment(node: RustNode, content: string): string | null {
+  const docLines: string[] = [];
+  let current = node.previousSibling as RustNode | null;
+
   while (current) {
-    if (current.type === "class_definition") {
+    if (current.type === "attribute_item" || current.type === "inner_attribute_item") {
+      current = current.previousSibling as RustNode | null;
+      continue;
+    }
+
+    const docText = extractRustDocCommentText(current, content);
+    if (docText !== null) {
+      docLines.unshift(docText);
+      current = current.previousSibling as RustNode | null;
+      continue;
+    }
+
+    break;
+  }
+
+  if (docLines.length === 0) {
+    return null;
+  }
+
+  return docLines.join("\n").trim() || null;
+}
+
+function hasRustAncestorOfType(node: RustNode, type: string): boolean {
+  let current = node.parent as RustNode | null;
+  while (current) {
+    if (current.type === type) {
       return true;
     }
-    current = current.parent as PythonNode | null;
+    current = current.parent as RustNode | null;
   }
   return false;
 }
 
-function extractPythonName(node: PythonNode, content: string): string | null {
-  const nameNode = node.childForFieldName?.("name");
-  if (!nameNode) {
-    return null;
+function determineRustFunctionKind(node: RustNode): string {
+  if (hasRustAncestorOfType(node, "trait_item")) {
+    return "trait_method";
   }
-  return content.substring(nameNode.startIndex, nameNode.endIndex);
+  if (hasRustAncestorOfType(node, "impl_item")) {
+    return "method";
+  }
+  return "function";
 }
 
-function createPythonSymbolRecords(tree: Parser.Tree, content: string): SymbolRecord[] {
+function extractRustName(node: RustNode, content: string): string | null {
+  const nameNode = node.childForFieldName?.("name");
+  if (nameNode) {
+    return content.substring(nameNode.startIndex, nameNode.endIndex);
+  }
+  return null;
+}
+
+function createRustSymbolRecords(tree: Parser.Tree, content: string): SymbolRecord[] {
   const results: Array<Omit<SymbolRecord, "symbolId">> = [];
 
-  const visit = (node: PythonNode): void => {
-    if (node.type === "decorated_definition") {
-      const definition = node.childForFieldName?.("definition");
-      if (definition) {
-        visit(definition);
-      }
+  const addSymbol = (node: RustNode, kind: string, nameOverride?: string): void => {
+    const name = nameOverride ?? extractRustName(node, content);
+    if (!name) {
       return;
     }
+    results.push({
+      name,
+      kind,
+      rangeStartLine: toRustLineNumber(node.startPosition),
+      rangeEndLine: toRustLineNumber(node.endPosition),
+      signature: sanitizeRustSignature(node, content),
+      doc: getRustDocComment(node, content),
+    });
+  };
 
-    if (node.type === "class_definition") {
-      const name = extractPythonName(node, content);
-      if (name) {
-        results.push({
-          name,
-          kind: "class",
-          rangeStartLine: toPythonLineNumber(node.startPosition),
-          rangeEndLine: toPythonLineNumber(node.endPosition),
-          signature: sanitizePythonSignature(node, content),
-          doc: getPythonDocstring(node, content),
-        });
-      }
-    } else if (node.type === "function_definition") {
-      const name = extractPythonName(node, content);
-      if (name) {
-        const kind = isPythonMethod(node) ? "method" : "function";
-        results.push({
-          name,
-          kind,
-          rangeStartLine: toPythonLineNumber(node.startPosition),
-          rangeEndLine: toPythonLineNumber(node.endPosition),
-          signature: sanitizePythonSignature(node, content),
-          doc: getPythonDocstring(node, content),
-        });
-      }
+  const visit = (node: RustNode): void => {
+    switch (node.type) {
+      case "function_item":
+        addSymbol(node, determineRustFunctionKind(node));
+        break;
+      case "struct_item":
+        addSymbol(node, "struct");
+        break;
+      case "enum_item":
+        addSymbol(node, "enum");
+        break;
+      case "enum_variant":
+        addSymbol(node, "enum_variant");
+        break;
+      case "trait_item":
+        addSymbol(node, "trait");
+        break;
+      case "type_item":
+        addSymbol(node, "type_alias");
+        break;
+      case "const_item":
+        addSymbol(node, "const");
+        break;
+      case "mod_item":
+        addSymbol(node, "module");
+        break;
+      case "macro_definition":
+        addSymbol(node, "macro");
+        break;
+      default:
+        break;
     }
 
     for (const child of node.namedChildren) {
-      visit(child);
+      visit(child as RustNode);
     }
   };
 
-  visit(tree.rootNode as PythonNode);
+  visit(tree.rootNode as RustNode);
 
   return results
     .sort((a, b) => a.rangeStartLine - b.rangeStartLine)
     .map((item, index) => ({ symbolId: index + 1, ...item }));
 }
 
-function collectPythonDependencies(
+function collectRustDependencies(
   _sourcePath: string,
   tree: Parser.Tree,
   content: string,
@@ -252,59 +252,46 @@ function collectPythonDependencies(
 ): DependencyRecord[] {
   const dependencies = new Map<string, DependencyRecord>();
 
-  const record = (name: string) => {
-    if (!name) return;
-    const module = name.trim();
-    if (module.length === 0) {
+  const record = (raw: string | null) => {
+    if (!raw) return;
+    const candidate = raw.trim();
+    if (
+      candidate.length === 0 ||
+      candidate === "crate" ||
+      candidate === "self" ||
+      candidate === "super"
+    ) {
       return;
     }
-    const key = `package:${module}`;
+    const key = `package:${candidate}`;
     if (!dependencies.has(key)) {
-      dependencies.set(key, { dstKind: "package", dst: module, rel: "import" });
+      dependencies.set(key, { dstKind: "package", dst: candidate, rel: "import" });
     }
   };
 
-  const visit = (node: PythonNode): void => {
-    if (node.type === "import_statement") {
-      for (const child of node.namedChildren) {
-        if (child.type === "aliased_import") {
-          const target = child.childForFieldName?.("name");
-          if (target) {
-            record(content.substring(target.startIndex, target.endIndex));
-          }
-        } else if (child.type === "dotted_name") {
-          record(content.substring(child.startIndex, child.endIndex));
+  const visit = (node: RustNode): void => {
+    if (node.type === "use_declaration") {
+      const argument = node.childForFieldName?.("argument");
+      if (argument) {
+        const text = content.substring(argument.startIndex, argument.endIndex);
+        const match = text.match(/([A-Za-z_][A-Za-z0-9_]*)/);
+        if (match) {
+          record(match[1]);
         }
       }
-    } else if (node.type === "import_from_statement") {
-      const moduleNode = node.childForFieldName?.("module_name");
-      if (
-        moduleNode &&
-        content.substring(moduleNode.startIndex, moduleNode.endIndex).trim().startsWith(".")
-      ) {
-        // Skip relative imports until proper resolution is implemented.
-      } else if (moduleNode) {
-        record(content.substring(moduleNode.startIndex, moduleNode.endIndex));
-      }
-
-      for (const child of node.namedChildren) {
-        if (child.type === "aliased_import") {
-          const target = child.childForFieldName?.("name");
-          if (target) {
-            record(content.substring(target.startIndex, target.endIndex));
-          }
-        } else if (child.type === "dotted_name") {
-          record(content.substring(child.startIndex, child.endIndex));
-        }
+    } else if (node.type === "extern_crate_declaration") {
+      const nameNode = node.childForFieldName?.("name");
+      if (nameNode) {
+        record(content.substring(nameNode.startIndex, nameNode.endIndex));
       }
     }
 
     for (const child of node.namedChildren) {
-      visit(child);
+      visit(child as RustNode);
     }
   };
 
-  visit(tree.rootNode as PythonNode);
+  visit(tree.rootNode as RustNode);
 
   return Array.from(dependencies.values());
 }
@@ -1154,19 +1141,19 @@ export function analyzeSource(
     }
   }
 
-  // Python言語の場合、tree-sitterを使用
-  if (normalizedLang === "Python") {
+  // Rust言語の場合、tree-sitterを使用
+  if (normalizedLang === "Rust") {
     try {
       const parser = new Parser();
 
-      if (!Python || typeof Python !== "object") {
-        throw new Error("Tree-sitter language for Python is invalid or undefined");
+      if (!Rust || typeof Rust !== "object") {
+        throw new Error("Tree-sitter language for Rust is invalid or undefined");
       }
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      parser.setLanguage(Python as any);
+      parser.setLanguage(Rust as any);
       const tree = parser.parse(content);
-      const symbols = createPythonSymbolRecords(tree, content);
+      const symbols = createRustSymbolRecords(tree, content);
 
       const snippets: SnippetRecord[] = symbols.map((symbol) => ({
         startLine: symbol.rangeStartLine,
@@ -1174,11 +1161,11 @@ export function analyzeSource(
         symbolId: symbol.symbolId,
       }));
 
-      const dependencies = collectPythonDependencies(pathInRepo, tree, content, fileSet);
+      const dependencies = collectRustDependencies(pathInRepo, tree, content, fileSet);
 
       return { symbols, snippets, dependencies };
     } catch (error) {
-      console.error(`Failed to parse Python file ${pathInRepo}:`, error);
+      console.error(`Failed to parse Rust file ${pathInRepo}:`, error);
       return { symbols: [], snippets: [], dependencies: [] };
     }
   }

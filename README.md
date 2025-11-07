@@ -612,8 +612,9 @@ KIRI provides AST-based symbol extraction for the following languages:
 | **TypeScript** | `.ts`, `.tsx` | `class`, `interface`, `enum`, `function`, `method`                                       | TypeScript Compiler API             |
 | **Swift**      | `.swift`      | `class`, `struct`, `protocol`, `enum`, `extension`, `func`, `init`, `property`           | tree-sitter-swift                   |
 | **PHP**        | `.php`        | `class`, `interface`, `trait`, `function`, `method`, `property`, `constant`, `namespace` | tree-sitter-php (pure & HTML-mixed) |
+| **Rust**       | `.rs`         | `struct`, `enum`, `enum_variant`, `trait`, `function`, `method`, `macro`, `module`, etc. | tree-sitter-rust                    |
 
-Other languages are detected and indexed but use full-file snippets instead of symbol-level extraction. Support for additional languages (Rust, Go, Python, Java, etc.) is planned.
+Other languages are detected and indexed but use full-file snippets instead of symbol-level extraction. Support for additional languages (Go, Java, etc.) is planned.
 
 ## 🏗️ How It Works
 

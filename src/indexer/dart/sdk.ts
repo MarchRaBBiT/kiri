@@ -2,9 +2,12 @@
  * Dart SDK detection and validation utilities
  */
 
-import { execSync, execFileSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
+
+// Fix #6: SDK detection timeout (default: 5000ms)
+const SDK_DETECT_TIMEOUT_MS = parseInt(process.env.DART_SDK_DETECT_TIMEOUT_MS ?? "5000", 10);
 
 export interface DartSdkInfo {
   sdkPath: string;
@@ -56,9 +59,25 @@ export function detectDartSdk(): DartSdkInfo {
   }
 
   // 2. PATH から dart コマンドを検索（プラットフォーム別）
+  // Fix #6: Use spawnSync with timeout to prevent hanging on network issues
   try {
     const whichCmd = isWindows ? "where" : "which";
-    const dartPathOutput = execSync(`${whichCmd} dart`, { encoding: "utf-8" }).trim();
+    const result = spawnSync(whichCmd, ["dart"], {
+      encoding: "utf-8",
+      timeout: SDK_DETECT_TIMEOUT_MS,
+      killSignal: isWindows ? "SIGTERM" : "SIGKILL",
+    });
+
+    if (result.error) {
+      throw result.error;
+    }
+
+    if (result.status !== 0) {
+      // Command failed (dart not found in PATH)
+      throw new Error(`${whichCmd} dart failed with status ${result.status}`);
+    }
+
+    const dartPathOutput = (result.stdout || "").trim();
     // where は複数行返す可能性があるので最初の行を使用
     const dartPath = dartPathOutput.split("\n")[0]?.trim();
 
@@ -67,15 +86,37 @@ export function detectDartSdk(): DartSdkInfo {
       // dart コマンドから SDK パスを推測
       // 通常 /path/to/dart-sdk/bin/dart なので bin の親ディレクトリ
       const sdkPath = path.dirname(path.dirname(dartPath));
-      const snapshotPath = path.join(sdkPath, "bin", "snapshots", "analysis_server.dart.snapshot");
 
-      if (existsSync(snapshotPath)) {
-        return {
+      // Fix #2: Flutter SDK support - try multiple snapshot locations
+      // Flutter wrapper: <flutter>/bin/dart → snapshot at <flutter>/bin/cache/dart-sdk/bin/snapshots/
+      // Standalone SDK: <dart-sdk>/bin/dart → snapshot at <dart-sdk>/bin/snapshots/
+      const snapshotCandidates = [
+        path.join(sdkPath, "bin", "snapshots", "analysis_server.dart.snapshot"),
+        path.join(
           sdkPath,
-          version,
-          analysisServerPath: snapshotPath,
-          dartExecutable: dartPath,
-        };
+          "bin",
+          "cache",
+          "dart-sdk",
+          "bin",
+          "snapshots",
+          "analysis_server.dart.snapshot"
+        ),
+      ];
+
+      for (const snapshotPath of snapshotCandidates) {
+        if (existsSync(snapshotPath)) {
+          // Flutter SDKの場合はactual SDK pathを調整
+          const actualSdkPath = snapshotPath.includes(path.join("cache", "dart-sdk"))
+            ? path.join(sdkPath, "bin", "cache", "dart-sdk")
+            : sdkPath;
+
+          return {
+            sdkPath: actualSdkPath,
+            version,
+            analysisServerPath: snapshotPath,
+            dartExecutable: dartPath,
+          };
+        }
       }
     }
   } catch {
@@ -95,42 +136,61 @@ export function detectDartSdk(): DartSdkInfo {
  * @returns バージョン文字列（例: "3.2.0"）
  */
 function getDartVersion(dartExecutable: string): string {
-  try {
-    // execFileSync を使用してコマンドインジェクションを防ぐ
-    // 引数を配列で渡すことで安全に実行
-    const output = execFileSync(dartExecutable, ["--version"], {
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    // "Dart SDK version: 3.2.0 (stable) ..." のような出力から抽出
-    const match = output.match(/Dart SDK version:\s+(\S+)/);
-    if (match?.[1]) {
-      return match[1];
-    }
-    return "unknown";
-  } catch (error) {
-    // execFileSync は stderr に出力する場合でも error.stderr で取得可能
-    if (error && typeof error === "object" && "stderr" in error) {
-      const stderr = String(error.stderr);
-      const match = stderr.match(/Dart SDK version:\s+(\S+)/);
-      if (match?.[1]) {
-        return match[1];
-      }
-    }
-    return "unknown";
+  // Fix #6: Use spawnSync with timeout to prevent hanging
+  const isWindows = process.platform === "win32";
+  const result = spawnSync(dartExecutable, ["--version"], {
+    encoding: "utf-8",
+    timeout: SDK_DETECT_TIMEOUT_MS,
+    killSignal: isWindows ? "SIGTERM" : "SIGKILL",
+  });
+
+  // Check stdout first, then stderr (dart --version outputs to stderr)
+  const output = result.stdout || result.stderr || "";
+  const match = output.match(/Dart SDK version:\s+(\S+)/);
+
+  if (match?.[1]) {
+    return match[1];
   }
+
+  // If timeout or other error occurred, log it
+  if (result.error || result.signal) {
+    console.warn(
+      `[getDartVersion] Failed to get version: error=${result.error?.message}, signal=${result.signal}`
+    );
+  }
+
+  return "unknown";
 }
+
+// Fix #5: SDK検出結果をメモ化（大量ファイル処理時の性能改善）
+let cachedSdkAvailable: boolean | null = null;
 
 /**
  * Dart SDK が利用可能かチェック（throws しない版）
  *
+ * Fix #5: 結果をメモ化して複数回の子プロセス生成を防ぐ
+ *
  * @returns SDK が利用可能な場合 true
  */
 export function isDartSdkAvailable(): boolean {
+  // キャッシュがあればそれを返す
+  if (cachedSdkAvailable !== null) {
+    return cachedSdkAvailable;
+  }
+
   try {
     detectDartSdk();
+    cachedSdkAvailable = true;
     return true;
   } catch {
+    cachedSdkAvailable = false;
     return false;
   }
+}
+
+/**
+ * SDK検出キャッシュを無効化（テスト用）
+ */
+export function invalidateSdkCache(): void {
+  cachedSdkAvailable = null;
 }

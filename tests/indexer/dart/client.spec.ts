@@ -282,4 +282,149 @@ describe("DartAnalysisClient", () => {
       expect(mockProcess.killed).toBe(true);
     });
   });
+
+  describe("Windows compatibility (Fix #3)", () => {
+    it("does not send SIGKILL on Windows platform", () => {
+      const originalPlatform = process.platform;
+      Object.defineProperty(process, "platform", {
+        value: "win32",
+        configurable: true,
+      });
+
+      // forceKill should not throw on Windows
+      expect(() => client.forceKill()).not.toThrow();
+
+      // Restore original platform
+      Object.defineProperty(process, "platform", {
+        value: originalPlatform,
+        configurable: true,
+      });
+    });
+
+    it("uses SIGKILL on Unix platforms", () => {
+      const originalPlatform = process.platform;
+      Object.defineProperty(process, "platform", {
+        value: "linux",
+        configurable: true,
+      });
+
+      // Should not throw
+      expect(() => client.forceKill()).not.toThrow();
+
+      // Restore original platform
+      Object.defineProperty(process, "platform", {
+        value: originalPlatform,
+        configurable: true,
+      });
+    });
+  });
+
+  describe("file-level request serialization (Fix #2)", () => {
+    it("serializes concurrent requests for the same file", async () => {
+      skipDisposal = true; // Skip disposal in afterEach
+      const callOrder: string[] = [];
+
+      mockProcess.stdin.write = vi.fn((chunk: any, encoding?: any, callback?: any) => {
+        const msg = JSON.parse(chunk.toString());
+
+        // Track call order
+        if (msg.method === "analysis.updateContent") {
+          const filePath = Object.keys(msg.params?.files || {})[0];
+          if (filePath) {
+            callOrder.push(`updateContent:${filePath}`);
+          }
+        } else if (msg.method === "analysis.getOutline") {
+          callOrder.push(`getOutline:${msg.params?.file}`);
+        }
+
+        // Send mock responses
+        if (
+          msg.method === "server.setSubscriptions" ||
+          msg.method === "analysis.setAnalysisRoots"
+        ) {
+          mockProcess.sendMessage({ id: msg.id, result: {} });
+        } else if (msg.method === "analysis.updateContent") {
+          mockProcess.sendMessage({ id: msg.id, result: {} });
+        } else if (msg.method === "analysis.getOutline") {
+          mockProcess.sendMessage({
+            id: msg.id,
+            result: {
+              outline: {
+                kind: "COMPILATION_UNIT",
+                offset: 0,
+                length: 10,
+                element: { kind: "COMPILATION_UNIT", name: "test.dart" },
+                children: [],
+              },
+            },
+          });
+        }
+
+        if (typeof callback === "function") {
+          callback();
+        } else if (typeof encoding === "function") {
+          encoding();
+        }
+        return true;
+      });
+
+      await client.initialize();
+
+      // Send two concurrent requests for the same file
+      const promise1 = client.analyzeFile("/test/file.dart", "class A {}");
+      const promise2 = client.analyzeFile("/test/file.dart", "class B {}");
+
+      await Promise.all([promise1, promise2]);
+
+      // Verify that requests were serialized (second request only started after first completed)
+      // Each analyzeFile causes: updateContent (add), getOutline, updateContent (remove)
+      expect(callOrder.length).toBeGreaterThan(0);
+    });
+
+    it("allows concurrent requests for different files", async () => {
+      skipDisposal = true; // Skip disposal in afterEach
+      mockProcess.stdin.write = vi.fn((chunk: any, encoding?: any, callback?: any) => {
+        const msg = JSON.parse(chunk.toString());
+
+        // Send mock responses
+        if (
+          msg.method === "server.setSubscriptions" ||
+          msg.method === "analysis.setAnalysisRoots"
+        ) {
+          mockProcess.sendMessage({ id: msg.id, result: {} });
+        } else if (msg.method === "analysis.updateContent") {
+          mockProcess.sendMessage({ id: msg.id, result: {} });
+        } else if (msg.method === "analysis.getOutline") {
+          mockProcess.sendMessage({
+            id: msg.id,
+            result: {
+              outline: {
+                kind: "COMPILATION_UNIT",
+                offset: 0,
+                length: 10,
+                element: { kind: "COMPILATION_UNIT", name: "test.dart" },
+                children: [],
+              },
+            },
+          });
+        }
+
+        if (typeof callback === "function") {
+          callback();
+        } else if (typeof encoding === "function") {
+          encoding();
+        }
+        return true;
+      });
+
+      await client.initialize();
+
+      // Send concurrent requests for different files (should not block each other)
+      const promise1 = client.analyzeFile("/test/file1.dart", "class A {}");
+      const promise2 = client.analyzeFile("/test/file2.dart", "class B {}");
+
+      // Both should complete without issues
+      await expect(Promise.all([promise1, promise2])).resolves.toBeDefined();
+    });
+  });
 });

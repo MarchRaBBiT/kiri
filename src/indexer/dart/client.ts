@@ -4,7 +4,13 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { createInterface, type Interface } from "node:readline";
+import PQueue from "p-queue";
 import { detectDartSdk, MissingToolError } from "./sdk.js";
+import { normalizeFileKey } from "./pathKey.js";
+
+// Fix #4: File queue TTL (default: 30000ms = 30 seconds)
+const FILE_QUEUE_TTL_MS = parseInt(process.env.DART_FILE_QUEUE_TTL_MS ?? "30000", 10);
+
 import type {
   RpcRequest,
   RpcResponse,
@@ -20,6 +26,11 @@ import type {
 export interface DartAnalysisClientOptions {
   workspaceRoots: string[];
   logPath?: string;
+}
+
+export interface DisposeOptions {
+  timeoutMs?: number; // Fix #3: Graceful shutdown timeout (default: 5000ms)
+  skipShutdown?: boolean; // Fix #3: Skip server.shutdown RPC for immediate kill
 }
 
 /**
@@ -54,6 +65,16 @@ export class DartAnalysisClient {
   private serverVersion: string | null = null;
   private initialized = false;
   private initializePromise: Promise<void> | null = null;
+  // Fix #2: ファイル単位のリクエストキューでオーバーレイ競合を防ぐ
+  // Fix #4: TTL cleanup to prevent memory leak
+  private fileQueues = new Map<
+    string,
+    {
+      queue: PQueue;
+      lastUsed: number;
+      cleanupTimer?: NodeJS.Timeout;
+    }
+  >();
 
   constructor(private options: DartAnalysisClientOptions) {}
 
@@ -122,6 +143,8 @@ export class DartAnalysisClient {
           this.rejectAllPending(
             new DAPProtocolError(`Analysis Server process error: ${error.message}`)
           );
+          // Fix #1: Reset state to allow reinitialization after crash
+          this.cleanupState();
         });
 
         this.process.on("exit", (code, signal) => {
@@ -129,6 +152,8 @@ export class DartAnalysisClient {
           this.rejectAllPending(
             new DAPProtocolError(`Analysis Server exited unexpectedly: code=${code}`)
           );
+          // Fix #1: Reset state to allow reinitialization after crash
+          this.cleanupState();
         });
 
         // server.setSubscriptions で接続通知を受け取る
@@ -156,48 +181,93 @@ export class DartAnalysisClient {
   /**
    * ファイルを解析してシンボル情報を取得（MVP版）
    *
+   * Fix #2: 同一ファイルの並列解析でオーバーレイ競合を防ぐため、
+   * ファイル単位でリクエストをシリアライズ
+   *
    * @param filePath - 解析対象ファイルの絶対パス
    * @param content - ファイル内容
    * @returns DartAnalysisPayload
    */
   async analyzeFile(filePath: string, content: string): Promise<DartAnalysisPayload> {
-    if (!this.initialized) {
-      await this.initialize();
-    }
+    // Fix #5: Normalize file path for Windows case-insensitivity
+    const fileKey = normalizeFileKey(filePath);
 
-    // analysis.updateContent でファイル内容を送信
-    const updateParams: UpdateContentParams = {
-      files: {
-        [filePath]: {
-          type: "add",
-          content,
-        },
-      },
-    };
-
-    await this.sendRequest("analysis.updateContent", updateParams);
-
-    try {
-      // analysis.getOutline でシンボル階層を取得
-      const outlineResult = await this.sendRequest<GetOutlineResult>("analysis.getOutline", {
-        file: filePath,
-      });
-
-      return {
-        outline: outlineResult.outline,
+    // Fix #4: ファイルパス単位でキューを取得または作成（TTL cleanup付き）
+    let entry = this.fileQueues.get(fileKey);
+    if (!entry) {
+      entry = {
+        queue: new PQueue({ concurrency: 1 }),
+        lastUsed: Date.now(),
       };
-    } finally {
-      // メモリリーク防止: オーバーレイを必ず削除
-      await this.sendRequest("analysis.updateContent", {
-        files: {
-          [filePath]: {
-            type: "remove",
-          },
-        },
-      }).catch((error) => {
-        console.warn(`[analyzeFile] Failed to remove overlay for ${filePath}:`, error);
-      });
+      this.fileQueues.set(fileKey, entry);
     }
+
+    // Fix #4: 既存のクリーンアップタイマーをキャンセル（再利用時）
+    if (entry.cleanupTimer) {
+      clearTimeout(entry.cleanupTimer);
+      delete entry.cleanupTimer;
+    }
+
+    // Fix #4: 使用時刻を更新
+    entry.lastUsed = Date.now();
+
+    // キューに追加して順次実行を保証
+    return entry.queue
+      .add(async () => {
+        if (!this.initialized) {
+          await this.initialize();
+        }
+
+        // analysis.updateContent でファイル内容を送信
+        const updateParams: UpdateContentParams = {
+          files: {
+            [filePath]: {
+              type: "add",
+              content,
+            },
+          },
+        };
+
+        await this.sendRequest("analysis.updateContent", updateParams);
+
+        try {
+          // analysis.getOutline でシンボル階層を取得
+          const outlineResult = await this.sendRequest<GetOutlineResult>("analysis.getOutline", {
+            file: filePath,
+          });
+
+          return {
+            outline: outlineResult.outline,
+          };
+        } finally {
+          // メモリリーク防止: オーバーレイを必ず削除
+          // キューによって直列化されているため、他のリクエストのオーバーレイを削除する心配がない
+          await this.sendRequest("analysis.updateContent", {
+            files: {
+              [filePath]: {
+                type: "remove",
+              },
+            },
+          }).catch((error) => {
+            console.warn(`[analyzeFile] Failed to remove overlay for ${filePath}:`, error);
+          });
+        }
+      })
+      .finally(() => {
+        // Fix #4: TTL cleanup timer を設定（キュー実行完了後）
+        const currentEntry = this.fileQueues.get(fileKey);
+        if (currentEntry && FILE_QUEUE_TTL_MS > 0) {
+          currentEntry.cleanupTimer = setTimeout(() => {
+            // アイドル状態（size=0, pending=0）の場合のみ削除
+            if (currentEntry.queue.size === 0 && currentEntry.queue.pending === 0) {
+              this.fileQueues.delete(fileKey);
+            }
+          }, FILE_QUEUE_TTL_MS);
+
+          // Fix #4: unref() to prevent blocking Node.js exit
+          currentEntry.cleanupTimer.unref();
+        }
+      });
   }
 
   /**
@@ -221,34 +291,50 @@ export class DartAnalysisClient {
 
   /**
    * Analysis Server プロセスを終了
+   *
+   * Fix #3: dispose に options パラメータを追加して柔軟な終了処理を実現
+   *
+   * @param options - 終了オプション
+   * @param options.timeoutMs - Graceful shutdown timeout (デフォルト: 5000ms)
+   * @param options.skipShutdown - server.shutdown RPC をスキップして即時強制終了
    */
-  async dispose(): Promise<void> {
+  async dispose(options?: DisposeOptions): Promise<void> {
     if (!this.process) {
       return;
     }
 
-    try {
-      // server.shutdown リクエスト
-      await this.sendRequest("server.shutdown", {});
+    const timeoutMs = options?.timeoutMs ?? 5000;
+    const skipShutdown = options?.skipShutdown ?? false;
 
-      // プロセス終了を待つ
-      await new Promise<void>((resolve) => {
-        if (!this.process) {
-          resolve();
-          return;
-        }
-        this.process.once("exit", () => resolve());
-        // タイムアウト後は強制終了
-        setTimeout(() => {
-          this.process?.kill("SIGTERM");
-          resolve();
-        }, 5000);
-      });
+    try {
+      if (!skipShutdown && this.initialized) {
+        // Fix #3: server.shutdown を短いタイムアウトで実行
+        await this.sendRequest("server.shutdown", {}, timeoutMs).catch((error) => {
+          console.warn(`[DartAnalysisClient] shutdown request failed:`, error);
+        });
+
+        // プロセス終了を待つ
+        await new Promise<void>((resolve) => {
+          if (!this.process) {
+            resolve();
+            return;
+          }
+          this.process.once("exit", () => resolve());
+          // タイムアウト後は強制終了
+          setTimeout(() => {
+            this.process?.kill("SIGTERM");
+            resolve();
+          }, timeoutMs);
+        });
+      } else {
+        // Fix #3: skipShutdown または未初期化の場合は即時強制終了
+        this.forceKill();
+      }
     } catch (error) {
       console.error(`[DartAnalysisClient] dispose error:`, error);
+      this.forceKill(); // エラー時は強制終了
     } finally {
       this.readline?.close();
-      this.process?.kill("SIGTERM");
       this.process = null;
       this.readline = null;
       this.initialized = false;
@@ -256,9 +342,51 @@ export class DartAnalysisClient {
   }
 
   /**
-   * JSON-RPC リクエスト送信
+   * Fix #1 & #3: プロセスを同期的に強制終了
+   *
+   * exit フォールバックや緊急時に使用
+   * Windows対応: SIGKILLは存在しないため、プラットフォーム別に処理
    */
-  private async sendRequest<TResult = unknown>(method: string, params: unknown): Promise<TResult> {
+  forceKill(): void {
+    if (this.process) {
+      try {
+        this.process.kill("SIGTERM");
+        // SIGKILL fallback after 100ms (Unix only)
+        setTimeout(() => {
+          if (this.process && !this.process.killed) {
+            try {
+              if (process.platform === "win32") {
+                // Windows: Use default signal (equivalent to SIGTERM)
+                this.process.kill();
+              } else {
+                // Unix: Use SIGKILL for force termination
+                this.process.kill("SIGKILL");
+              }
+            } catch (error) {
+              // SIGKILL may fail if process is already gone
+            }
+          }
+        }, 100);
+      } catch (error) {
+        // kill 失敗は無視（既に終了している可能性）
+      }
+    }
+  }
+
+  /**
+   * JSON-RPC リクエスト送信
+   *
+   * Fix #3: タイムアウト時間を可変にして dispose や初期化での短縮タイムアウトを実現
+   *
+   * @param method - RPC メソッド名
+   * @param params - RPC パラメータ
+   * @param timeoutMs - タイムアウト時間（デフォルト: 30000ms）
+   */
+  private async sendRequest<TResult = unknown>(
+    method: string,
+    params: unknown,
+    timeoutMs: number = 30000
+  ): Promise<TResult> {
     if (!this.process?.stdin) {
       throw new DAPProtocolError("Analysis Server process not running");
     }
@@ -267,11 +395,11 @@ export class DartAnalysisClient {
     const request: RpcRequest = { id, method, params };
 
     return new Promise<TResult>((resolve, reject) => {
-      // タイムアウト設定（30秒）
+      // Fix #3: タイムアウト設定（可変）
       const timeout = setTimeout(() => {
         this.pendingRequests.delete(id);
         reject(new DAPProtocolError(`Request timeout: ${method}`, -32000, { method, params }));
-      }, 30000);
+      }, timeoutMs);
 
       this.pendingRequests.set(id, {
         resolve: resolve as (result: unknown) => void,
@@ -373,5 +501,19 @@ export class DartAnalysisClient {
       pending.reject(error);
     }
     this.pendingRequests.clear();
+  }
+
+  /**
+   * プロセス状態をクリーンアップ（Fix #1: crash recovery用）
+   *
+   * dispose() とは異なり、server.shutdown を送らずに状態のみリセット。
+   * プロセスクラッシュ後の再初期化を可能にする。
+   */
+  private cleanupState(): void {
+    this.readline?.close();
+    this.readline = null;
+    this.process = null;
+    this.initialized = false;
+    this.initializePromise = null;
   }
 }

@@ -101,6 +101,15 @@ async function acquireClient(workspaceRoot: string): Promise<DartAnalysisClient>
               // Fix #2: Release permit after disposal completes
               poolLimiter.release();
             });
+        } else {
+          // Fix #7 (Critical Review): No idle client to evict - cannot exceed MAX_CLIENTS
+          // All clients are actively processing files. Release permit and throw error.
+          poolLimiter.release();
+          throw new Error(
+            `[acquireClient] Dart Analysis Server pool is full with ${MAX_CLIENTS} active clients. ` +
+              `Cannot create new client for workspace ${workspaceRoot}. ` +
+              `Consider increasing DART_ANALYSIS_MAX_CLIENTS or reducing concurrent indexing.`
+          );
         }
       }
     }

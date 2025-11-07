@@ -351,19 +351,21 @@ export class DartAnalysisClient {
     if (this.process) {
       try {
         this.process.kill("SIGTERM");
-        // SIGKILL fallback after 100ms (Unix only)
+        // SIGKILL fallback after 100ms
         setTimeout(() => {
           if (this.process && !this.process.killed) {
             try {
               if (process.platform === "win32") {
-                // Windows: Use default signal (equivalent to SIGTERM)
-                this.process.kill();
+                // Windows: Use taskkill for forceful termination
+                // Fix #7 (Critical Review): More aggressive than default kill()
+                const { execSync } = require("node:child_process");
+                execSync(`taskkill /PID ${this.process.pid} /F /T`, { stdio: "ignore" });
               } else {
                 // Unix: Use SIGKILL for force termination
                 this.process.kill("SIGKILL");
               }
             } catch (error) {
-              // SIGKILL may fail if process is already gone
+              // Force kill may fail if process is already gone
             }
           }
         }, 100);

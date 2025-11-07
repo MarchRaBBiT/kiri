@@ -111,6 +111,15 @@ export function createCapacityLimiter(maxCapacity: number): CapacityLimiter {
   }
 
   function release(): void {
+    // Fix #7 (Critical Review): Defensive check to prevent exceeding max capacity
+    if (availablePermits >= maxCapacity) {
+      console.warn(
+        `[poolGate] release() called when pool is at full capacity (${maxCapacity}). ` +
+          `This indicates a permit accounting bug. Current stats: ${JSON.stringify(stats())}`
+      );
+      return;
+    }
+
     availablePermits++;
 
     // Process waiting queue (FIFO)

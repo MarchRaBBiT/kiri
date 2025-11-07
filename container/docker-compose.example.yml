@@ -1,0 +1,25 @@
+version: "3.9"
+
+services:
+  kiri:
+    build:
+      context: ..
+      dockerfile: container/Dockerfile
+    image: kiri-mcp:local
+    restart: unless-stopped
+    ports:
+      - "8765:8765"
+    environment:
+      KIRI_PORT: 8765
+      KIRI_REPO_ROOT: /data/repo
+      KIRI_DB_PATH: /app/var/index.duckdb
+      KIRI_ALLOW_DEGRADE: "false"
+      KIRI_FORCE_REINDEX: "false"
+      KIRI_WATCH: "true"
+      KIRI_DEBOUNCE_MS: "750"
+      KIRI_SECURITY_CONFIG: /app/config/security.yml
+      KIRI_SECURITY_LOCK: /app/var/security.lock
+    volumes:
+      - ../config:/app/config:ro
+      - ../var:/app/var
+      - /absolute/path/to/your/repository:/data/repo:ro

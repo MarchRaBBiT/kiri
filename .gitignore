@@ -10,6 +10,9 @@ coverage/
 package/
 *.tgz
 
+# Local orchestration
+docker-compose.yml
+
 # Development test scripts
 test-*.mjs
 debug-*.mjs

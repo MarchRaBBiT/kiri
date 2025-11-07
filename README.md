@@ -672,6 +672,21 @@ See [docs/architecture.md](docs/architecture.md) for detailed technical informat
 - [Discussions](https://github.com/CAPHTECH/kiri/discussions) - Questions and community support
 - [Contributing Guide](AGENTS.md) - How to contribute
 
+## 🚢 Container Deployment
+
+Prefer running the MCP server inside Docker? The `container/` directory includes a production-ready `Dockerfile`, entrypoint, and `docker-compose` template. Build and run it with:
+
+```bash
+docker build -f container/Dockerfile -t kiri-mcp:latest .
+docker run --rm -p 8765:8765 \
+  -v "$(pwd)/config:/app/config:ro" \
+  -v "$(pwd)/var:/app/var" \
+  -v /path/to/repo:/data/repo:ro \
+  kiri-mcp:latest
+```
+
+Adjust the repo mount to point at the codebase you want indexed and persist `/app/var` if you need the DuckDB index across restarts. See [`container/README.md`](container/README.md) for environment variables, docker-compose usage, and tips for production deployments.
+
 ## 🛠️ For Developers
 
 ### Local Development

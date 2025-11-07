@@ -1,0 +1,11 @@
+node_modules
+pnpm-lock.yaml.*.backup
+pnpm-debug.log
+dist
+coverage
+tmp
+var
+.git
+.gitignore
+.vscode
+.idea

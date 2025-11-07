@@ -138,9 +138,9 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: "context_bundle",
     description:
-      "Primary code discovery tool. Provide a concrete `goal` to receive ranked `context` entries containing `path`, `range`, optional `preview`, scoring `why`, and `score`.\n\n" +
-      "Returns {context, tokens_estimate, warnings?}; the tool only reads from the index. Empty or vague goals raise an MCP error that asks for specific keywords.\n\n" +
-      "Example: context_bundle({goal: 'Fix pagination off-by-one in src/catalog/products.ts'}) surfaces the affected files. Invalid: goal='debug' triggers a validation error.",
+      "Primary code discovery tool. Provide a concrete, keyword-rich `goal` (modules, files, symptoms) to receive ranked `context` entries containing `path`, `range`, optional `preview`, scoring `why`, and `score`. Avoid leading with generic imperatives such as 'find' or 'locate'; list the signals you have instead.\n\n" +
+      "Returns {context, tokens_estimate, warnings?}; the tool only reads from the index. Empty or vague goals raise an MCP error that asks for specific keywords, and imperative-only phrasing usually lowers ranking quality.\n\n" +
+      "Example: context_bundle({goal: 'pagination off-by-one bug; file=src/catalog/products.ts; expected=20 items; observed=19'}) surfaces the affected files. Less effective: goal='Find where pagination breaks'.",
     inputSchema: {
       type: "object",
       required: ["goal"],

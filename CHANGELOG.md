@@ -15,6 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Import dependency resolution with wildcard and static import support
   - Full test coverage with 23 test cases
 
+## [0.9.5] - 2025-11-06
+
+### Changed
+
+- Clarified `context_bundle` guidance by documenting that goals should enumerate files/symptoms instead of leading with imperatives, and updated examples accordingly.
+
 ## [0.9.4] - 2025-11-06
 
 ### Fixed

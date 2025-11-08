@@ -91,6 +91,28 @@ pub enum Mode {
         kind: "enum_variant",
       });
     });
+
+    it("extracts macro_rules macros with doc comments", () => {
+      const rustCode = `
+/// Logs a value and returns it.
+macro_rules! log_and_return {
+    ($value:expr) => {{
+        println!("{}", $value);
+        $value
+    }};
+}
+`.trim();
+
+      const result = analyzeSource("src/macros.rs", "Rust", rustCode, new Set());
+
+      expect(result.symbols).toHaveLength(1);
+      expect(result.symbols[0]).toMatchObject({
+        symbolId: 1,
+        name: "log_and_return",
+        kind: "macro",
+        doc: "Logs a value and returns it.",
+      });
+    });
   });
 
   describe("dependency extraction", () => {

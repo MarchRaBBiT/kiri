@@ -228,6 +228,9 @@ function createRustSymbolRecords(tree: Parser.Tree, content: string): SymbolReco
       case "macro_definition":
         addSymbol(node, "macro");
         break;
+      case "macro_rules_definition":
+        addSymbol(node, "macro");
+        break;
       default:
         break;
     }

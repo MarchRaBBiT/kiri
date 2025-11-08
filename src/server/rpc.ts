@@ -49,6 +49,7 @@ export class WarningManager {
    */
   startRequest(): void {
     this.requestWarnings = [];
+    this.shownWarnings.clear(); // Prevent memory leak from unbounded Set growth
   }
 
   /**

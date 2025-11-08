@@ -339,11 +339,18 @@ function parseOutputOptions(params: {
  * Guarantees at least one tag from reserved categories (dep, symbol, near) if they exist,
  * then fills remaining slots by priority. This prevents keyword matches from crowding out
  * structural context that explains "why this file?"
+ *
+ * DoS protection: Limits processing to first 1000 reasons to prevent CPU exhaustion.
  */
 function selectWhyTags(reasons: Set<string>): string[] {
+  // Protect against DoS: limit reasons processed
+  if (reasons.size > 1000) {
+    reasons = new Set(Array.from(reasons).slice(0, 1000));
+  }
+
+  const selected = new Set<string>();
   const byCategory = new Map<string, string[]>();
 
-  // Group by prefix
   for (const reason of reasons) {
     const prefix = reason.split(":")[0] ?? "";
     if (!byCategory.has(prefix)) {
@@ -352,37 +359,30 @@ function selectWhyTags(reasons: Set<string>): string[] {
     byCategory.get(prefix)!.push(reason);
   }
 
-  const selected: string[] = [];
-
-  // Step 1: Fill reserved slots first to ensure structural context
+  // Step 1: Fill reserved slots
   for (const [category, minCount] of Object.entries(RESERVED_WHY_SLOTS)) {
     const items = byCategory.get(category) ?? [];
-    if (items.length > 0) {
-      // Take the first item from this category (they're already specific)
-      selected.push(...items.slice(0, minCount));
+    for (let i = 0; i < minCount && i < items.length; i++) {
+      selected.add(items[i]!); // Safe: i < items.length guarantees existence
     }
   }
 
   // Step 2: Fill remaining slots by priority
-  const remaining = MAX_WHY_TAGS - selected.length;
-  if (remaining > 0) {
-    const alreadyAdded = new Set(selected);
+  const allReasons = Array.from(reasons).sort((a, b) => {
+    const aPrefix = a.split(":")[0] ?? "";
+    const bPrefix = b.split(":")[0] ?? "";
+    const aPrio = WHY_TAG_PRIORITY[aPrefix] ?? 99;
+    const bPrio = WHY_TAG_PRIORITY[bPrefix] ?? 99;
+    if (aPrio !== bPrio) return aPrio - bPrio;
+    return a.localeCompare(b);
+  });
 
-    const allReasons = Array.from(reasons)
-      .filter((r) => !alreadyAdded.has(r))
-      .sort((a, b) => {
-        const aPrefix = a.split(":")[0] ?? "";
-        const bPrefix = b.split(":")[0] ?? "";
-        const aPrio = WHY_TAG_PRIORITY[aPrefix] ?? 99;
-        const bPrio = WHY_TAG_PRIORITY[bPrefix] ?? 99;
-        if (aPrio !== bPrio) return aPrio - bPrio;
-        return a.localeCompare(b);
-      });
-
-    selected.push(...allReasons.slice(0, remaining));
+  for (const reason of allReasons) {
+    if (selected.size >= MAX_WHY_TAGS) break;
+    selected.add(reason); // Set automatically deduplicates
   }
 
-  return selected;
+  return Array.from(selected);
 }
 
 const STOP_WORDS = new Set([

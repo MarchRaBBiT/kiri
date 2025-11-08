@@ -27,19 +27,35 @@ import { withSpan } from "./observability/tracing.js";
  *
  * メモリリーク防止のため、保持する警告キーの数に上限を設定しています。
  */
+interface WarningManagerSharedState {
+  shownWarnings: Set<string>;
+  limitReachedWarningShown: { value: boolean };
+}
+
 export class WarningManager {
-  private readonly shownWarnings = new Set<string>();
+  private readonly shared: WarningManagerSharedState;
   private requestWarnings: string[] = []; // Per-request warning buffer
   private readonly maxUniqueWarnings: number;
-  private limitReachedWarningShown = false;
 
   /**
    * WarningManagerを構築します
    *
    * @param maxUniqueWarnings - 追跡する一意の警告の最大数（デフォルト: 1000）
    */
-  constructor(maxUniqueWarnings: number = 1000) {
+  constructor(maxUniqueWarnings: number = 1000, sharedState?: WarningManagerSharedState) {
     this.maxUniqueWarnings = maxUniqueWarnings;
+    this.shared = sharedState ?? {
+      shownWarnings: new Set<string>(),
+      limitReachedWarningShown: { value: false },
+    };
+  }
+
+  /**
+   * 共有状態を保ったまま、新しい WarningManager インスタンスを作成します。
+   * リクエスト単位での警告管理に利用します。
+   */
+  fork(): WarningManager {
+    return new WarningManager(this.maxUniqueWarnings, this.shared);
   }
 
   /**
@@ -69,23 +85,23 @@ export class WarningManager {
    * @returns 警告が表示された場合はtrue、既に表示済みの場合はfalse
    */
   warnOnce(key: string, message: string, forResponse: boolean = false): boolean {
-    if (this.shownWarnings.has(key)) {
+    if (this.shared.shownWarnings.has(key)) {
       return false;
     }
 
     // メモリリーク防止: 上限に達したら新しい警告を追加しない
-    if (this.shownWarnings.size >= this.maxUniqueWarnings) {
-      if (!this.limitReachedWarningShown) {
+    if (this.shared.shownWarnings.size >= this.maxUniqueWarnings) {
+      if (!this.shared.limitReachedWarningShown.value) {
         console.warn(
           "WarningManager: Unique warning limit reached. No new warnings will be shown."
         );
-        this.limitReachedWarningShown = true;
+        this.shared.limitReachedWarningShown.value = true;
       }
       return false;
     }
 
     console.warn(message);
-    this.shownWarnings.add(key);
+    this.shared.shownWarnings.add(key);
 
     if (forResponse) {
       this.requestWarnings.push(message);
@@ -121,9 +137,9 @@ export class WarningManager {
    * テスト用：表示済み警告の履歴をクリアします
    */
   reset(): void {
-    this.shownWarnings.clear();
+    this.shared.shownWarnings.clear();
     this.requestWarnings = [];
-    this.limitReachedWarningShown = false;
+    this.shared.limitReachedWarningShown.value = false;
   }
 }
 
@@ -726,7 +742,7 @@ export function createRpcHandler(
 ): (payload: JsonRpcRequest) => Promise<RpcHandleResult | null> {
   const { context, degrade, metrics, tokens, allowDegrade } = dependencies;
   const buildRequestContext = (): ServerContext => {
-    const warningManager = new WarningManager();
+    const warningManager = context.warningManager.fork();
     warningManager.startRequest();
     return { ...context, warningManager };
   };

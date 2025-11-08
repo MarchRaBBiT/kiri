@@ -1536,6 +1536,8 @@ export async function contextBundle(
   context: ServerContext,
   params: ContextBundleParams
 ): Promise<ContextBundleResult> {
+  context.warningManager.startRequest();
+
   const { db, repoId } = context;
   const goal = params.goal?.trim() ?? "";
   if (goal.length === 0) {

@@ -4,7 +4,7 @@ import { analyzeSource } from "../../src/indexer/codeintel.js";
 
 describe("Java code intelligence", () => {
   describe("symbol extraction", () => {
-    it("extracts class declaration with methods and fields", () => {
+    it("extracts class declaration with methods and fields", async () => {
       const javaCode = `
 /**
  * A sample class with documentation
@@ -22,7 +22,7 @@ public class MyClass {
 }
 `.trim();
 
-      const result = analyzeSource("test.java", "Java", javaCode, new Set());
+      const result = await analyzeSource("test.java", "Java", javaCode, new Set());
 
       expect(result.symbols).toHaveLength(4);
 
@@ -65,7 +65,7 @@ public class MyClass {
       });
     });
 
-    it("extracts interface declaration", () => {
+    it("extracts interface declaration", async () => {
       const javaCode = `
 /**
  * Sample interface
@@ -76,7 +76,7 @@ public interface MyInterface {
 }
 `.trim();
 
-      const result = analyzeSource("test.java", "Java", javaCode, new Set());
+      const result = await analyzeSource("test.java", "Java", javaCode, new Set());
 
       expect(result.symbols).toHaveLength(3);
       expect(result.symbols[0]).toMatchObject({
@@ -96,7 +96,7 @@ public interface MyInterface {
       });
     });
 
-    it("extracts Javadoc from methods with annotations", () => {
+    it("extracts Javadoc from methods with annotations", async () => {
       const javaCode = `
 public class MyClass {
   /**
@@ -112,7 +112,7 @@ public class MyClass {
 }
 `.trim();
 
-      const result = analyzeSource("test.java", "Java", javaCode, new Set());
+      const result = await analyzeSource("test.java", "Java", javaCode, new Set());
 
       expect(result.symbols).toHaveLength(2);
       expect(result.symbols[0]).toMatchObject({
@@ -131,7 +131,7 @@ public class MyClass {
       expect(method?.doc).toContain("@return processed value");
     });
 
-    it("extracts enum declaration", () => {
+    it("extracts enum declaration", async () => {
       const javaCode = `
 public enum Direction {
   NORTH,
@@ -141,7 +141,7 @@ public enum Direction {
 }
 `.trim();
 
-      const result = analyzeSource("test.java", "Java", javaCode, new Set());
+      const result = await analyzeSource("test.java", "Java", javaCode, new Set());
 
       expect(result.symbols).toHaveLength(1);
       expect(result.symbols[0]).toMatchObject({
@@ -152,7 +152,7 @@ public enum Direction {
       });
     });
 
-    it("extracts field declarations", () => {
+    it("extracts field declarations", async () => {
       const javaCode = `
 public class MyClass {
   private String name;
@@ -161,7 +161,7 @@ public class MyClass {
 }
 `.trim();
 
-      const result = analyzeSource("test.java", "Java", javaCode, new Set());
+      const result = await analyzeSource("test.java", "Java", javaCode, new Set());
 
       expect(result.symbols).toHaveLength(4);
       expect(result.symbols[0]).toMatchObject({
@@ -182,7 +182,7 @@ public class MyClass {
       });
     });
 
-    it("extracts nested classes", () => {
+    it("extracts nested classes", async () => {
       const javaCode = `
 public class OuterClass {
   private String outerField;
@@ -195,7 +195,7 @@ public class OuterClass {
 }
 `.trim();
 
-      const result = analyzeSource("test.java", "Java", javaCode, new Set());
+      const result = await analyzeSource("test.java", "Java", javaCode, new Set());
 
       expect(result.symbols).toHaveLength(5);
       expect(result.symbols[0]).toMatchObject({
@@ -220,7 +220,7 @@ public class OuterClass {
       });
     });
 
-    it("extracts annotation type declaration", () => {
+    it("extracts annotation type declaration", async () => {
       const javaCode = `
 /**
  * Custom annotation
@@ -231,7 +231,7 @@ public @interface MyAnnotation {
 }
 `.trim();
 
-      const result = analyzeSource("test.java", "Java", javaCode, new Set());
+      const result = await analyzeSource("test.java", "Java", javaCode, new Set());
 
       expect(result.symbols).toHaveLength(3);
       expect(result.symbols[0]).toMatchObject({
@@ -251,7 +251,7 @@ public @interface MyAnnotation {
   });
 
   describe("dependency analysis", () => {
-    it("extracts import statements for packages", () => {
+    it("extracts import statements for packages", async () => {
       const javaCode = `
 import java.util.List;
 import java.util.ArrayList;
@@ -259,7 +259,7 @@ import java.util.ArrayList;
 public class MyClass {}
 `.trim();
 
-      const result = analyzeSource("test.java", "Java", javaCode, new Set());
+      const result = await analyzeSource("test.java", "Java", javaCode, new Set());
 
       expect(result.dependencies).toHaveLength(2);
       expect(result.dependencies).toContainEqual({
@@ -274,7 +274,7 @@ public class MyClass {}
       });
     });
 
-    it("detects local file imports as path dependencies", () => {
+    it("detects local file imports as path dependencies", async () => {
       const javaCode = `
 import com.example.MyOtherClass;
 
@@ -282,7 +282,7 @@ public class MyClass {}
 `.trim();
 
       const fileSet = new Set(["com/example/MyOtherClass.java"]);
-      const result = analyzeSource("test.java", "Java", javaCode, fileSet);
+      const result = await analyzeSource("test.java", "Java", javaCode, fileSet);
 
       expect(result.dependencies).toHaveLength(1);
       expect(result.dependencies[0]).toMatchObject({
@@ -292,7 +292,7 @@ public class MyClass {}
       });
     });
 
-    it("detects local file imports with Maven/Gradle directory structure", () => {
+    it("detects local file imports with Maven/Gradle directory structure", async () => {
       const javaCode = `
 import com.example.MyOtherClass;
 import com.example.util.Helper;
@@ -306,7 +306,7 @@ public class MyClass {}
         "src/main/java/com/example/util/Helper.java",
         "src/test/java/com/example/MyClassTest.java",
       ]);
-      const result = analyzeSource(
+      const result = await analyzeSource(
         "src/main/java/com/example/MyClass.java",
         "Java",
         javaCode,
@@ -326,7 +326,7 @@ public class MyClass {}
       });
     });
 
-    it("resolves imports precisely when same filename exists in different packages", () => {
+    it("resolves imports precisely when same filename exists in different packages", async () => {
       const javaCode = `
 import com.example.util.Helper;
 import com.other.util.Helper;
@@ -339,7 +339,7 @@ public class MyClass {}
         "src/main/java/com/example/util/Helper.java",
         "src/main/java/com/other/util/Helper.java",
       ]);
-      const result = analyzeSource(
+      const result = await analyzeSource(
         "src/main/java/com/example/MyClass.java",
         "Java",
         javaCode,
@@ -360,7 +360,7 @@ public class MyClass {}
       });
     });
 
-    it("does not match partial package paths with endsWith (wrong file first)", () => {
+    it("does not match partial package paths with endsWith (wrong file first)", async () => {
       const javaCode = `
 import util.Helper;
 
@@ -373,7 +373,7 @@ public class MyClass {}
         "src/main/java/com/example/util/Helper.java", // これと誤マッチすべきでない（が、find()で先に見つかる）
         "src/main/java/util/Helper.java", // これが正解
       ]);
-      const result = analyzeSource("src/main/java/MyClass.java", "Java", javaCode, fileSet);
+      const result = await analyzeSource("src/main/java/MyClass.java", "Java", javaCode, fileSet);
 
       expect(result.dependencies).toHaveLength(1);
       // 現在の実装（endsWith）だと、com/example/util/Helper.javaも util/Helper.javaで終わるため
@@ -386,14 +386,14 @@ public class MyClass {}
       });
     });
 
-    it("handles wildcard imports", () => {
+    it("handles wildcard imports", async () => {
       const javaCode = `
 import java.util.*;
 
 public class MyClass {}
 `.trim();
 
-      const result = analyzeSource("test.java", "Java", javaCode, new Set());
+      const result = await analyzeSource("test.java", "Java", javaCode, new Set());
 
       expect(result.dependencies).toHaveLength(1);
       expect(result.dependencies[0]).toMatchObject({
@@ -403,7 +403,7 @@ public class MyClass {}
       });
     });
 
-    it("handles static imports", () => {
+    it("handles static imports", async () => {
       const javaCode = `
 import static java.lang.Math.PI;
 import static java.util.Collections.*;
@@ -411,7 +411,7 @@ import static java.util.Collections.*;
 public class MyClass {}
 `.trim();
 
-      const result = analyzeSource("test.java", "Java", javaCode, new Set());
+      const result = await analyzeSource("test.java", "Java", javaCode, new Set());
 
       expect(result.dependencies).toHaveLength(2);
       expect(result.dependencies).toContainEqual({
@@ -428,7 +428,7 @@ public class MyClass {}
   });
 
   describe("snippet generation", () => {
-    it("creates snippets aligned to symbol boundaries", () => {
+    it("creates snippets aligned to symbol boundaries", async () => {
       const javaCode = `
 public class MyClass {
   public void method1() {}
@@ -436,7 +436,7 @@ public class MyClass {
 }
 `.trim();
 
-      const result = analyzeSource("test.java", "Java", javaCode, new Set());
+      const result = await analyzeSource("test.java", "Java", javaCode, new Set());
 
       expect(result.snippets).toHaveLength(3);
       expect(result.snippets[0]).toMatchObject({
@@ -458,41 +458,41 @@ public class MyClass {
   });
 
   describe("edge cases", () => {
-    it("returns empty results for empty file", () => {
-      const result = analyzeSource("test.java", "Java", "", new Set());
+    it("returns empty results for empty file", async () => {
+      const result = await analyzeSource("test.java", "Java", "", new Set());
 
       expect(result.symbols).toHaveLength(0);
       expect(result.snippets).toHaveLength(0);
       expect(result.dependencies).toHaveLength(0);
     });
 
-    it("handles file with only imports", () => {
+    it("handles file with only imports", async () => {
       const javaCode = `
 import java.util.List;
 import java.util.ArrayList;
 `.trim();
 
-      const result = analyzeSource("test.java", "Java", javaCode, new Set());
+      const result = await analyzeSource("test.java", "Java", javaCode, new Set());
 
       expect(result.symbols).toHaveLength(0);
       expect(result.dependencies).toHaveLength(2);
     });
 
-    it("handles symbols without documentation", () => {
+    it("handles symbols without documentation", async () => {
       const javaCode = `
 public class UndocumentedClass {
   public void undocumentedMethod() {}
 }
 `.trim();
 
-      const result = analyzeSource("test.java", "Java", javaCode, new Set());
+      const result = await analyzeSource("test.java", "Java", javaCode, new Set());
 
       expect(result.symbols).toHaveLength(2);
       expect(result.symbols[0]?.doc).toBeNull();
       expect(result.symbols[1]?.doc).toBeNull();
     });
 
-    it("truncates long signatures to 200 characters", () => {
+    it("truncates long signatures to 200 characters", async () => {
       const longParams = Array.from({ length: 20 }, (_, i) => `String param${i}`).join(", ");
       const javaCode = `
 public class MyClass {
@@ -502,7 +502,7 @@ public class MyClass {
 }
 `.trim();
 
-      const result = analyzeSource("test.java", "Java", javaCode, new Set());
+      const result = await analyzeSource("test.java", "Java", javaCode, new Set());
 
       expect(result.symbols).toHaveLength(2);
       const signature = result.symbols[1]?.signature ?? "";
@@ -511,7 +511,7 @@ public class MyClass {
       expect(signature).not.toContain("return");
     });
 
-    it("excludes method body from signature", () => {
+    it("excludes method body from signature", async () => {
       const javaCode = `
 public class MyClass {
   public int calculate(int x) {
@@ -521,7 +521,7 @@ public class MyClass {
 }
 `.trim();
 
-      const result = analyzeSource("test.java", "Java", javaCode, new Set());
+      const result = await analyzeSource("test.java", "Java", javaCode, new Set());
 
       expect(result.symbols).toHaveLength(2);
       const signature = result.symbols[1]?.signature ?? "";
@@ -530,7 +530,7 @@ public class MyClass {
       expect(signature).not.toContain("return");
     });
 
-    it("handles multi-line method signatures correctly", () => {
+    it("handles multi-line method signatures correctly", async () => {
       const javaCode = `
 public class MyClass {
   public String processData(
@@ -543,7 +543,7 @@ public class MyClass {
 }
 `.trim();
 
-      const result = analyzeSource("test.java", "Java", javaCode, new Set());
+      const result = await analyzeSource("test.java", "Java", javaCode, new Set());
 
       expect(result.symbols).toHaveLength(2);
       const signature = result.symbols[1]?.signature ?? "";
@@ -557,19 +557,19 @@ public class MyClass {
       expect(signature).not.toContain("\n");
     });
 
-    it("returns empty result for unsupported language", () => {
+    it("returns empty result for unsupported language", async () => {
       const javaCode = `
 public class MyClass {}
 `.trim();
 
-      const result = analyzeSource("test.java", "JavaScript", javaCode, new Set());
+      const result = await analyzeSource("test.java", "JavaScript", javaCode, new Set());
 
       expect(result.symbols).toHaveLength(0);
       expect(result.snippets).toHaveLength(0);
       expect(result.dependencies).toHaveLength(0);
     });
 
-    it("handles generic types", () => {
+    it("handles generic types", async () => {
       const javaCode = `
 public class Container<T> {
   private T value;
@@ -580,7 +580,7 @@ public class Container<T> {
 }
 `.trim();
 
-      const result = analyzeSource("test.java", "Java", javaCode, new Set());
+      const result = await analyzeSource("test.java", "Java", javaCode, new Set());
 
       expect(result.symbols).toHaveLength(3);
       expect(result.symbols[0]).toMatchObject({

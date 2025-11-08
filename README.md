@@ -740,6 +740,13 @@ pnpm run test                 # Run all tests
 pnpm run check                # Lint + test
 ```
 
+### Language Analyzer Architecture
+
+- `src/indexer/languages/types.ts` declares the shared record types plus the `LanguageAnalyzer` interface and helpers such as `buildSnippetsFromSymbols` / `buildFallbackSnippet`.
+- Individual analyzers live in `src/indexer/languages/<language>.ts` and own their parser setup (TypeScript compiler API, tree-sitter, Dart Analysis Server, etc.).
+- `src/indexer/languages/index.ts` registers the analyzers in a `Map<string, LanguageAnalyzer>` so `src/indexer/codeintel.ts` can delegate work without language-specific branches.
+- To add a new language: create a module that implements the interface, register it in the map, document the change (README + `docs/indexer.md`), and add targeted tests under `tests/indexer/languages/`.
+
 ### Project Structure
 
 ```

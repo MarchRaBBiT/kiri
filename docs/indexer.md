@@ -46,3 +46,26 @@ export async function indexRepo(repoRoot: string, dbPath: string) {
   });
 }
 ```
+
+## 言語アナライザモジュール
+
+| 言語       | モジュール                            | パーサ / サービス                    | 主なシンボル                                                             |
+| ---------- | ------------------------------------- | ------------------------------------ | ------------------------------------------------------------------------ |
+| TypeScript | `src/indexer/languages/typescript.ts` | TypeScript Compiler API              | class, interface, enum, function, method                                 |
+| Swift      | `src/indexer/languages/swift.ts`      | tree-sitter-swift                    | class, struct, protocol, enum, extension, func, init, property           |
+| PHP        | `src/indexer/languages/php.ts`        | tree-sitter-php（pure + html-mixed） | class, interface, trait, function, method, property, constant, namespace |
+| Java       | `src/indexer/languages/java.ts`       | tree-sitter-java                     | class, interface, enum, annotation, method, constructor, field           |
+| Dart       | `src/indexer/languages/dart.ts`       | Dart Analysis Server                 | class, mixin, enum, extension, function, method, getter, setter          |
+
+補助ファイル:
+
+- `src/indexer/languages/types.ts`: 共有 `SymbolRecord` / `SnippetRecord` / `DependencyRecord` / `AnalysisResult` と `buildSnippetsFromSymbols`、`buildFallbackSnippet` などのヘルパー。
+- `src/indexer/languages/index.ts`: 各アナライザを `Map<string, LanguageAnalyzer>` に登録し、参照ヘルパーを公開。
+- `src/indexer/codeintel.ts`: 適切なアナライザを選択するオーケストレータ（未対応言語は空結果を返す）。
+
+### 新しい言語の追加手順
+
+1. `src/indexer/languages/<lang>.ts` を作成して `LanguageAnalyzer` をエクスポートする。`buildSnippetsFromSymbols` を再利用し、並列実行安全のためパーサ状態はローカルに保つ。
+2. `src/indexer/languages/index.ts` にアナライザを登録する。
+3. 本ドキュメントと `README.md` を更新し、`tests/indexer/languages/` に対象テストを追加する。
+4. `pnpm run test` と `pnpm run build` を通して CI が新アナライザを検証できる状態にする。

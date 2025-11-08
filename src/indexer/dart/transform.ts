@@ -2,7 +2,7 @@
  * Dart Analysis Server の Outline から KIRI の SymbolRecord への変換
  */
 
-import type { SymbolRecord, SnippetRecord } from "../codeintel.js";
+import type { SnippetRecord, SymbolRecord } from "../languages/types.js";
 import type { Outline, ElementKind } from "./types.js";
 
 /**

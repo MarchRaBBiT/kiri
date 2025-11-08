@@ -53,13 +53,15 @@ export async function createServerRuntime(options: CommonServerOptions): Promise
     // FTS拡張の利用可否を検出
     const hasFTS = await tryCreateFTSIndex(db);
 
+    const warningManager = new WarningManager();
+
     const context: ServerContext = {
       db,
       repoId,
       features: {
         fts: hasFTS,
       },
-      warningManager: new WarningManager(),
+      warningManager,
     };
 
     const degrade = new DegradeController(repoRoot);

@@ -310,6 +310,20 @@ export class DartAnalysisClient {
     const timeoutMs = options?.timeoutMs ?? 5000;
     const skipShutdown = options?.skipShutdown ?? false;
 
+    // Fix #27 (Codex Critical Review Round 5): Store timer handle for cleanup
+    let killTimer: NodeJS.Timeout | null = null;
+
+    const cleanup = () => {
+      if (killTimer) {
+        clearTimeout(killTimer);
+        killTimer = null;
+      }
+      this.readline?.close();
+      this.process = null;
+      this.readline = null;
+      this.initialized = false;
+    };
+
     try {
       if (!skipShutdown && this.initialized) {
         // Fix #3: server.shutdown を短いタイムアウトで実行
@@ -325,10 +339,13 @@ export class DartAnalysisClient {
           }
           this.process.once("exit", () => resolve());
           // Fix #14 (Codex Critical Review): Use forceKill() on timeout (includes Windows taskkill)
-          setTimeout(() => {
+          // Fix #27 (Codex Critical Review Round 5): Store timer handle and use unref() to prevent event loop hanging
+          killTimer = setTimeout(() => {
             this.forceKill();
             resolve();
           }, timeoutMs);
+          // CRITICAL: unref() prevents event loop from staying alive waiting for this timer
+          killTimer.unref();
         });
       } else {
         // Fix #3: skipShutdown または未初期化の場合は即時強制終了
@@ -338,10 +355,7 @@ export class DartAnalysisClient {
       console.error(`[DartAnalysisClient] dispose error:`, error);
       this.forceKill(); // エラー時は強制終了
     } finally {
-      this.readline?.close();
-      this.process = null;
-      this.readline = null;
-      this.initialized = false;
+      cleanup();
     }
   }
 

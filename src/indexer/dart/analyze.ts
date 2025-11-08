@@ -90,16 +90,26 @@ async function acquireClient(workspaceRoot: string): Promise<DartAnalysisClient>
         if (lruEntry.idleTimer) {
           clearTimeout(lruEntry.idleTimer);
         }
-        clients.delete(lruWorkspace);
-        console.log(
-          `[acquireClient] Evicting LRU client for ${lruWorkspace} (pool size: ${MAX_CLIENTS})`
-        );
+        // Fix #28 (Codex Critical Review Round 5): Check delete() return value to prevent double eviction
+        const wasDeleted = clients.delete(lruWorkspace);
 
-        // Dispose synchronously and release permit immediately
-        await lruEntry.client.dispose({ timeoutMs: 2000 }).catch((error) => {
-          console.error(`[acquireClient] Failed to dispose LRU client for ${lruWorkspace}:`, error);
-        });
-        poolLimiter.release(); // Free up slot for new client
+        if (wasDeleted) {
+          // Only this thread successfully deleted the entry
+          console.log(
+            `[acquireClient] Evicting LRU client for ${lruWorkspace} (pool size: ${MAX_CLIENTS})`
+          );
+
+          // Dispose synchronously and release permit immediately
+          await lruEntry.client.dispose({ timeoutMs: 2000 }).catch((error) => {
+            console.error(
+              `[acquireClient] Failed to dispose LRU client for ${lruWorkspace}:`,
+              error
+            );
+          });
+          poolLimiter.release(); // Free up slot for new client
+        } else {
+          // Another thread already evicted this client - this is safe, just retry
+        }
       }
     }
 
@@ -135,19 +145,27 @@ async function acquireClient(workspaceRoot: string): Promise<DartAnalysisClient>
           if (lruEntry.idleTimer) {
             clearTimeout(lruEntry.idleTimer);
           }
-          clients.delete(lruWorkspace);
-          console.log(
-            `[acquireClient] Pool full after acquire, evicting LRU client for ${lruWorkspace}`
-          );
+          // Fix #28 (Codex Critical Review Round 5): Check delete() return value to prevent double eviction
+          const wasDeleted = clients.delete(lruWorkspace);
 
-          await lruEntry.client.dispose({ timeoutMs: 2000 }).catch((error) => {
-            console.error(
-              `[acquireClient] Failed to dispose LRU client for ${lruWorkspace}:`,
-              error
+          if (wasDeleted) {
+            // Only this thread successfully deleted the entry
+            console.log(
+              `[acquireClient] Pool full after acquire, evicting LRU client for ${lruWorkspace}`
             );
-          });
-          // Note: We don't release permit here because we already acquired one
-          break; // Exit retry loop - we made space
+
+            await lruEntry.client.dispose({ timeoutMs: 2000 }).catch((error) => {
+              console.error(
+                `[acquireClient] Failed to dispose LRU client for ${lruWorkspace}:`,
+                error
+              );
+            });
+            // Note: We don't release permit here because we already acquired one
+            break; // Exit retry loop - we made space
+          } else {
+            // Another thread already evicted this client - retry with updated state
+            continue;
+          }
         } else {
           // No idle clients available - all clients are active
           poolLimiter.release();
@@ -402,6 +420,23 @@ export async function cleanup(): Promise<void> {
     // Fix #13: Delete all entries immediately to prevent concurrent acquireClient() access
     clients.clear();
 
+    // Fix #30 (Codex Critical Review Round 5): Check pool state before releasing permits
+    // to prevent available permits from exceeding maxCapacity
+    const poolStats = poolLimiter.stats();
+    const permitsToRelease = Math.min(
+      entriesToCleanup.length,
+      poolStats.maxCapacity - poolStats.available
+    );
+
+    if (permitsToRelease < entriesToCleanup.length) {
+      console.warn(
+        `[cleanup] Pool has ${poolStats.available}/${poolStats.maxCapacity} available permits. ` +
+          `Only releasing ${permitsToRelease} of ${entriesToCleanup.length} to prevent overflow.`
+      );
+    }
+
+    let releasedCount = 0;
+
     for (const [workspaceRoot, entry] of entriesToCleanup) {
       // Fix #2: アイドルタイマーをクリア
       if (entry.idleTimer) {
@@ -422,8 +457,11 @@ export async function cleanup(): Promise<void> {
         } catch (error) {
           console.error(`[cleanup] Failed to dispose client for ${workspaceRoot}:`, error);
         } finally {
-          // Always release pool permit to prevent permit leak
-          poolLimiter.release();
+          // Fix #30: Only release if we haven't exceeded the safe count
+          if (releasedCount < permitsToRelease) {
+            poolLimiter.release();
+            releasedCount++;
+          }
         }
       };
 
@@ -443,8 +481,18 @@ export async function cleanup(): Promise<void> {
  *
  * beforeExit/シグナルハンドラで非同期 cleanup を実行し、
  * exit フォールバックでは同期的な強制終了のみ行う
+ *
+ * Fix #29 (Codex Critical Review Round 5): Guard against multiple registrations
  */
+let lifecycleHooksRegistered = false;
+
 function registerDartLifecycleHooks(): void {
+  // Fix #29: Prevent duplicate registration in test environments with vi.resetModules()
+  if (lifecycleHooksRegistered) {
+    return;
+  }
+  lifecycleHooksRegistered = true;
+
   let cleanupInProgress = false;
 
   const gracefulShutdown = async (signal: string) => {
@@ -460,9 +508,10 @@ function registerDartLifecycleHooks(): void {
     } catch (error) {
       console.error(`[DartLifecycle] Cleanup failed:`, error);
     } finally {
-      // SIGINT/SIGTERM の場合はプロセス終了
+      // Fix #29: Set exit code instead of calling process.exit() from library code
+      // Let the parent application handle exit
       if (signal !== "beforeExit") {
-        process.exit(signal === "SIGTERM" ? 0 : 1);
+        process.exitCode = signal === "SIGTERM" ? 0 : 1;
       }
     }
   };

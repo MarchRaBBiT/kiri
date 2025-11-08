@@ -6,7 +6,7 @@ import Swift from "tree-sitter-swift";
 import ts from "typescript";
 
 // tree-sitter-php is a CommonJS module, so import it using require.
-// Using version 0.22.8 for compatibility with tree-sitter 0.22.4.
+// tree-sitter-php: Using version 0.22.8 for compatibility with tree-sitter 0.22.4.
 // Version 0.24.2 had a nodeTypeInfo bug that caused runtime errors.
 // php_only: for pure PHP files (<?php at start)
 // php: for HTML-mixed PHP files (HTML with <?php ... ?> tags)
@@ -14,6 +14,10 @@ const require = createRequire(import.meta.url);
 const PHPModule = require("tree-sitter-php");
 const PHP_ONLY = PHPModule.php_only;
 const PHP_MIXED = PHPModule.php;
+
+// Dart Analysis Server integration
+// eslint-disable-next-line import/order
+import { analyzeDartSource } from "./dart/analyze.js";
 
 export interface SymbolRecord {
   symbolId: number;
@@ -43,7 +47,7 @@ interface AnalysisResult {
   dependencies: DependencyRecord[];
 }
 
-const SUPPORTED_LANGUAGES = new Set(["TypeScript", "Swift", "PHP"]);
+const SUPPORTED_LANGUAGES = new Set(["TypeScript", "Swift", "PHP", "Dart"]);
 
 function sanitizeSignature(source: ts.SourceFile, node: ts.Node): string {
   const start = node.getStart(source);
@@ -846,15 +850,27 @@ function collectSwiftDependencies(
   return Array.from(dependencies.values());
 }
 
-export function analyzeSource(
+export async function analyzeSource(
   pathInRepo: string,
   lang: string | null,
   content: string,
-  fileSet: Set<string>
-): AnalysisResult {
+  fileSet: Set<string>,
+  workspaceRoot?: string
+): Promise<AnalysisResult> {
   const normalizedLang = lang ?? "";
   if (!SUPPORTED_LANGUAGES.has(normalizedLang)) {
     return { symbols: [], snippets: [], dependencies: [] };
+  }
+
+  // Dart language: use Analysis Server
+  if (normalizedLang === "Dart") {
+    if (!workspaceRoot) {
+      console.warn(
+        `[analyzeSource] workspaceRoot required for Dart analysis, skipping ${pathInRepo}`
+      );
+      return { symbols: [], snippets: [], dependencies: [] };
+    }
+    return await analyzeDartSource(pathInRepo, content, workspaceRoot);
   }
 
   // PHP language: use tree-sitter

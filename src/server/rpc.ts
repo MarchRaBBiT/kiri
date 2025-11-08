@@ -29,7 +29,7 @@ import { withSpan } from "./observability/tracing.js";
  */
 export class WarningManager {
   private readonly shownWarnings = new Set<string>();
-  public readonly responseWarnings: string[] = [];
+  private requestWarnings: string[] = []; // Per-request warning buffer
   private readonly maxUniqueWarnings: number;
   private limitReachedWarningShown = false;
 
@@ -40,6 +40,24 @@ export class WarningManager {
    */
   constructor(maxUniqueWarnings: number = 1000) {
     this.maxUniqueWarnings = maxUniqueWarnings;
+  }
+
+  /**
+   * 新しいリクエストコンテキストを開始し、前回のリクエストの警告をクリアします
+   *
+   * 各リクエストの開始時に呼び出す必要があります。
+   */
+  startRequest(): void {
+    this.requestWarnings = [];
+  }
+
+  /**
+   * 現在のリクエストの警告のみを取得します
+   *
+   * リクエスト間での警告の混入を防ぐため、配列のコピーを返します。
+   */
+  get responseWarnings(): string[] {
+    return [...this.requestWarnings];
   }
 
   /**
@@ -70,7 +88,7 @@ export class WarningManager {
     this.shownWarnings.add(key);
 
     if (forResponse) {
-      this.responseWarnings.push(message);
+      this.requestWarnings.push(message);
     }
 
     return true;
@@ -83,13 +101,19 @@ export class WarningManager {
    * ユーザーが危険なリクエストを繰り返し送信する場合に、
    * 毎回通知する必要がある警告に使用します。
    *
+   * リクエスト内での重複は排除され、同じキーの警告は1度だけ追加されます。
+   *
    * @param key - 警告を識別するキー（ログ記録用）
    * @param message - 表示する警告メッセージ
    */
   warnForRequest(key: string, message: string): void {
     const formattedMessage = `[${key}] ${message}`;
     console.warn(formattedMessage);
-    this.responseWarnings.push(formattedMessage);
+
+    // リクエスト内での重複を防ぐ（DoS攻撃対策）
+    if (!this.requestWarnings.some((w) => w.startsWith(`[${key}]`))) {
+      this.requestWarnings.push(formattedMessage);
+    }
   }
 
   /**
@@ -97,7 +121,7 @@ export class WarningManager {
    */
   reset(): void {
     this.shownWarnings.clear();
-    this.responseWarnings.length = 0;
+    this.requestWarnings = [];
     this.limitReachedWarningShown = false;
   }
 }
@@ -661,6 +685,7 @@ async function executeToolByName(
     case "files_search": {
       const params = parseFilesSearchParams(toolParams);
       if (degrade.current.active && allowDegrade) {
+        // Use same output option logic as normal mode for consistency
         const includePreview = params.compact !== true;
         return degrade.search(params.query, params.limit ?? 20).map((hit) => {
           const result = {
@@ -669,7 +694,7 @@ async function executeToolByName(
             lang: null,
             ext: null,
             score: 0,
-          } as const;
+          };
           return includePreview ? { ...result, preview: hit.preview } : result;
         });
       } else {

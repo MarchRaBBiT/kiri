@@ -305,6 +305,86 @@ const WHY_TAG_PRIORITY: Record<string, number> = {
   keyword: 14, // Generic keyword (deprecated, kept for compatibility)
 };
 
+// Reserve at least one slot for important structural tags
+const RESERVED_WHY_SLOTS: Record<string, number> = {
+  dep: 1, // Dependency relationships are critical
+  symbol: 1, // Symbol boundaries help understand context
+  near: 1, // Proximity explains file selection
+};
+
+/**
+ * Parse output formatting options from request parameters
+ *
+ * Provides a consistent way to determine what content should be included in responses.
+ * Used by both normal and degraded mode to ensure consistent behavior.
+ */
+interface OutputOptions {
+  includePreview: boolean;
+  includeLineNumbers: boolean;
+}
+
+function parseOutputOptions(params: {
+  compact?: boolean;
+  includeLineNumbers?: boolean;
+}): OutputOptions {
+  return {
+    includePreview: params.compact !== true,
+    includeLineNumbers: params.includeLineNumbers === true && params.compact !== true,
+  };
+}
+
+/**
+ * Select the most informative why tags while ensuring diversity
+ *
+ * Guarantees at least one tag from reserved categories (dep, symbol, near) if they exist,
+ * then fills remaining slots by priority. This prevents keyword matches from crowding out
+ * structural context that explains "why this file?"
+ */
+function selectWhyTags(reasons: Set<string>): string[] {
+  const byCategory = new Map<string, string[]>();
+
+  // Group by prefix
+  for (const reason of reasons) {
+    const prefix = reason.split(":")[0] ?? "";
+    if (!byCategory.has(prefix)) {
+      byCategory.set(prefix, []);
+    }
+    byCategory.get(prefix)!.push(reason);
+  }
+
+  const selected: string[] = [];
+
+  // Step 1: Fill reserved slots first to ensure structural context
+  for (const [category, minCount] of Object.entries(RESERVED_WHY_SLOTS)) {
+    const items = byCategory.get(category) ?? [];
+    if (items.length > 0) {
+      // Take the first item from this category (they're already specific)
+      selected.push(...items.slice(0, minCount));
+    }
+  }
+
+  // Step 2: Fill remaining slots by priority
+  const remaining = MAX_WHY_TAGS - selected.length;
+  if (remaining > 0) {
+    const alreadyAdded = new Set(selected);
+
+    const allReasons = Array.from(reasons)
+      .filter((r) => !alreadyAdded.has(r))
+      .sort((a, b) => {
+        const aPrefix = a.split(":")[0] ?? "";
+        const bPrefix = b.split(":")[0] ?? "";
+        const aPrio = WHY_TAG_PRIORITY[aPrefix] ?? 99;
+        const bPrio = WHY_TAG_PRIORITY[bPrefix] ?? 99;
+        if (aPrio !== bPrio) return aPrio - bPrio;
+        return a.localeCompare(b);
+      });
+
+    selected.push(...allReasons.slice(0, remaining));
+  }
+
+  return selected;
+}
+
 const STOP_WORDS = new Set([
   "the",
   "and",
@@ -1297,14 +1377,14 @@ export async function filesSearch(
   // Note: filesSearch doesn't have a separate profile parameter, uses default weights
   const weights = loadScoringProfile(null);
 
-  const includePreview = params.compact !== true;
+  const options = parseOutputOptions(params);
 
   return rows
     .map((row) => {
       let preview: string | undefined;
       let matchLine: number;
 
-      if (includePreview) {
+      if (options.includePreview) {
         // Full preview generation for non-compact mode
         const previewData = buildPreview(row.content ?? "", query);
         preview = previewData.preview;
@@ -1456,6 +1536,9 @@ export async function contextBundle(
   context: ServerContext,
   params: ContextBundleParams
 ): Promise<ContextBundleResult> {
+  // Clear previous request warnings at start to prevent memory leak and cross-contamination
+  context.warningManager.startRequest();
+
   const { db, repoId } = context;
   const goal = params.goal?.trim() ?? "";
   if (goal.length === 0) {
@@ -1859,16 +1942,8 @@ export async function contextBundle(
 
     const roundedScore = Number.isFinite(normalizedScore) ? Number(normalizedScore.toFixed(3)) : 0;
 
-    // 項目3: 優先度ベースのwhyタグソート
-    const sortedReasons = Array.from(reasons).sort((a, b) => {
-      const aPrefix = a.split(":")[0] ?? "";
-      const bPrefix = b.split(":")[0] ?? "";
-      const aPrio = WHY_TAG_PRIORITY[aPrefix] ?? 99;
-      const bPrio = WHY_TAG_PRIORITY[bPrefix] ?? 99;
-      if (aPrio !== bPrio) return aPrio - bPrio;
-      return a.localeCompare(b); // 同優先度内ではアルファベット順
-    });
-    const why = sortedReasons.slice(0, MAX_WHY_TAGS);
+    // Select why tags with diversity guarantee (reserves slots for dep/symbol/near)
+    const why = selectWhyTags(reasons);
 
     const item: ContextBundleItem = {
       path: candidate.path,

@@ -1,6 +1,8 @@
 import packageJson from "../../package.json" with { type: "json" };
 import { maskValue } from "../shared/security/masker.js";
 
+const RESPONSE_MASK_SKIP_KEYS = ["path"];
+
 import { ServerContext } from "./context.js";
 import { DegradeController } from "./fallbacks/degradeController.js";
 import {
@@ -27,19 +29,53 @@ import { withSpan } from "./observability/tracing.js";
  *
  * メモリリーク防止のため、保持する警告キーの数に上限を設定しています。
  */
+interface WarningManagerSharedState {
+  shownWarnings: Set<string>;
+  limitReachedWarningShown: { value: boolean };
+}
+
 export class WarningManager {
-  private readonly shownWarnings = new Set<string>();
-  public readonly responseWarnings: string[] = [];
+  private readonly shared: WarningManagerSharedState;
+  private requestWarnings: string[] = []; // Per-request warning buffer
   private readonly maxUniqueWarnings: number;
-  private limitReachedWarningShown = false;
 
   /**
    * WarningManagerを構築します
    *
    * @param maxUniqueWarnings - 追跡する一意の警告の最大数（デフォルト: 1000）
    */
-  constructor(maxUniqueWarnings: number = 1000) {
+  constructor(maxUniqueWarnings: number = 1000, sharedState?: WarningManagerSharedState) {
     this.maxUniqueWarnings = maxUniqueWarnings;
+    this.shared = sharedState ?? {
+      shownWarnings: new Set<string>(),
+      limitReachedWarningShown: { value: false },
+    };
+  }
+
+  /**
+   * 共有状態を保ったまま、新しい WarningManager インスタンスを作成します。
+   * リクエスト単位での警告管理に利用します。
+   */
+  fork(): WarningManager {
+    return new WarningManager(this.maxUniqueWarnings, this.shared);
+  }
+
+  /**
+   * 新しいリクエストコンテキストを開始し、前回のリクエストの警告をクリアします
+   *
+   * 各リクエストの開始時に呼び出す必要があります。
+   */
+  startRequest(): void {
+    this.requestWarnings = [];
+  }
+
+  /**
+   * 現在のリクエストの警告のみを取得します
+   *
+   * リクエスト間での警告の混入を防ぐため、配列のコピーを返します。
+   */
+  get responseWarnings(): string[] {
+    return [...this.requestWarnings];
   }
 
   /**
@@ -51,38 +87,61 @@ export class WarningManager {
    * @returns 警告が表示された場合はtrue、既に表示済みの場合はfalse
    */
   warnOnce(key: string, message: string, forResponse: boolean = false): boolean {
-    if (this.shownWarnings.has(key)) {
+    if (this.shared.shownWarnings.has(key)) {
       return false;
     }
 
     // メモリリーク防止: 上限に達したら新しい警告を追加しない
-    if (this.shownWarnings.size >= this.maxUniqueWarnings) {
-      if (!this.limitReachedWarningShown) {
+    if (this.shared.shownWarnings.size >= this.maxUniqueWarnings) {
+      if (!this.shared.limitReachedWarningShown.value) {
         console.warn(
           "WarningManager: Unique warning limit reached. No new warnings will be shown."
         );
-        this.limitReachedWarningShown = true;
+        this.shared.limitReachedWarningShown.value = true;
       }
       return false;
     }
 
     console.warn(message);
-    this.shownWarnings.add(key);
+    this.shared.shownWarnings.add(key);
 
     if (forResponse) {
-      this.responseWarnings.push(message);
+      this.requestWarnings.push(message);
     }
 
     return true;
   }
 
   /**
+   * リクエストごとに警告を表示します（サーバーライフタイムでの重複チェックなし）
+   *
+   * warnOnce()と異なり、この方法は毎回警告をレスポンスに追加します。
+   * ユーザーが危険なリクエストを繰り返し送信する場合に、
+   * 毎回通知する必要がある警告に使用します。
+   *
+   * リクエスト内での重複は排除され、同じキーの警告は1度だけ追加されます。
+   *
+   * @param key - 警告を識別するキー（ログ記録用）
+   * @param message - 表示する警告メッセージ
+   */
+  warnForRequest(key: string, message: string): void {
+    const keyPrefix = `[${key}]`;
+    if (this.requestWarnings.some((warning) => warning.startsWith(keyPrefix))) {
+      return;
+    }
+
+    const formattedMessage = `${keyPrefix} ${message}`;
+    this.requestWarnings.push(formattedMessage);
+    console.warn(formattedMessage);
+  }
+
+  /**
    * テスト用：表示済み警告の履歴をクリアします
    */
   reset(): void {
-    this.shownWarnings.clear();
-    this.responseWarnings.length = 0;
-    this.limitReachedWarningShown = false;
+    this.shared.shownWarnings.clear();
+    this.requestWarnings = [];
+    this.shared.limitReachedWarningShown.value = false;
   }
 }
 
@@ -139,8 +198,15 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     name: "context_bundle",
     description:
       "Primary code discovery tool. Provide a concrete, keyword-rich `goal` (modules, files, symptoms) to receive ranked `context` entries containing `path`, `range`, optional `preview`, scoring `why`, and `score`. Avoid leading with generic imperatives such as 'find' or 'locate'; list the signals you have instead.\n\n" +
-      "Returns {context, tokens_estimate, warnings?}; the tool only reads from the index. Empty or vague goals raise an MCP error that asks for specific keywords, and imperative-only phrasing usually lowers ranking quality.\n\n" +
-      "Example: context_bundle({goal: 'pagination off-by-one bug; file=src/catalog/products.ts; expected=20 items; observed=19'}) surfaces the affected files. Less effective: goal='Find where pagination breaks'.",
+      "Returns {context, tokens_estimate?, warnings?}; computing tokens_estimate is optional and should be requested explicitly when needed. Empty or vague goals raise an MCP error that asks for specific keywords, and imperative-only phrasing usually lowers ranking quality.\n\n" +
+      "Example: context_bundle({goal: 'pagination off-by-one bug; file=src/catalog/products.ts; expected=20 items; observed=19'}) surfaces the affected files. Less effective: goal='Find where pagination breaks'.\n\n" +
+      "Goal-crafting best practices (applies to every high-signal identifier, not only function names):\n" +
+      "- List the crucial identifiers (functions, hooks, components, file names, config IDs, etc.) first so the highest-signal terms are always at the front.\n" +
+      "- Stay within 3-5 concrete keywords (about 80 characters) to limit noise and keep scoring sharp.\n" +
+      "- Keep generic errors or narration minimal; if you need them, append short suffixes or parentheses after the identifiers.\n" +
+      "- Attach conditions or context as concise trailing phrases (e.g., 'conditional hook calls').\n\n" +
+      "Before: 'Find where pagination breaks in React hooks error'\n" +
+      "After: 'useOrdersPagination src/orders/pagination.ts offByOne (React hooks error)'.",
     inputSchema: {
       type: "object",
       required: ["goal"],
@@ -166,6 +232,11 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
             "If true, omits the 'preview' field to drastically reduce token consumption (~95% reduction). " +
             "Returns only metadata: path, range, why, score. Use with snippets.get for two-tier approach. " +
             "Default: true (v0.8.0+). Set to false if you need immediate code previews.",
+        },
+        includeTokensEstimate: {
+          type: "boolean",
+          description:
+            "If true, computes the tokens_estimate field. This is slower and should be used only when you need projected token counts.",
         },
         profile: {
           type: "string",
@@ -234,7 +305,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     name: "files_search",
     description:
       "Token-aware substring search for precise identifiers, error messages, or import fragments. Prefer this tool when you already know the exact string you need to locate; use `context_bundle` for exploratory work.\n\n" +
-      "Returns an array of `{path, preview, matchLine, lang, ext, score}` objects; the tool never mutates the repo. Empty queries raise an MCP error prompting you to provide a concrete keyword. If DuckDB is unavailable but the server runs with `--allow-degrade`, the same array shape is returned using filesystem-based fallbacks (with `lang`/`ext` set to null).\n\n" +
+      "Returns an array of `{path, matchLine, lang, ext, score}` objects with optional `preview`; the tool never mutates the repo. Set `compact: true` to omit previews entirely for maximum token savings. Empty queries raise an MCP error prompting you to provide a concrete keyword. If DuckDB is unavailable but the server runs with `--allow-degrade`, the same array shape is returned using filesystem-based fallbacks (with `lang`/`ext` set to null).\n\n" +
       'Example: files_search({query: "AuthenticationError", path_prefix: "src/auth/"}) narrows to auth handlers. Invalid: files_search({query: ""}) reports that the query must be non-empty.',
     inputSchema: {
       type: "object",
@@ -274,6 +345,11 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
           description:
             'File type boosting mode: "default" prioritizes implementation files (src/app/, src/components/), "docs" prioritizes documentation (*.md), "none" disables boosting. Default is "default".',
         },
+        compact: {
+          type: "boolean",
+          description:
+            "If true, omits previews to minimize response tokens. Pair with snippets_get for detail-on-demand workflows.",
+        },
       },
     },
   },
@@ -281,7 +357,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     name: "snippets_get",
     description:
       "Focused snippet retrieval by file path. The tool uses recorded symbol boundaries to return the smallest readable span, or falls back to the requested line window.\n\n" +
-      "Returns {path, startLine, endLine, content, totalLines, symbolName, symbolKind}; this is a read-only lookup. Missing `path`, binary files, or absent index entries raise an MCP error with guidance to re-run the indexer.\n\n" +
+      "Returns {path, startLine, endLine, totalLines, symbolName, symbolKind} with optional `content`. Set `compact: true` to omit content, or `include_line_numbers: true` to prefix each line with its number; this is a read-only lookup. Missing `path`, binary files, or absent index entries raise an MCP error with guidance to re-run the indexer.\n\n" +
       "Example: snippets_get({path: 'src/auth/login.ts'}) surfaces the enclosing function. Invalid: snippets_get({path: 'assets/logo.png'}) reports that binary snippets are unsupported.",
     inputSchema: {
       type: "object",
@@ -294,6 +370,16 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         },
         start_line: { type: "number", minimum: 0 },
         end_line: { type: "number", minimum: 0 },
+        compact: {
+          type: "boolean",
+          description:
+            "If true, returns only metadata (path, range, totals, symbols) without content payload.",
+        },
+        include_line_numbers: {
+          type: "boolean",
+          description:
+            "If true, prefixes each returned line with its line number (ignored when compact is true).",
+        },
       },
     },
   },
@@ -372,6 +458,10 @@ function parseFilesSearchParams(input: unknown): FilesSearchParams {
     params.boost_profile = boostProfile;
   }
 
+  if (typeof record.compact === "boolean") {
+    params.compact = record.compact;
+  }
+
   return params;
 }
 
@@ -397,6 +487,11 @@ function parseSnippetsGetParams(input: unknown): SnippetsGetParams {
   };
   if (startLine !== undefined) params.start_line = startLine;
   if (endLine !== undefined) params.end_line = endLine;
+  if (typeof record.compact === "boolean") params.compact = record.compact;
+  const includeLineNumbersValue = record.includeLineNumbers ?? record.include_line_numbers;
+  if (typeof includeLineNumbersValue === "boolean") {
+    params.includeLineNumbers = includeLineNumbersValue;
+  }
   return params;
 }
 
@@ -509,6 +604,11 @@ function parseContextBundleParams(input: unknown, context: ServerContext): Conte
     );
   }
 
+  const includeTokensEstimate = record.includeTokensEstimate ?? record.include_tokens_estimate;
+  if (typeof includeTokensEstimate === "boolean") {
+    params.includeTokensEstimate = includeTokensEstimate;
+  }
+
   return params;
 }
 
@@ -611,14 +711,18 @@ async function executeToolByName(
     case "files_search": {
       const params = parseFilesSearchParams(toolParams);
       if (degrade.current.active && allowDegrade) {
-        return degrade.search(params.query, params.limit ?? 20).map((hit) => ({
-          path: hit.path,
-          preview: hit.preview,
-          matchLine: hit.matchLine,
-          lang: null,
-          ext: null,
-          score: 0,
-        }));
+        // Use same output option logic as normal mode for consistency
+        const includePreview = params.compact !== true;
+        return degrade.search(params.query, params.limit ?? 20).map((hit) => {
+          const result = {
+            path: hit.path,
+            matchLine: hit.matchLine,
+            lang: null,
+            ext: null,
+            score: 0,
+          };
+          return includePreview ? { ...result, preview: hit.preview } : result;
+        });
       } else {
         const handler = async () =>
           await withSpan("files_search", async () => await filesSearch(context, params));
@@ -646,6 +750,11 @@ export function createRpcHandler(
   dependencies: RpcHandlerDependencies
 ): (payload: JsonRpcRequest) => Promise<RpcHandleResult | null> {
   const { context, degrade, metrics, tokens, allowDegrade } = dependencies;
+  const buildRequestContext = (): ServerContext => {
+    const warningManager = context.warningManager.fork();
+    warningManager.startRequest();
+    return { ...context, warningManager };
+  };
   return async (payload: JsonRpcRequest): Promise<RpcHandleResult | null> => {
     const hasResponseId = typeof payload.id === "string" || typeof payload.id === "number";
     try {
@@ -707,12 +816,13 @@ export function createRpcHandler(
           }
 
           const toolArguments = paramsRecord.arguments ?? {};
+          const scopedContext = buildRequestContext();
 
           try {
             const toolResult = await executeToolByName(
               toolName,
               toolArguments,
-              context,
+              scopedContext,
               degrade,
               allowDegrade
             );
@@ -750,50 +860,55 @@ export function createRpcHandler(
         }
         // Legacy direct method invocation (backward compatibility)
         case "context_bundle": {
+          const scopedContext = buildRequestContext();
           result = await executeToolByName(
             "context_bundle",
             payload.params,
-            context,
+            scopedContext,
             degrade,
             allowDegrade
           );
           break;
         }
         case "semantic_rerank": {
+          const scopedContext = buildRequestContext();
           result = await executeToolByName(
             "semantic_rerank",
             payload.params,
-            context,
+            scopedContext,
             degrade,
             allowDegrade
           );
           break;
         }
         case "files_search": {
+          const scopedContext = buildRequestContext();
           result = await executeToolByName(
             "files_search",
             payload.params,
-            context,
+            scopedContext,
             degrade,
             allowDegrade
           );
           break;
         }
         case "snippets_get": {
+          const scopedContext = buildRequestContext();
           result = await executeToolByName(
             "snippets_get",
             payload.params,
-            context,
+            scopedContext,
             degrade,
             allowDegrade
           );
           break;
         }
         case "deps_closure": {
+          const scopedContext = buildRequestContext();
           result = await executeToolByName(
             "deps_closure",
             payload.params,
-            context,
+            scopedContext,
             degrade,
             allowDegrade
           );
@@ -812,7 +927,7 @@ export function createRpcHandler(
             : null;
         }
       }
-      const masked = maskValue(result, { tokens });
+      const masked = maskValue(result, { tokens, skipKeys: RESPONSE_MASK_SKIP_KEYS });
       if (masked.applied > 0) {
         metrics.recordMask(masked.applied);
       }

@@ -319,10 +319,11 @@ async function persistEmbeddings(
   await db.run(sql, params);
 }
 
-function buildCodeIntel(
+async function buildCodeIntel(
   files: FileRecord[],
-  blobs: Map<string, BlobRecord>
-): { symbols: SymbolRow[]; snippets: SnippetRow[]; dependencies: DependencyRow[] } {
+  blobs: Map<string, BlobRecord>,
+  workspaceRoot: string
+): Promise<{ symbols: SymbolRow[]; snippets: SnippetRow[]; dependencies: DependencyRow[] }> {
   const fileSet = new Set<string>(files.map((file) => file.path));
   const symbols: SymbolRow[] = [];
   const snippets: SnippetRow[] = [];
@@ -338,7 +339,13 @@ function buildCodeIntel(
       continue;
     }
 
-    const analysis = analyzeSource(file.path, file.lang, blob.content, fileSet);
+    const analysis = await analyzeSource(
+      file.path,
+      file.lang,
+      blob.content,
+      fileSet,
+      workspaceRoot
+    );
 
     for (const symbol of analysis.symbols) {
       symbols.push({
@@ -663,7 +670,13 @@ export async function runIndexer(options: IndexerOptions): Promise<void> {
           const fileDependencies: DependencyRow[] = [];
 
           if (!file.isBinary && blob.content) {
-            const analysis = analyzeSource(file.path, file.lang, blob.content, fileSet);
+            const analysis = await analyzeSource(
+              file.path,
+              file.lang,
+              blob.content,
+              fileSet,
+              repoRoot
+            );
             for (const symbol of analysis.symbols) {
               fileSymbols.push({
                 path: file.path,
@@ -744,7 +757,7 @@ export async function runIndexer(options: IndexerOptions): Promise<void> {
     // Full mode: reindex entire repository
     const paths = await gitLsFiles(repoRoot);
     const { blobs, files, embeddings } = await scanFilesInBatches(repoRoot, paths);
-    const codeIntel = buildCodeIntel(files, blobs);
+    const codeIntel = await buildCodeIntel(files, blobs, repoRoot);
 
     await db.transaction(async () => {
       await db.run("DELETE FROM tree WHERE repo_id = ?", [repoId]);

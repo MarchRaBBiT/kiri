@@ -1,6 +1,8 @@
 import packageJson from "../../package.json" with { type: "json" };
 import { maskValue } from "../shared/security/masker.js";
 
+const RESPONSE_MASK_SKIP_KEYS = ["path"];
+
 import { ServerContext } from "./context.js";
 import { DegradeController } from "./fallbacks/degradeController.js";
 import {
@@ -197,7 +199,14 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     description:
       "Primary code discovery tool. Provide a concrete, keyword-rich `goal` (modules, files, symptoms) to receive ranked `context` entries containing `path`, `range`, optional `preview`, scoring `why`, and `score`. Avoid leading with generic imperatives such as 'find' or 'locate'; list the signals you have instead.\n\n" +
       "Returns {context, tokens_estimate?, warnings?}; computing tokens_estimate is optional and should be requested explicitly when needed. Empty or vague goals raise an MCP error that asks for specific keywords, and imperative-only phrasing usually lowers ranking quality.\n\n" +
-      "Example: context_bundle({goal: 'pagination off-by-one bug; file=src/catalog/products.ts; expected=20 items; observed=19'}) surfaces the affected files. Less effective: goal='Find where pagination breaks'.",
+      "Example: context_bundle({goal: 'pagination off-by-one bug; file=src/catalog/products.ts; expected=20 items; observed=19'}) surfaces the affected files. Less effective: goal='Find where pagination breaks'.\n\n" +
+      "Goal-crafting best practices (applies to every high-signal identifier, not only function names):\n" +
+      "- List the crucial identifiers (functions, hooks, components, file names, config IDs, etc.) first so the highest-signal terms are always at the front.\n" +
+      "- Stay within 3-5 concrete keywords (about 80 characters) to limit noise and keep scoring sharp.\n" +
+      "- Keep generic errors or narration minimal; if you need them, append short suffixes or parentheses after the identifiers.\n" +
+      "- Attach conditions or context as concise trailing phrases (e.g., 'conditional hook calls').\n\n" +
+      "Before: 'Find where pagination breaks in React hooks error'\n" +
+      "After: 'useOrdersPagination src/orders/pagination.ts offByOne (React hooks error)'.",
     inputSchema: {
       type: "object",
       required: ["goal"],
@@ -918,7 +927,7 @@ export function createRpcHandler(
             : null;
         }
       }
-      const masked = maskValue(result, { tokens });
+      const masked = maskValue(result, { tokens, skipKeys: RESPONSE_MASK_SKIP_KEYS });
       if (masked.applied > 0) {
         metrics.recordMask(masked.applied);
       }

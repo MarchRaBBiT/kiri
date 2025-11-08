@@ -87,11 +87,13 @@ function maskString(input: string, options: NormalizedMaskingOptions): MaskResul
 }
 
 function normalizeOptions(options: MaskingOptions): NormalizedMaskingOptions {
+  const skipKeySet =
+    options.skipKeys && options.skipKeys.length > 0 ? new Set(options.skipKeys) : undefined;
+
   return {
     matchers: createTokenMatchers(options.tokens),
     replacement: options.replacement ?? "***",
-    skipKeySet:
-      options.skipKeys && options.skipKeys.length > 0 ? new Set(options.skipKeys) : undefined,
+    ...(skipKeySet ? { skipKeySet } : {}),
   };
 }
 

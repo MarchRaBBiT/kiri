@@ -6,9 +6,9 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { runIndexer } from "../../src/indexer/cli.js";
 import { ServerContext } from "../../src/server/context.js";
-import { WarningManager } from "../../src/server/rpc.js";
 import { contextBundle, resolveRepoId, semanticRerank } from "../../src/server/handlers.js";
 import { startServer } from "../../src/server/main.js";
+import { WarningManager } from "../../src/server/rpc.js";
 import { DuckDBClient } from "../../src/shared/duckdb.js";
 import { loadSecurityConfig, updateSecurityLock } from "../../src/shared/security/config.js";
 import { createTempRepo } from "../helpers/test-repo.js";

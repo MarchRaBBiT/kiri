@@ -10,7 +10,13 @@ vi.mock("../../../src/indexer/dart/client.js");
 vi.mock("../../../src/indexer/dart/sdk.js");
 
 describe("analyzeDartSource", () => {
-  let mockClient: any;
+  let mockClient: {
+    initialize: ReturnType<typeof vi.fn>;
+    analyzeFile: ReturnType<typeof vi.fn>;
+    getLibraryDependencies: ReturnType<typeof vi.fn>;
+    dispose: ReturnType<typeof vi.fn>;
+    forceKill: ReturnType<typeof vi.fn>;
+  };
   let isDartSdkAvailableMock: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
@@ -205,6 +211,7 @@ describe("analyzeDartSource", () => {
       const request3 = analyzeDartSource("/test/file3.dart", "class C {}", "/test");
 
       // Allow a tick for all requests to reach the initPromise wait
+      // eslint-disable-next-line no-undef
       await new Promise((resolve) => setImmediate(resolve));
 
       // Complete initialization

@@ -31,7 +31,7 @@ export class MockChildProcess extends EventEmitter implements Partial<ChildProce
   /**
    * Handle input from test (requests sent to Analysis Server)
    */
-  private handleInput(data: string): void {
+  private handleInput(_data: string): void {
     // テスト側でオーバーライド可能
   }
 

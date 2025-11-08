@@ -3,6 +3,7 @@
  */
 
 import { describe, expect, it, beforeEach, vi, afterEach } from "vitest";
+import type { BufferEncoding } from "node:fs";
 import { DartAnalysisClient, DAPProtocolError } from "../../../src/indexer/dart/client.js";
 import { MockChildProcess, createMockSdkInfo } from "./test-helpers.js";
 
@@ -28,7 +29,9 @@ describe("DartAnalysisClient", () => {
     // Mock spawn to return our MockChildProcess
     const childProcess = await import("node:child_process");
     mockProcess = new MockChildProcess();
-    vi.mocked(childProcess.spawn).mockReturnValue(mockProcess as any);
+    vi.mocked(childProcess.spawn).mockReturnValue(
+      mockProcess as unknown as ReturnType<typeof childProcess.spawn>
+    );
 
     client = new DartAnalysisClient({ workspaceRoots: ["/test/workspace"] });
   });
@@ -54,16 +57,22 @@ describe("DartAnalysisClient", () => {
       }, 10);
 
       // Respond to setSubscriptions and setAnalysisRoots
-      mockProcess.stdin.write = vi.fn((chunk: any, encoding?: any, callback?: any) => {
-        const msg = JSON.parse(chunk.toString());
-        mockProcess.sendMessage({ id: msg.id, result: {} });
-        if (typeof callback === "function") {
-          callback();
-        } else if (typeof encoding === "function") {
-          encoding();
+      mockProcess.stdin.write = vi.fn(
+        (
+          chunk: Buffer | string,
+          encoding?: BufferEncoding | (() => void),
+          callback?: () => void
+        ) => {
+          const msg = JSON.parse(chunk.toString());
+          mockProcess.sendMessage({ id: msg.id, result: {} });
+          if (typeof callback === "function") {
+            callback();
+          } else if (typeof encoding === "function") {
+            encoding();
+          }
+          return true;
         }
-        return true;
-      });
+      );
 
       await client.initialize();
 
@@ -75,19 +84,25 @@ describe("DartAnalysisClient", () => {
     });
 
     it("sets analysis roots during initialization", async () => {
-      const messages: any[] = [];
+      const messages: unknown[] = [];
 
-      mockProcess.stdin.write = vi.fn((chunk: any, encoding?: any, callback?: any) => {
-        const msg = JSON.parse(chunk.toString());
-        messages.push(msg);
-        mockProcess.sendMessage({ id: msg.id, result: {} });
-        if (typeof callback === "function") {
-          callback();
-        } else if (typeof encoding === "function") {
-          encoding();
+      mockProcess.stdin.write = vi.fn(
+        (
+          chunk: Buffer | string,
+          encoding?: BufferEncoding | (() => void),
+          callback?: () => void
+        ) => {
+          const msg = JSON.parse(chunk.toString());
+          messages.push(msg);
+          mockProcess.sendMessage({ id: msg.id, result: {} });
+          if (typeof callback === "function") {
+            callback();
+          } else if (typeof encoding === "function") {
+            encoding();
+          }
+          return true;
         }
-        return true;
-      });
+      );
 
       await client.initialize();
 
@@ -99,49 +114,61 @@ describe("DartAnalysisClient", () => {
 
   describe("analyzeFile", () => {
     beforeEach(async () => {
-      mockProcess.stdin.write = vi.fn((chunk: any, encoding?: any, callback?: any) => {
-        const msg = JSON.parse(chunk.toString());
-        mockProcess.sendMessage({ id: msg.id, result: {} });
-        if (typeof callback === "function") {
-          callback();
-        } else if (typeof encoding === "function") {
-          encoding();
+      mockProcess.stdin.write = vi.fn(
+        (
+          chunk: Buffer | string,
+          encoding?: BufferEncoding | (() => void),
+          callback?: () => void
+        ) => {
+          const msg = JSON.parse(chunk.toString());
+          mockProcess.sendMessage({ id: msg.id, result: {} });
+          if (typeof callback === "function") {
+            callback();
+          } else if (typeof encoding === "function") {
+            encoding();
+          }
+          return true;
         }
-        return true;
-      });
+      );
 
       await client.initialize();
     });
 
     it("sends updateContent and getOutline requests", async () => {
-      const messages: any[] = [];
+      const messages: unknown[] = [];
 
-      mockProcess.stdin.write = vi.fn((chunk: any, encoding?: any, callback?: any) => {
-        const msg = JSON.parse(chunk.toString());
-        messages.push(msg);
+      mockProcess.stdin.write = vi.fn(
+        (
+          chunk: Buffer | string,
+          encoding?: BufferEncoding | (() => void),
+          callback?: () => void
+        ) => {
+          const msg = JSON.parse(chunk.toString());
+          messages.push(msg);
 
-        if (msg.method === "analysis.getOutline") {
-          mockProcess.sendMessage({
-            id: msg.id,
-            result: {
-              outline: {
-                kind: "COMPILATION_UNIT",
-                offset: 0,
-                length: 10,
-                element: { kind: "COMPILATION_UNIT", name: "test.dart" },
+          if (msg.method === "analysis.getOutline") {
+            mockProcess.sendMessage({
+              id: msg.id,
+              result: {
+                outline: {
+                  kind: "COMPILATION_UNIT",
+                  offset: 0,
+                  length: 10,
+                  element: { kind: "COMPILATION_UNIT", name: "test.dart" },
+                },
               },
-            },
-          });
-        } else {
-          mockProcess.sendMessage({ id: msg.id, result: {} });
+            });
+          } else {
+            mockProcess.sendMessage({ id: msg.id, result: {} });
+          }
+          if (typeof callback === "function") {
+            callback();
+          } else if (typeof encoding === "function") {
+            encoding();
+          }
+          return true;
         }
-        if (typeof callback === "function") {
-          callback();
-        } else if (typeof encoding === "function") {
-          encoding();
-        }
-        return true;
-      });
+      );
 
       await client.analyzeFile("/test/file.dart", "void main() {}");
 
@@ -150,31 +177,37 @@ describe("DartAnalysisClient", () => {
     });
 
     it("returns outline from analysis server", async () => {
-      mockProcess.stdin.write = vi.fn((chunk: any, encoding?: any, callback?: any) => {
-        const msg = JSON.parse(chunk.toString());
+      mockProcess.stdin.write = vi.fn(
+        (
+          chunk: Buffer | string,
+          encoding?: BufferEncoding | (() => void),
+          callback?: () => void
+        ) => {
+          const msg = JSON.parse(chunk.toString());
 
-        if (msg.method === "analysis.getOutline") {
-          mockProcess.sendMessage({
-            id: msg.id,
-            result: {
-              outline: {
-                kind: "CLASS",
-                offset: 0,
-                length: 20,
-                element: { kind: "CLASS", name: "TestClass" },
+          if (msg.method === "analysis.getOutline") {
+            mockProcess.sendMessage({
+              id: msg.id,
+              result: {
+                outline: {
+                  kind: "CLASS",
+                  offset: 0,
+                  length: 20,
+                  element: { kind: "CLASS", name: "TestClass" },
+                },
               },
-            },
-          });
-        } else {
-          mockProcess.sendMessage({ id: msg.id, result: {} });
+            });
+          } else {
+            mockProcess.sendMessage({ id: msg.id, result: {} });
+          }
+          if (typeof callback === "function") {
+            callback();
+          } else if (typeof encoding === "function") {
+            encoding();
+          }
+          return true;
         }
-        if (typeof callback === "function") {
-          callback();
-        } else if (typeof encoding === "function") {
-          encoding();
-        }
-        return true;
-      });
+      );
 
       const result = await client.analyzeFile("/test/file.dart", "class TestClass {}");
 
@@ -184,19 +217,25 @@ describe("DartAnalysisClient", () => {
 
   describe("error handling", () => {
     it("rejects with DAPProtocolError on server error response", async () => {
-      mockProcess.stdin.write = vi.fn((chunk: any, encoding?: any, callback?: any) => {
-        const msg = JSON.parse(chunk.toString());
-        mockProcess.sendMessage({
-          id: msg.id,
-          error: { code: -1, message: "Invalid file" },
-        });
-        if (typeof callback === "function") {
-          callback();
-        } else if (typeof encoding === "function") {
-          encoding();
+      mockProcess.stdin.write = vi.fn(
+        (
+          chunk: Buffer | string,
+          encoding?: BufferEncoding | (() => void),
+          callback?: () => void
+        ) => {
+          const msg = JSON.parse(chunk.toString());
+          mockProcess.sendMessage({
+            id: msg.id,
+            error: { code: -1, message: "Invalid file" },
+          });
+          if (typeof callback === "function") {
+            callback();
+          } else if (typeof encoding === "function") {
+            encoding();
+          }
+          return true;
         }
-        return true;
-      });
+      );
 
       await expect(client.initialize()).rejects.toThrow(DAPProtocolError);
     });
@@ -205,14 +244,20 @@ describe("DartAnalysisClient", () => {
       vi.useFakeTimers();
       skipDisposal = true; // Skip disposal in afterEach - client is in error state
 
-      mockProcess.stdin.write = vi.fn((_chunk: any, encoding?: any, callback?: any) => {
-        if (typeof callback === "function") {
-          callback();
-        } else if (typeof encoding === "function") {
-          encoding();
+      mockProcess.stdin.write = vi.fn(
+        (
+          _chunk: Buffer | string,
+          encoding?: BufferEncoding | (() => void),
+          callback?: () => void
+        ) => {
+          if (typeof callback === "function") {
+            callback();
+          } else if (typeof encoding === "function") {
+            encoding();
+          }
+          return true;
         }
-        return true;
-      });
+      );
 
       const promise = client.initialize();
 
@@ -226,27 +271,33 @@ describe("DartAnalysisClient", () => {
   describe("cleanup", () => {
     it("sends shutdown request on dispose", async () => {
       skipDisposal = true; // We test disposal in this test
-      const messages: any[] = [];
+      const messages: unknown[] = [];
 
-      mockProcess.stdin.write = vi.fn((chunk: any, encoding?: any, callback?: any) => {
-        const msg = JSON.parse(chunk.toString());
-        messages.push(msg);
-        mockProcess.sendMessage({ id: msg.id, result: {} });
+      mockProcess.stdin.write = vi.fn(
+        (
+          chunk: Buffer | string,
+          encoding?: BufferEncoding | (() => void),
+          callback?: () => void
+        ) => {
+          const msg = JSON.parse(chunk.toString());
+          messages.push(msg);
+          mockProcess.sendMessage({ id: msg.id, result: {} });
 
-        // Simulate process exit after shutdown request
-        if (msg.method === "server.shutdown") {
-          setTimeout(() => {
-            mockProcess.kill("SIGTERM");
-          }, 10);
+          // Simulate process exit after shutdown request
+          if (msg.method === "server.shutdown") {
+            setTimeout(() => {
+              mockProcess.kill("SIGTERM");
+            }, 10);
+          }
+
+          if (typeof callback === "function") {
+            callback();
+          } else if (typeof encoding === "function") {
+            encoding();
+          }
+          return true;
         }
-
-        if (typeof callback === "function") {
-          callback();
-        } else if (typeof encoding === "function") {
-          encoding();
-        }
-        return true;
-      });
+      );
 
       await client.initialize();
       await client.dispose();
@@ -257,24 +308,30 @@ describe("DartAnalysisClient", () => {
     it("kills process after dispose", async () => {
       skipDisposal = true; // We test disposal in this test
 
-      mockProcess.stdin.write = vi.fn((chunk: any, encoding?: any, callback?: any) => {
-        const msg = JSON.parse(chunk.toString());
-        mockProcess.sendMessage({ id: msg.id, result: {} });
+      mockProcess.stdin.write = vi.fn(
+        (
+          chunk: Buffer | string,
+          encoding?: BufferEncoding | (() => void),
+          callback?: () => void
+        ) => {
+          const msg = JSON.parse(chunk.toString());
+          mockProcess.sendMessage({ id: msg.id, result: {} });
 
-        // Simulate process exit after shutdown request
-        if (msg.method === "server.shutdown") {
-          setTimeout(() => {
-            mockProcess.kill("SIGTERM");
-          }, 10);
-        }
+          // Simulate process exit after shutdown request
+          if (msg.method === "server.shutdown") {
+            setTimeout(() => {
+              mockProcess.kill("SIGTERM");
+            }, 10);
+          }
 
-        if (typeof callback === "function") {
-          callback();
-        } else if (typeof encoding === "function") {
-          encoding();
+          if (typeof callback === "function") {
+            callback();
+          } else if (typeof encoding === "function") {
+            encoding();
+          }
+          return true;
         }
-        return true;
-      });
+      );
 
       await client.initialize();
       await client.dispose();
@@ -324,49 +381,55 @@ describe("DartAnalysisClient", () => {
       skipDisposal = true; // Skip disposal in afterEach
       const callOrder: string[] = [];
 
-      mockProcess.stdin.write = vi.fn((chunk: any, encoding?: any, callback?: any) => {
-        const msg = JSON.parse(chunk.toString());
+      mockProcess.stdin.write = vi.fn(
+        (
+          chunk: Buffer | string,
+          encoding?: BufferEncoding | (() => void),
+          callback?: () => void
+        ) => {
+          const msg = JSON.parse(chunk.toString());
 
-        // Track call order
-        if (msg.method === "analysis.updateContent") {
-          const filePath = Object.keys(msg.params?.files || {})[0];
-          if (filePath) {
-            callOrder.push(`updateContent:${filePath}`);
+          // Track call order
+          if (msg.method === "analysis.updateContent") {
+            const filePath = Object.keys(msg.params?.files || {})[0];
+            if (filePath) {
+              callOrder.push(`updateContent:${filePath}`);
+            }
+          } else if (msg.method === "analysis.getOutline") {
+            callOrder.push(`getOutline:${msg.params?.file}`);
           }
-        } else if (msg.method === "analysis.getOutline") {
-          callOrder.push(`getOutline:${msg.params?.file}`);
-        }
 
-        // Send mock responses
-        if (
-          msg.method === "server.setSubscriptions" ||
-          msg.method === "analysis.setAnalysisRoots"
-        ) {
-          mockProcess.sendMessage({ id: msg.id, result: {} });
-        } else if (msg.method === "analysis.updateContent") {
-          mockProcess.sendMessage({ id: msg.id, result: {} });
-        } else if (msg.method === "analysis.getOutline") {
-          mockProcess.sendMessage({
-            id: msg.id,
-            result: {
-              outline: {
-                kind: "COMPILATION_UNIT",
-                offset: 0,
-                length: 10,
-                element: { kind: "COMPILATION_UNIT", name: "test.dart" },
-                children: [],
+          // Send mock responses
+          if (
+            msg.method === "server.setSubscriptions" ||
+            msg.method === "analysis.setAnalysisRoots"
+          ) {
+            mockProcess.sendMessage({ id: msg.id, result: {} });
+          } else if (msg.method === "analysis.updateContent") {
+            mockProcess.sendMessage({ id: msg.id, result: {} });
+          } else if (msg.method === "analysis.getOutline") {
+            mockProcess.sendMessage({
+              id: msg.id,
+              result: {
+                outline: {
+                  kind: "COMPILATION_UNIT",
+                  offset: 0,
+                  length: 10,
+                  element: { kind: "COMPILATION_UNIT", name: "test.dart" },
+                  children: [],
+                },
               },
-            },
-          });
-        }
+            });
+          }
 
-        if (typeof callback === "function") {
-          callback();
-        } else if (typeof encoding === "function") {
-          encoding();
+          if (typeof callback === "function") {
+            callback();
+          } else if (typeof encoding === "function") {
+            encoding();
+          }
+          return true;
         }
-        return true;
-      });
+      );
 
       await client.initialize();
 
@@ -383,39 +446,45 @@ describe("DartAnalysisClient", () => {
 
     it("allows concurrent requests for different files", async () => {
       skipDisposal = true; // Skip disposal in afterEach
-      mockProcess.stdin.write = vi.fn((chunk: any, encoding?: any, callback?: any) => {
-        const msg = JSON.parse(chunk.toString());
+      mockProcess.stdin.write = vi.fn(
+        (
+          chunk: Buffer | string,
+          encoding?: BufferEncoding | (() => void),
+          callback?: () => void
+        ) => {
+          const msg = JSON.parse(chunk.toString());
 
-        // Send mock responses
-        if (
-          msg.method === "server.setSubscriptions" ||
-          msg.method === "analysis.setAnalysisRoots"
-        ) {
-          mockProcess.sendMessage({ id: msg.id, result: {} });
-        } else if (msg.method === "analysis.updateContent") {
-          mockProcess.sendMessage({ id: msg.id, result: {} });
-        } else if (msg.method === "analysis.getOutline") {
-          mockProcess.sendMessage({
-            id: msg.id,
-            result: {
-              outline: {
-                kind: "COMPILATION_UNIT",
-                offset: 0,
-                length: 10,
-                element: { kind: "COMPILATION_UNIT", name: "test.dart" },
-                children: [],
+          // Send mock responses
+          if (
+            msg.method === "server.setSubscriptions" ||
+            msg.method === "analysis.setAnalysisRoots"
+          ) {
+            mockProcess.sendMessage({ id: msg.id, result: {} });
+          } else if (msg.method === "analysis.updateContent") {
+            mockProcess.sendMessage({ id: msg.id, result: {} });
+          } else if (msg.method === "analysis.getOutline") {
+            mockProcess.sendMessage({
+              id: msg.id,
+              result: {
+                outline: {
+                  kind: "COMPILATION_UNIT",
+                  offset: 0,
+                  length: 10,
+                  element: { kind: "COMPILATION_UNIT", name: "test.dart" },
+                  children: [],
+                },
               },
-            },
-          });
-        }
+            });
+          }
 
-        if (typeof callback === "function") {
-          callback();
-        } else if (typeof encoding === "function") {
-          encoding();
+          if (typeof callback === "function") {
+            callback();
+          } else if (typeof encoding === "function") {
+            encoding();
+          }
+          return true;
         }
-        return true;
-      });
+      );
 
       await client.initialize();
 

@@ -3,6 +3,7 @@
  */
 
 import { describe, expect, it, beforeEach, vi, afterEach } from "vitest";
+
 import { analyzeSource } from "../../src/indexer/codeintel.js";
 
 // Mock Dart analyze module

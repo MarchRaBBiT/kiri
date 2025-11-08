@@ -124,7 +124,7 @@ async function runUnitTests(options: VerificationOptions): Promise<TestResult> {
   }
 }
 
-async function runDartTests(options: VerificationOptions): Promise<TestResult> {
+async function runDartTests(_options: VerificationOptions): Promise<TestResult> {
   log("\n🎯 Running Dart Analysis Server Tests...", "cyan");
   const start = Date.now();
 
@@ -156,7 +156,7 @@ async function runDartTests(options: VerificationOptions): Promise<TestResult> {
   }
 }
 
-async function runIntegrationTests(options: VerificationOptions): Promise<TestResult> {
+async function runIntegrationTests(_options: VerificationOptions): Promise<TestResult> {
   log("\n🔗 Running Integration Tests...", "cyan");
   const start = Date.now();
 
@@ -188,7 +188,7 @@ async function runIntegrationTests(options: VerificationOptions): Promise<TestRe
   }
 }
 
-async function runMCPToolsTests(options: VerificationOptions): Promise<TestResult> {
+async function runMCPToolsTests(_options: VerificationOptions): Promise<TestResult> {
   log("\n🛠️  Running MCP Tools Actual Operation Tests...", "cyan");
   const start = Date.now();
 
@@ -237,6 +237,7 @@ async function runMCPToolsTests(options: VerificationOptions): Promise<TestResul
 
       for (const tool of tools) {
         log(`  → Testing ${tool.name}...`, "blue");
+        // eslint-disable-next-line no-undef
         const response = await fetch("http://localhost:9999", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -280,7 +281,7 @@ async function runMCPToolsTests(options: VerificationOptions): Promise<TestResul
   }
 }
 
-async function runWatchModeTests(options: VerificationOptions): Promise<TestResult> {
+async function runWatchModeTests(_options: VerificationOptions): Promise<TestResult> {
   log("\n👀 Running Watch Mode Tests...", "cyan");
   const start = Date.now();
 
@@ -396,7 +397,7 @@ async function runWatchModeTests(options: VerificationOptions): Promise<TestResu
   }
 }
 
-async function runEvalTests(options: VerificationOptions): Promise<TestResult> {
+async function runEvalTests(_options: VerificationOptions): Promise<TestResult> {
   log("\n📊 Running Evaluation Tests...", "cyan");
   const start = Date.now();
 

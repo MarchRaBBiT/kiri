@@ -7,7 +7,7 @@ import type { SymbolRecord, SnippetRecord, DependencyRecord } from "../codeintel
 import { DartAnalysisClient } from "./client.js";
 import { outlineToSymbols } from "./transform.js";
 import { isDartSdkAvailable } from "./sdk.js";
-import { extractDependencies } from "./dependencies.js";
+// import { extractDependencies } from "./dependencies.js"; // Phase 4で使用予定
 import { normalizeWorkspaceKey } from "./pathKey.js";
 import { createCapacityLimiter, type CapacityLimiter } from "./poolGate.js";
 import { parseMaxClients, parseClientWaitMs, parseIdleTtlMs } from "./config.js";

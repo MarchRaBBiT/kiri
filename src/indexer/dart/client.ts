@@ -5,7 +5,7 @@
 import { spawn, type ChildProcess, execSync } from "node:child_process";
 import { createInterface, type Interface } from "node:readline";
 import PQueue from "p-queue";
-import { detectDartSdk, MissingToolError } from "./sdk.js";
+import { detectDartSdk } from "./sdk.js";
 import { normalizeFileKey } from "./pathKey.js";
 import { parseFileQueueTtlMs } from "./config.js";
 
@@ -277,10 +277,10 @@ export class DartAnalysisClient {
   /**
    * ライブラリの依存関係を取得（Phase 3）
    *
-   * @param filePath - 解析対象ファイルの絶対パス
+   * @param _filePath - 解析対象ファイルの絶対パス (現在未使用: workspace全体の依存関係を返すため)
    * @returns GetLibraryDependenciesResult
    */
-  async getLibraryDependencies(filePath: string): Promise<GetLibraryDependenciesResult> {
+  async getLibraryDependencies(_filePath: string): Promise<GetLibraryDependenciesResult> {
     if (!this.initialized) {
       await this.initialize();
     }
@@ -382,12 +382,12 @@ export class DartAnalysisClient {
                 // Unix: Use SIGKILL for force termination
                 this.process.kill("SIGKILL");
               }
-            } catch (error) {
+            } catch {
               // Force kill may fail if process is already gone
             }
           }
         }, 100);
-      } catch (error) {
+      } catch {
         // kill 失敗は無視（既に終了している可能性）
       }
     }
@@ -518,7 +518,7 @@ export class DartAnalysisClient {
    * 全ての pending リクエストを reject
    */
   private rejectAllPending(error: Error): void {
-    for (const [id, pending] of this.pendingRequests) {
+    for (const [_id, pending] of this.pendingRequests) {
       clearTimeout(pending.timeout);
       pending.reject(error);
     }

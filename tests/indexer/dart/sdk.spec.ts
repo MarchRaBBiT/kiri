@@ -3,8 +3,6 @@
  */
 
 import { describe, expect, it, beforeEach, vi, afterEach } from "vitest";
-import type { spawnSync as SpawnSyncType } from "node:child_process";
-import type { existsSync as ExistsSyncType } from "node:fs";
 
 // Mock modules
 vi.mock("node:child_process");

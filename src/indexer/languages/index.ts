@@ -2,8 +2,8 @@ import { dartAnalyzer } from "./dart.js";
 import { javaAnalyzer } from "./java.js";
 import { phpAnalyzer } from "./php.js";
 import { swiftAnalyzer } from "./swift.js";
-import { typescriptAnalyzer } from "./typescript.js";
 import type { LanguageAnalyzer } from "./types.js";
+import { typescriptAnalyzer } from "./typescript.js";
 
 const LANGUAGE_ANALYZERS = new Map<string, LanguageAnalyzer>([
   ["TypeScript", typescriptAnalyzer],

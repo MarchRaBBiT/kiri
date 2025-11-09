@@ -1,4 +1,4 @@
-import { resolve } from "node:path";
+import { resolve, relative } from "node:path";
 import { performance } from "node:perf_hooks";
 
 import { watch, type FSWatcher } from "chokidar";
@@ -72,6 +72,7 @@ export class IndexWatcher {
   private readonly stats: WatcherStatistics;
   private readonly lockfilePath: string;
   private isStopping = false; // Flag to prevent new reindexes during shutdown
+  private readonly shouldUsePolling: boolean;
 
   constructor(options: IndexWatcherOptions) {
     this.options = {
@@ -89,6 +90,8 @@ export class IndexWatcher {
     }
 
     this.lockfilePath = `${this.options.databasePath}.lock`;
+    const normalizedRoot = this.options.repoRoot.replace(/\\/g, "/");
+    this.shouldUsePolling = process.platform === "linux" && normalizedRoot.startsWith("/mnt/");
 
     this.stats = {
       reindexCount: 0,
@@ -124,7 +127,7 @@ export class IndexWatcher {
       persistent: true,
       ignoreInitial: true, // Don't trigger on existing files
       ignored: (path: string) => {
-        const relativePath = path.replace(this.options.repoRoot + "/", "");
+        const relativePath = relative(this.options.repoRoot, path).replace(/\\/g, "/");
         return denylistFilter.isDenied(relativePath);
       },
       // Editor-specific handling
@@ -133,7 +136,9 @@ export class IndexWatcher {
         pollInterval: 100,
       },
       // Performance tuning
-      usePolling: false, // Use native OS events (faster)
+      usePolling: this.shouldUsePolling,
+      interval: this.shouldUsePolling ? 250 : undefined,
+      binaryInterval: this.shouldUsePolling ? 250 : undefined,
       // depth option omitted for no depth limit
     });
 
@@ -169,8 +174,11 @@ export class IndexWatcher {
       return;
     }
 
-    const relativePath = path.replace(this.options.repoRoot + "/", "");
-    this.pendingFiles.add(relativePath);
+    const isSyntheticEvent = event === "batch";
+    if (!isSyntheticEvent) {
+      const relativePath = relative(this.options.repoRoot, path).replace(/\\/g, "/");
+      this.pendingFiles.add(relativePath);
+    }
 
     // Clear existing timer if present
     if (this.reindexTimer !== null) {
@@ -180,17 +188,20 @@ export class IndexWatcher {
     // Set new timer with debounce
     this.reindexTimer = setTimeout(() => {
       this.reindexTimer = null;
-      this.stats.queueDepth = this.pendingFiles.size;
+      const pendingList = Array.from(this.pendingFiles);
+      this.stats.queueDepth = pendingList.length;
+
+      if (pendingList.length === 0) {
+        return;
+      }
 
       // Log aggregated changes
-      const fileList = Array.from(this.pendingFiles).slice(0, 5).join(", ");
-      const moreCount = Math.max(0, this.pendingFiles.size - 5);
+      const fileList = pendingList.slice(0, 5).join(", ");
+      const moreCount = Math.max(0, pendingList.length - 5);
       const summary = moreCount > 0 ? `${fileList} (+${moreCount} more)` : fileList;
 
       process.stderr.write(`\n📝 File changes detected: ${summary}\n`);
 
-      // Clear pending files and trigger reindex
-      this.pendingFiles.clear();
       void this.executeReindex();
     }, this.options.debounceMs);
 
@@ -220,12 +231,15 @@ export class IndexWatcher {
       return;
     }
 
+    const changedPaths = Array.from(this.pendingFiles);
+    if (changedPaths.length === 0) {
+      this.pendingReindex = false;
+      return;
+    }
+    this.pendingFiles.clear();
     this.isReindexing = true;
     this.pendingReindex = false;
     this.stats.lastReindexStart = performance.now();
-
-    // Capture pending files for incremental indexing
-    const changedPaths = Array.from(this.pendingFiles);
 
     // Create and store the reindex promise for proper shutdown handling
     this.reindexPromise = (async () => {

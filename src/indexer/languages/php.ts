@@ -17,6 +17,7 @@ const PHP_ONLY: Parser.Language = PHPModule.php_only;
 const PHP_MIXED: Parser.Language = PHPModule.php;
 
 type PHPNode = Parser.SyntaxNode;
+type NullableNode = PHPNode | null | undefined;
 
 function detectPHPType(content: string): "pure" | "html-mixed" {
   const phpTagRegex = /^(?:\s*|#!\/.*?\n|\uFEFF)*<\?(?:php|=)?/i;
@@ -74,6 +75,41 @@ function toPHPLineNumber(position: Parser.Point): number {
   return position.row + 1;
 }
 
+function findDescendant(node: PHPNode, predicate: (candidate: PHPNode) => boolean): PHPNode | null {
+  if (predicate(node)) {
+    return node;
+  }
+
+  for (const child of node.namedChildren) {
+    const found = findDescendant(child as PHPNode, predicate);
+    if (found) {
+      return found;
+    }
+  }
+
+  return null;
+}
+
+function extractVariableName(node: PHPNode, content: string): string | null {
+  const variableNode = findDescendant(node, (candidate) => candidate.type === "variable_name");
+  if (!variableNode) {
+    return null;
+  }
+
+  const nameNode =
+    variableNode.namedChildren.find((child) => child.type === "name") ??
+    (variableNode as NullableNode);
+  if (!nameNode) return null;
+  const raw = content.substring(nameNode.startIndex, nameNode.endIndex);
+  return raw.replace(/^\$/, "");
+}
+
+function extractConstName(node: PHPNode, content: string): string | null {
+  const nameNode = findDescendant(node, (candidate) => candidate.type === "name");
+  if (!nameNode) return null;
+  return content.substring(nameNode.startIndex, nameNode.endIndex);
+}
+
 function createPHPSymbolRecords(tree: Parser.Tree, content: string): SymbolRecord[] {
   const results: Array<Omit<SymbolRecord, "symbolId">> = [];
 
@@ -100,6 +136,18 @@ function createPHPSymbolRecords(tree: Parser.Tree, content: string): SymbolRecor
         results.push({
           name,
           kind: "class",
+          rangeStartLine: toPHPLineNumber(node.startPosition),
+          rangeEndLine: toPHPLineNumber(node.endPosition),
+          signature: sanitizePHPSignature(node, content),
+          doc: getPHPDocComment(node, content),
+        });
+      }
+    } else if (node.type === "trait_declaration") {
+      const name = extractName(node);
+      if (name) {
+        results.push({
+          name,
+          kind: "trait",
           rangeStartLine: toPHPLineNumber(node.startPosition),
           rangeEndLine: toPHPLineNumber(node.endPosition),
           signature: sanitizePHPSignature(node, content),
@@ -151,6 +199,36 @@ function createPHPSymbolRecords(tree: Parser.Tree, content: string): SymbolRecor
           kind: "namespace",
           rangeStartLine: toPHPLineNumber(node.startPosition),
           rangeEndLine: toPHPLineNumber(node.endPosition),
+          signature: sanitizePHPSignature(node, content),
+          doc: getPHPDocComment(node, content),
+        });
+      }
+    } else if (node.type === "property_declaration") {
+      const propertyElements = node.namedChildren.filter(
+        (child) => child.type === "property_element"
+      );
+      for (const propertyElement of propertyElements) {
+        const name = extractVariableName(propertyElement as PHPNode, content);
+        if (!name) continue;
+        results.push({
+          name,
+          kind: "property",
+          rangeStartLine: toPHPLineNumber(propertyElement.startPosition),
+          rangeEndLine: toPHPLineNumber(propertyElement.endPosition),
+          signature: sanitizePHPSignature(node, content),
+          doc: getPHPDocComment(node, content),
+        });
+      }
+    } else if (node.type === "const_declaration") {
+      const constElements = node.namedChildren.filter((child) => child.type === "const_element");
+      for (const constElement of constElements) {
+        const name = extractConstName(constElement as PHPNode, content);
+        if (!name) continue;
+        results.push({
+          name,
+          kind: "constant",
+          rangeStartLine: toPHPLineNumber(constElement.startPosition),
+          rangeEndLine: toPHPLineNumber(constElement.endPosition),
           signature: sanitizePHPSignature(node, content),
           doc: getPHPDocComment(node, content),
         });

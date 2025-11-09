@@ -13,6 +13,13 @@ import {
 } from "./types.js";
 
 type SwiftNode = Parser.SyntaxNode;
+const TYPE_BODY_NODES = new Set([
+  "class_body",
+  "struct_body",
+  "extension_body",
+  "enum_body",
+  "protocol_body",
+]);
 
 function sanitizeSwiftSignature(node: SwiftNode, content: string): string {
   const nodeText = content.substring(node.startIndex, node.endIndex);
@@ -66,6 +73,19 @@ function toSwiftLineNumber(position: Parser.Point): number {
 
 function createSwiftSymbolRecords(tree: Parser.Tree, content: string): SymbolRecord[] {
   const results: Array<Omit<SymbolRecord, "symbolId">> = [];
+  function isTypeMember(node: SwiftNode): boolean {
+    let current: SwiftNode | null = node.parent;
+    while (current) {
+      if (TYPE_BODY_NODES.has(current.type)) {
+        return true;
+      }
+      if (current.type === "function_body" || current.type === "code_block") {
+        return false;
+      }
+      current = current.parent;
+    }
+    return false;
+  }
 
   function extractName(node: SwiftNode): string | null {
     function findIdentifier(n: SwiftNode): SwiftNode | null {
@@ -170,8 +190,8 @@ function createSwiftSymbolRecords(tree: Parser.Tree, content: string): SymbolRec
           doc: getSwiftDocComment(node, content),
         });
       }
-    } else if (node.type === "initializer_declaration") {
-      const name = extractName(node) ?? "init";
+    } else if (node.type === "initializer_declaration" || node.type === "init_declaration") {
+      const name = "init";
       results.push({
         name,
         kind: "initializer",
@@ -189,7 +209,7 @@ function createSwiftSymbolRecords(tree: Parser.Tree, content: string): SymbolRec
         signature: sanitizeSwiftSignature(node, content),
         doc: getSwiftDocComment(node, content),
       });
-    } else if (node.type === "property_declaration") {
+    } else if (node.type === "property_declaration" && isTypeMember(node)) {
       const name = extractName(node);
       if (name) {
         results.push({

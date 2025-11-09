@@ -1,6 +1,6 @@
-import { dirname, basename, join, resolve, realpathSync } from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
+import { dirname, basename, join, resolve } from "node:path";
 
 /**
  * Normalizes a database path by resolving to its canonical form.
@@ -38,7 +38,7 @@ export function normalizeDbPath(input: string): string {
   if (existsSync(abs)) {
     try {
       return realpathSync.native(abs);
-    } catch (error) {
+    } catch {
       // Fallback to parent normalization if full path fails
       // (e.g., permissions issue)
     }
@@ -52,7 +52,7 @@ export function normalizeDbPath(input: string): string {
     // Normalize parent directory to canonical form
     const canonicalParent = realpathSync.native(parentDir);
     return join(canonicalParent, filename);
-  } catch (error) {
+  } catch {
     // Parent directory doesn't exist yet - caller should have called ensureDbParentDir
     // Return unnormalized path as fallback (will cause issues!)
     return abs;

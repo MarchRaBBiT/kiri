@@ -10,7 +10,7 @@ import { acquireLock, releaseLock, LockfileError, getLockOwner } from "../shared
 import { normalizeDbPath, ensureDbParentDir } from "../shared/utils/path.js";
 
 import { analyzeSource, buildFallbackSnippet } from "./codeintel.js";
-import { getDefaultBranch, getHeadCommit, gitLsFiles } from "./git.js";
+import { getDefaultBranch, getHeadCommit, gitLsFiles, gitDiffNameOnly } from "./git.js";
 import { detectLanguage } from "./language.js";
 import { getIndexerQueue } from "./queue.js";
 import { ensureBaseSchema, ensureRepoMetaColumns, rebuildFTSIfNeeded } from "./schema.js";
@@ -686,8 +686,8 @@ export async function runIndexer(options: IndexerOptions): Promise<void> {
 
       const repoId = await ensureRepo(db, repoRoot, defaultBranch);
 
-      // Incremental mode: only reindex files in changedPaths
-      if (options.changedPaths && options.changedPaths.length > 0) {
+      // Incremental mode: only reindex files in changedPaths (empty array means no-op)
+      if (options.changedPaths) {
         // First, reconcile deleted files (handle renames/deletions)
         const deletedPaths = await reconcileDeletedFiles(db, repoId, repoRoot);
         if (deletedPaths.length > 0) {
@@ -950,37 +950,52 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   const debounceMs = parseInt(parseArg("--debounce") ?? "500", 10);
 
   const options: IndexerOptions = { repoRoot, databasePath, full: full || !since };
-  if (since) {
-    options.since = since;
-  }
 
-  // Run initial indexing
-  runIndexer(options)
-    .then(async () => {
-      if (watch) {
-        // Start watch mode after initial indexing completes
-        const abortController = new AbortController();
-        const watcher = new IndexWatcher({
-          repoRoot,
-          databasePath,
-          debounceMs,
-          signal: abortController.signal,
-        });
+  const main = async (): Promise<void> => {
+    if (since) {
+      options.since = since;
+      if (!options.full) {
+        const diffPaths = await gitDiffNameOnly(repoRoot, since);
+        options.changedPaths = diffPaths;
 
-        // Handle graceful shutdown on SIGINT/SIGTERM
-        const shutdownHandler = () => {
-          process.stderr.write("\n🛑 Received shutdown signal. Stopping watch mode...\n");
-          abortController.abort();
-        };
-        process.on("SIGINT", shutdownHandler);
-        process.on("SIGTERM", shutdownHandler);
-
-        await watcher.start();
+        if (diffPaths.length === 0) {
+          console.info(`No tracked changes since ${since}. Skipping incremental scan.`);
+        }
       }
-    })
-    .catch((error) => {
-      console.error("Failed to index repository. Retry after resolving the logged error.");
-      console.error(error);
-      process.exitCode = 1;
-    });
+    }
+
+    if (!options.changedPaths || options.changedPaths.length > 0 || options.full) {
+      await runIndexer(options);
+    } else {
+      // No diff results and not running full indexing: keep metadata fresh without DB writes
+      console.info("No files to reindex. Database remains unchanged.");
+    }
+
+    if (watch) {
+      // Start watch mode after initial indexing completes
+      const abortController = new AbortController();
+      const watcher = new IndexWatcher({
+        repoRoot,
+        databasePath,
+        debounceMs,
+        signal: abortController.signal,
+      });
+
+      // Handle graceful shutdown on SIGINT/SIGTERM
+      const shutdownHandler = () => {
+        process.stderr.write("\n🛑 Received shutdown signal. Stopping watch mode...\n");
+        abortController.abort();
+      };
+      process.on("SIGINT", shutdownHandler);
+      process.on("SIGTERM", shutdownHandler);
+
+      await watcher.start();
+    }
+  };
+
+  main().catch((error) => {
+    console.error("Failed to index repository. Retry after resolving the logged error.");
+    console.error(error);
+    process.exitCode = 1;
+  });
 }

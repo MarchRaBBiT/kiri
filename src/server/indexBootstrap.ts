@@ -4,6 +4,7 @@ import { dirname, resolve } from "node:path";
 
 import { runIndexer } from "../indexer/cli.js";
 import { acquireLock, releaseLock, getLockOwner, LockfileError } from "../shared/utils/lockfile.js";
+import { ensureDbParentDir, normalizeDbPath } from "../shared/utils/path.js";
 
 /**
  * Ensures the database is indexed before server startup.
@@ -22,7 +23,8 @@ export async function ensureDatabaseIndexed(
   allowDegrade: boolean,
   forceReindex: boolean
 ): Promise<boolean> {
-  const absoluteDatabasePath = resolve(databasePath);
+  await ensureDbParentDir(databasePath);
+  const absoluteDatabasePath = normalizeDbPath(databasePath);
   const absoluteRepoRoot = resolve(repoRoot);
   const lockfilePath = `${absoluteDatabasePath}.lock`;
   const shouldIndex = !existsSync(absoluteDatabasePath) || forceReindex;

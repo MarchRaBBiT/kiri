@@ -391,13 +391,15 @@ export async function rebuildGlobalFTS(
               );
             }
           } else {
-            // No dirty repos but rebuild was needed (e.g., ftsExists=false)
-            // This shouldn't normally happen but handle it by clearing all
+            // No dirty repos but rebuild was needed (e.g., fts schema was missing)
+            // Only clear rows that are still marked as rebuilding to avoid wiping
+            // fresh dirty flags raised during the rebuild window.
             await db.run(
               `UPDATE repo
                SET fts_dirty = false,
                    fts_status = 'clean',
-                   fts_last_indexed_at = CURRENT_TIMESTAMP`
+                   fts_last_indexed_at = CURRENT_TIMESTAMP
+               WHERE fts_status = 'rebuilding'`
             );
           }
 

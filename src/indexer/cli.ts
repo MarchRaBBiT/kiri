@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { join, resolve, extname } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -602,8 +603,22 @@ async function deleteFileRecords(
 }
 
 export async function runIndexer(options: IndexerOptions): Promise<void> {
-  const repoRoot = resolve(options.repoRoot);
-  const databasePath = resolve(options.databasePath);
+  // Fix #2: Normalize paths to prevent lock/queue bypass via symlinks or OS aliases
+  // Note: realpathSync throws if path doesn't exist, so we use try-catch fallback
+  let repoRoot: string;
+  let databasePath: string;
+
+  try {
+    repoRoot = realpathSync.native(resolve(options.repoRoot));
+  } catch {
+    repoRoot = resolve(options.repoRoot);
+  }
+
+  try {
+    databasePath = realpathSync.native(resolve(options.databasePath));
+  } catch {
+    databasePath = resolve(options.databasePath);
+  }
 
   // DuckDB single-writer制約対応: 同じdatabasePathへの並列書き込みを防ぐため、
   // databasePathごとのキューで直列化する

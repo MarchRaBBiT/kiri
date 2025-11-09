@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 
@@ -74,9 +75,26 @@ export class IndexWatcher {
   private isStopping = false; // Flag to prevent new reindexes during shutdown
 
   constructor(options: IndexWatcherOptions) {
+    // Fix #2: Normalize paths to prevent lock/queue bypass via symlinks or OS aliases
+    // Note: realpathSync throws if path doesn't exist, so we use try-catch fallback
+    let repoRoot: string;
+    let databasePath: string;
+
+    try {
+      repoRoot = realpathSync.native(resolve(options.repoRoot));
+    } catch {
+      repoRoot = resolve(options.repoRoot);
+    }
+
+    try {
+      databasePath = realpathSync.native(resolve(options.databasePath));
+    } catch {
+      databasePath = resolve(options.databasePath);
+    }
+
     this.options = {
-      repoRoot: resolve(options.repoRoot),
-      databasePath: resolve(options.databasePath),
+      repoRoot,
+      databasePath,
       debounceMs: options.debounceMs ?? 500,
     };
 
@@ -189,9 +207,12 @@ export class IndexWatcher {
 
       process.stderr.write(`\n📝 File changes detected: ${summary}\n`);
 
-      // Clear pending files and trigger reindex
+      // Fix #3 & #4: Capture snapshot BEFORE clearing to prevent data loss and enable incremental indexing
+      const changedPaths = Array.from(this.pendingFiles);
       this.pendingFiles.clear();
-      void this.executeReindex();
+
+      // Pass snapshot to executeReindex
+      void this.executeReindex(changedPaths);
     }, this.options.debounceMs);
 
     // Mark pending flag (used if reindex is already running)
@@ -203,8 +224,10 @@ export class IndexWatcher {
    *
    * If a reindex is already in progress, marks a pending flag to trigger
    * another reindex after the current one completes.
+   *
+   * @param changedPaths - Array of file paths that changed (Fix #3 & #4: snapshot from scheduleReindex)
    */
-  private async executeReindex(): Promise<void> {
+  private async executeReindex(changedPaths: string[]): Promise<void> {
     // Don't start reindex if watcher is stopping
     if (this.isStopping) {
       process.stderr.write(`🛑 Watcher stopping. Skipping reindex.\n`);
@@ -224,11 +247,14 @@ export class IndexWatcher {
     this.pendingReindex = false;
     this.stats.lastReindexStart = performance.now();
 
-    // Capture pending files for incremental indexing
-    const changedPaths = Array.from(this.pendingFiles);
+    // Fix #3 & #4: Use changedPaths parameter (snapshot from scheduleReindex) instead of reading pendingFiles
+    // This prevents data loss on lock contention and enables true incremental indexing
 
     // Create and store the reindex promise for proper shutdown handling
     this.reindexPromise = (async () => {
+      // Fix #1: Track lock ownership to prevent releasing locks we don't own
+      let lockAcquired = false;
+
       try {
         // Double-check stopping flag before acquiring lock
         if (this.isStopping) {
@@ -239,12 +265,19 @@ export class IndexWatcher {
         // Acquire lock to prevent concurrent indexing
         try {
           acquireLock(this.lockfilePath);
+          lockAcquired = true; // Fix #1: Only set to true on successful acquisition
         } catch (error) {
           if (error instanceof LockfileError) {
+            // Fix #3: Restore changedPaths to pendingFiles to prevent data loss
+            for (const path of changedPaths) {
+              this.pendingFiles.add(path);
+            }
+            this.pendingReindex = true; // Mark for retry when lock is available
+
             const ownerPid = error.ownerPid ?? getLockOwner(this.lockfilePath);
             const ownerInfo = ownerPid ? ` (PID: ${ownerPid})` : "";
             process.stderr.write(
-              `⚠️  Another indexing process${ownerInfo} holds the lock. Skipping this reindex.\n`
+              `⚠️  Another indexing process${ownerInfo} holds the lock. Changes queued for retry.\n`
             );
             return;
           }
@@ -284,7 +317,12 @@ export class IndexWatcher {
         process.stderr.write(`   Watch mode continues. Next change will trigger reindex.\n`);
       } finally {
         this.isReindexing = false;
-        releaseLock(this.lockfilePath);
+
+        // Fix #1: Only release lock if we acquired it (prevents deleting other process's locks)
+        if (lockAcquired) {
+          releaseLock(this.lockfilePath);
+        }
+
         this.reindexPromise = null;
 
         // Clear timer to prevent resource leak

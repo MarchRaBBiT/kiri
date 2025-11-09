@@ -1,6 +1,6 @@
 import { dirname, join, resolve } from "node:path";
 
-import { tryCreateFTSIndex } from "../indexer/schema.js";
+import { checkFTSAvailability } from "../indexer/schema.js";
 import { DuckDBClient } from "../shared/duckdb.js";
 
 import { bootstrapServer, type BootstrapOptions } from "./bootstrap.js";
@@ -50,8 +50,8 @@ export async function createServerRuntime(options: CommonServerOptions): Promise
     db = await DuckDBClient.connect({ databasePath, ensureDirectory: true });
     const repoId = await resolveRepoId(db, repoRoot);
 
-    // FTS拡張の利用可否を検出
-    const hasFTS = await tryCreateFTSIndex(db);
+    // Phase 2: FTS拡張の利用可否を確認（作成はしない）
+    const hasFTS = await checkFTSAvailability(db);
 
     const warningManager = new WarningManager();
 

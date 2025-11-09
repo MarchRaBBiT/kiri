@@ -354,55 +354,62 @@ export async function rebuildGlobalFTS(
         return true;
       }
 
-      // Set all repos to 'rebuilding' status before starting
-      await db.run(`UPDATE repo SET fts_status = 'rebuilding'`);
+      // Fix: Wrap metadata updates in transaction for atomicity
+      return await db.transaction(async () => {
+        // Fix: Set only dirty/dirty-status repos to 'rebuilding' to avoid permanent rebuilding state
+        await db.run(
+          `UPDATE repo SET fts_status = 'rebuilding'
+           WHERE fts_dirty = true OR fts_status = 'dirty'`
+        );
 
-      console.info("Rebuilding FTS index...");
-      const success = await tryCreateFTSIndex(db, true);
+        console.info("Rebuilding FTS index...");
+        // Note: tryCreateFTSIndex must run inside transaction to ensure metadata consistency
+        const success = await tryCreateFTSIndex(db, true);
 
-      if (success) {
-        // Fix #3: Clear dirty flags based on rebuild context
-        if (forceFTS) {
-          // forceFTS case - unconditionally clear all (ignores generation changes)
-          await db.run(
-            `UPDATE repo
-             SET fts_dirty = false,
-                 fts_status = 'clean',
-                 fts_last_indexed_at = CURRENT_TIMESTAMP`
-          );
-        } else if (dirtyRepos.length > 0) {
-          // Normal case: Only clear repos that haven't been re-dirtied
-          // Use generation-based WHERE clause to prevent lost concurrent updates
-          const conditions = dirtyRepos
-            .map((r) => `(id = ${r.id} AND fts_generation = ${r.fts_generation})`)
-            .join(" OR ");
+        if (success) {
+          // Fix #3: Clear dirty flags based on rebuild context
+          if (forceFTS) {
+            // forceFTS case - unconditionally clear all (ignores generation changes)
+            await db.run(
+              `UPDATE repo
+               SET fts_dirty = false,
+                   fts_status = 'clean',
+                   fts_last_indexed_at = CURRENT_TIMESTAMP`
+            );
+          } else if (dirtyRepos.length > 0) {
+            // Normal case: Only clear repos that haven't been re-dirtied
+            // Use generation-based WHERE clause to prevent lost concurrent updates
+            const conditions = dirtyRepos
+              .map((r) => `(id = ${r.id} AND fts_generation = ${r.fts_generation})`)
+              .join(" OR ");
 
-          await db.run(
-            `UPDATE repo
-             SET fts_dirty = false,
-                 fts_status = 'clean',
-                 fts_last_indexed_at = CURRENT_TIMESTAMP
-             WHERE ${conditions}`
-          );
+            await db.run(
+              `UPDATE repo
+               SET fts_dirty = false,
+                   fts_status = 'clean',
+                   fts_last_indexed_at = CURRENT_TIMESTAMP
+               WHERE ${conditions}`
+            );
+          } else {
+            // No dirty repos but rebuild was needed (e.g., ftsExists=false)
+            // This shouldn't normally happen but handle it by clearing all
+            await db.run(
+              `UPDATE repo
+               SET fts_dirty = false,
+                   fts_status = 'clean',
+                   fts_last_indexed_at = CURRENT_TIMESTAMP`
+            );
+          }
+
+          console.info("✅ FTS index rebuilt successfully");
         } else {
-          // No dirty repos but rebuild was needed (e.g., ftsExists=false)
-          // This shouldn't normally happen but handle it by clearing all
-          await db.run(
-            `UPDATE repo
-             SET fts_dirty = false,
-                 fts_status = 'clean',
-                 fts_last_indexed_at = CURRENT_TIMESTAMP`
-          );
+          // Fix #2: On failure, reset status to 'dirty' so next run will retry
+          await db.run(`UPDATE repo SET fts_status = 'dirty' WHERE fts_status = 'rebuilding'`);
+          console.warn("⚠️  FTS index rebuild failed, will retry on next indexer run");
         }
 
-        console.info("✅ FTS index rebuilt successfully");
-      } else {
-        // Fix #2: On failure, reset status to 'dirty' so next run will retry
-        await db.run(`UPDATE repo SET fts_status = 'dirty' WHERE fts_status = 'rebuilding'`);
-        console.warn("⚠️  FTS index rebuild failed, will retry on next indexer run");
-      }
-
-      return success;
+        return success;
+      });
     }
 
     // 再構築不要

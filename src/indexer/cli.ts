@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 
 import { DuckDBClient } from "../shared/duckdb.js";
 import { generateEmbedding } from "../shared/embedding.js";
+import { acquireLock, releaseLock, LockfileError, getLockOwner } from "../shared/utils/lockfile.js";
 
 import { analyzeSource, buildFallbackSnippet } from "./codeintel.js";
 import { getDefaultBranch, getHeadCommit, gitLsFiles } from "./git.js";
@@ -606,6 +607,21 @@ export async function runIndexer(options: IndexerOptions): Promise<void> {
   // DuckDB single-writer制約対応: 同じdatabasePathへの並列書き込みを防ぐため、
   // databasePathごとのキューで直列化する
   return getIndexerQueue(databasePath).add(async () => {
+    // Fix: Add file lock for multi-process safety
+    const lockfilePath = `${databasePath}.lock`;
+    try {
+      acquireLock(lockfilePath);
+    } catch (error) {
+      if (error instanceof LockfileError) {
+        const ownerPid = error.ownerPid ?? getLockOwner(lockfilePath);
+        const ownerInfo = ownerPid ? ` (PID: ${ownerPid})` : "";
+        throw new Error(
+          `Another indexing process${ownerInfo} holds the lock for ${databasePath}. Please wait for it to complete.`
+        );
+      }
+      throw error;
+    }
+
     const db = await DuckDBClient.connect({ databasePath, ensureDirectory: true });
     try {
       await ensureBaseSchema(db);
@@ -747,14 +763,15 @@ export async function runIndexer(options: IndexerOptions): Promise<void> {
           }
 
           // Update timestamp and mark FTS dirty inside transaction for atomicity
+          // Fix: Increment fts_generation to prevent lost updates during concurrent rebuilds
           if (defaultBranch) {
             await db.run(
-              "UPDATE repo SET indexed_at = CURRENT_TIMESTAMP, default_branch = ?, fts_dirty = true WHERE id = ?",
+              "UPDATE repo SET indexed_at = CURRENT_TIMESTAMP, default_branch = ?, fts_dirty = true, fts_generation = fts_generation + 1 WHERE id = ?",
               [defaultBranch, repoId]
             );
           } else {
             await db.run(
-              "UPDATE repo SET indexed_at = CURRENT_TIMESTAMP, fts_dirty = true WHERE id = ?",
+              "UPDATE repo SET indexed_at = CURRENT_TIMESTAMP, fts_dirty = true, fts_generation = fts_generation + 1 WHERE id = ?",
               [repoId]
             );
           }
@@ -790,14 +807,15 @@ export async function runIndexer(options: IndexerOptions): Promise<void> {
         await persistEmbeddings(db, repoId, embeddings);
 
         // Update timestamp and mark FTS dirty inside transaction to ensure atomicity
+        // Fix: Increment fts_generation to prevent lost updates during concurrent rebuilds
         if (defaultBranch) {
           await db.run(
-            "UPDATE repo SET indexed_at = CURRENT_TIMESTAMP, default_branch = ?, fts_dirty = true WHERE id = ?",
+            "UPDATE repo SET indexed_at = CURRENT_TIMESTAMP, default_branch = ?, fts_dirty = true, fts_generation = fts_generation + 1 WHERE id = ?",
             [defaultBranch, repoId]
           );
         } else {
           await db.run(
-            "UPDATE repo SET indexed_at = CURRENT_TIMESTAMP, fts_dirty = true WHERE id = ?",
+            "UPDATE repo SET indexed_at = CURRENT_TIMESTAMP, fts_dirty = true, fts_generation = fts_generation + 1 WHERE id = ?",
             [repoId]
           );
         }
@@ -811,6 +829,7 @@ export async function runIndexer(options: IndexerOptions): Promise<void> {
       await rebuildFTSIfNeeded(db, repoId, true);
     } finally {
       await db.close();
+      releaseLock(lockfilePath);
     }
   });
 }

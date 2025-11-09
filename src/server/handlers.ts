@@ -1290,35 +1290,55 @@ export async function filesSearch(
 
   const limit = normalizeLimit(params.limit);
 
-  // Fix #1: Per-request FTS availability check to detect runtime changes
-  // Check if FTS schema exists and all repos are clean (not dirty or rebuilding)
+  // Fix #4: Always perform FTS health check to detect recovery after startup
+  // This allows the server to automatically switch to FTS mode when indexer rebuilds it
   let hasFTS = context.features?.fts ?? false;
-  if (hasFTS) {
-    try {
-      // Verify FTS schema still exists
-      const ftsExists = await checkFTSSchemaExists(db);
-      if (!ftsExists) {
-        hasFTS = false;
-        context.warningManager.add("FTS schema not found, falling back to ILIKE");
-      } else {
-        // Check if any repo is dirty or rebuilding
-        const statusCheck = await db.all<{ count: number }>(
-          `SELECT COUNT(*) as count FROM repo
-           WHERE fts_dirty = true OR fts_status IN ('dirty', 'rebuilding')`
-        );
-        const anyDirtyOrRebuilding = (statusCheck[0]?.count ?? 0) > 0;
-        if (anyDirtyOrRebuilding) {
-          hasFTS = false;
-          context.warningManager.add(
-            "FTS index is stale or rebuilding, using ILIKE fallback. Run indexer to update FTS."
-          );
-        }
-      }
-    } catch (error) {
-      // On error, fallback to ILIKE for safety
+
+  try {
+    const ftsExists = await checkFTSSchemaExists(db);
+    if (!ftsExists) {
       hasFTS = false;
-      context.warningManager.add(`FTS availability check failed: ${error}`);
+      if (context.features?.fts) {
+        // FTS disappeared after startup - update context
+        context.features.fts = false;
+        context.warningManager.warnForRequest(
+          "fts-schema-missing",
+          "FTS schema not found, falling back to ILIKE"
+        );
+      }
+    } else {
+      // Check if any repo is dirty or rebuilding
+      const statusCheck = await db.all<{ count: number }>(
+        `SELECT COUNT(*) as count FROM repo
+         WHERE fts_dirty = true OR fts_status IN ('dirty', 'rebuilding')`
+      );
+      const anyDirtyOrRebuilding = (statusCheck[0]?.count ?? 0) > 0;
+      if (anyDirtyOrRebuilding) {
+        hasFTS = false;
+        context.warningManager.warnForRequest(
+          "fts-stale",
+          "FTS index is stale or rebuilding, using ILIKE fallback. Run indexer to update FTS."
+        );
+      } else if (!context.features?.fts) {
+        // FTS became available after startup - update context and load extension
+        await db.run("LOAD fts;");
+        if (!context.features) {
+          context.features = {};
+        }
+        context.features.fts = true;
+        hasFTS = true;
+        console.info("✅ FTS recovered and enabled");
+      } else {
+        hasFTS = true;
+      }
     }
+  } catch (error) {
+    // On error, fallback to ILIKE for safety
+    hasFTS = false;
+    context.warningManager.warnForRequest(
+      "fts-check-failed",
+      `FTS availability check failed: ${error}`
+    );
   }
 
   let sql: string;

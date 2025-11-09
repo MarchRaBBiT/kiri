@@ -20,6 +20,7 @@ interface IndexerOptions {
   full: boolean;
   since?: string;
   changedPaths?: string[]; // For incremental indexing: only reindex these files
+  skipLocking?: boolean; // Fix #1: Internal use only - allows caller (e.g., watcher) to manage lock
 }
 
 interface BlobRecord {
@@ -607,23 +608,29 @@ export async function runIndexer(options: IndexerOptions): Promise<void> {
   // DuckDB single-writer制約対応: 同じdatabasePathへの並列書き込みを防ぐため、
   // databasePathごとのキューで直列化する
   return getIndexerQueue(databasePath).add(async () => {
-    // Fix: Add file lock for multi-process safety
+    // Fix #1 & #2: Add file lock for multi-process safety (unless caller already holds lock)
     const lockfilePath = `${databasePath}.lock`;
-    try {
-      acquireLock(lockfilePath);
-    } catch (error) {
-      if (error instanceof LockfileError) {
-        const ownerPid = error.ownerPid ?? getLockOwner(lockfilePath);
-        const ownerInfo = ownerPid ? ` (PID: ${ownerPid})` : "";
-        throw new Error(
-          `Another indexing process${ownerInfo} holds the lock for ${databasePath}. Please wait for it to complete.`
-        );
+    let lockAcquired = false;
+
+    if (!options.skipLocking) {
+      try {
+        acquireLock(lockfilePath);
+        lockAcquired = true;
+      } catch (error) {
+        if (error instanceof LockfileError) {
+          const ownerPid = error.ownerPid ?? getLockOwner(lockfilePath);
+          const ownerInfo = ownerPid ? ` (PID: ${ownerPid})` : "";
+          throw new Error(
+            `Another indexing process${ownerInfo} holds the lock for ${databasePath}. Please wait for it to complete.`
+          );
+        }
+        throw error;
       }
-      throw error;
     }
 
-    const db = await DuckDBClient.connect({ databasePath, ensureDirectory: true });
+    let db: DuckDBClient | null = null;
     try {
+      db = await DuckDBClient.connect({ databasePath, ensureDirectory: true });
       await ensureBaseSchema(db);
       // Phase 3: Ensure FTS metadata columns exist for existing DBs (migration)
       await ensureRepoMetaColumns(db);
@@ -668,15 +675,36 @@ export async function runIndexer(options: IndexerOptions): Promise<void> {
           console.info(
             `No actual changes detected in ${options.changedPaths.length} file(s). Skipping reindex.`
           );
-          // Still update timestamp to indicate we checked
-          if (defaultBranch) {
-            await db.run(
-              "UPDATE repo SET indexed_at = CURRENT_TIMESTAMP, default_branch = ? WHERE id = ?",
-              [defaultBranch, repoId]
-            );
+
+          // Fix #3: If files were deleted, still need to dirty FTS and rebuild
+          if (deletedPaths.length > 0) {
+            console.info(`${deletedPaths.length} file(s) deleted - marking FTS dirty`);
+
+            if (defaultBranch) {
+              await db.run(
+                "UPDATE repo SET indexed_at = CURRENT_TIMESTAMP, default_branch = ?, fts_dirty = true, fts_generation = fts_generation + 1 WHERE id = ?",
+                [defaultBranch, repoId]
+              );
+            } else {
+              await db.run(
+                "UPDATE repo SET indexed_at = CURRENT_TIMESTAMP, fts_dirty = true, fts_generation = fts_generation + 1 WHERE id = ?",
+                [repoId]
+              );
+            }
+
+            await rebuildFTSIfNeeded(db, repoId);
           } else {
-            await db.run("UPDATE repo SET indexed_at = CURRENT_TIMESTAMP WHERE id = ?", [repoId]);
+            // No deletions either - just update timestamp
+            if (defaultBranch) {
+              await db.run(
+                "UPDATE repo SET indexed_at = CURRENT_TIMESTAMP, default_branch = ? WHERE id = ?",
+                [defaultBranch, repoId]
+              );
+            } else {
+              await db.run("UPDATE repo SET indexed_at = CURRENT_TIMESTAMP WHERE id = ?", [repoId]);
+            }
           }
+
           return;
         }
 
@@ -828,8 +856,13 @@ export async function runIndexer(options: IndexerOptions): Promise<void> {
       // Phase 2+3: Force rebuild FTS index after full reindex
       await rebuildFTSIfNeeded(db, repoId, true);
     } finally {
-      await db.close();
-      releaseLock(lockfilePath);
+      // Fix #2: Ensure lock is released even if DB connection fails
+      if (db) {
+        await db.close();
+      }
+      if (lockAcquired) {
+        releaseLock(lockfilePath);
+      }
     }
   });
 }

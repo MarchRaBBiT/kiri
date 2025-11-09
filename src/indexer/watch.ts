@@ -260,6 +260,7 @@ export class IndexWatcher {
           databasePath: this.options.databasePath,
           full: false,
           changedPaths,
+          skipLocking: true, // Fix #1: Watcher already holds the lock
         });
 
         const duration = performance.now() - start;

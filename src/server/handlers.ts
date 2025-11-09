@@ -1,5 +1,6 @@
 import path from "node:path";
 
+import { checkFTSSchemaExists } from "../indexer/schema.js";
 import { DuckDBClient } from "../shared/duckdb.js";
 import { generateEmbedding, structuralSimilarity } from "../shared/embedding.js";
 import { encode as encodeGPT, tokenizeText } from "../shared/tokenizer.js";
@@ -1288,7 +1289,37 @@ export async function filesSearch(
   }
 
   const limit = normalizeLimit(params.limit);
-  const hasFTS = context.features?.fts ?? false;
+
+  // Fix #1: Per-request FTS availability check to detect runtime changes
+  // Check if FTS schema exists and all repos are clean (not dirty or rebuilding)
+  let hasFTS = context.features?.fts ?? false;
+  if (hasFTS) {
+    try {
+      // Verify FTS schema still exists
+      const ftsExists = await checkFTSSchemaExists(db);
+      if (!ftsExists) {
+        hasFTS = false;
+        context.warningManager.add("FTS schema not found, falling back to ILIKE");
+      } else {
+        // Check if any repo is dirty or rebuilding
+        const statusCheck = await db.all<{ count: number }>(
+          `SELECT COUNT(*) as count FROM repo
+           WHERE fts_dirty = true OR fts_status IN ('dirty', 'rebuilding')`
+        );
+        const anyDirtyOrRebuilding = (statusCheck[0]?.count ?? 0) > 0;
+        if (anyDirtyOrRebuilding) {
+          hasFTS = false;
+          context.warningManager.add(
+            "FTS index is stale or rebuilding, using ILIKE fallback. Run indexer to update FTS."
+          );
+        }
+      }
+    } catch (error) {
+      // On error, fallback to ILIKE for safety
+      hasFTS = false;
+      context.warningManager.add(`FTS availability check failed: ${error}`);
+    }
+  }
 
   let sql: string;
   let values: unknown[];

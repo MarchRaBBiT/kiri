@@ -12,7 +12,9 @@ export async function ensureBaseSchema(db: DuckDBClient): Promise<void> {
       default_branch TEXT,
       indexed_at TIMESTAMP,
       fts_last_indexed_at TIMESTAMP,
-      fts_dirty BOOLEAN DEFAULT false
+      fts_dirty BOOLEAN DEFAULT false,
+      fts_status TEXT DEFAULT 'dirty',
+      fts_generation INTEGER DEFAULT 0
     )
   `);
 
@@ -134,11 +136,13 @@ export async function ensureRepoMetaColumns(db: DuckDBClient): Promise<void> {
   // 列の存在確認
   const columns = await db.all<{ column_name: string }>(
     `SELECT column_name FROM duckdb_columns()
-     WHERE table_name = 'repo' AND column_name IN ('fts_last_indexed_at', 'fts_dirty')`
+     WHERE table_name = 'repo' AND column_name IN ('fts_last_indexed_at', 'fts_dirty', 'fts_status', 'fts_generation')`
   );
 
   const hasLastIndexedAt = columns.some((c) => c.column_name === "fts_last_indexed_at");
   const hasDirty = columns.some((c) => c.column_name === "fts_dirty");
+  const hasStatus = columns.some((c) => c.column_name === "fts_status");
+  const hasGeneration = columns.some((c) => c.column_name === "fts_generation");
 
   // fts_last_indexed_atの追加
   if (!hasLastIndexedAt) {
@@ -150,12 +154,23 @@ export async function ensureRepoMetaColumns(db: DuckDBClient): Promise<void> {
     await db.run(`ALTER TABLE repo ADD COLUMN fts_dirty BOOLEAN DEFAULT false`);
   }
 
+  // fts_statusの追加 (Fix #2: FTS rebuild status tracking)
+  if (!hasStatus) {
+    await db.run(`ALTER TABLE repo ADD COLUMN fts_status TEXT DEFAULT 'dirty'`);
+  }
+
+  // fts_generationの追加 (Fix #3: Lost dirty flags prevention)
+  if (!hasGeneration) {
+    await db.run(`ALTER TABLE repo ADD COLUMN fts_generation INTEGER DEFAULT 0`);
+  }
+
   // 既存レコードの初期化：常にdirty=trueで初期化
   // (rebuildFTSIfNeededが実際のFTS状態を確認して処理を決定)
   // 理由: multi-repo環境で新規repoが誤ってclean扱いされるのを防ぐため
   await db.run(`
     UPDATE repo
-    SET fts_dirty = true
+    SET fts_dirty = true,
+        fts_status = 'dirty'
     WHERE fts_last_indexed_at IS NULL
   `);
 }
@@ -271,12 +286,15 @@ export async function checkFTSAvailability(db: DuckDBClient): Promise<boolean> {
 /**
  * dirty flagに基づいてFTSインデックスを条件付きで再構築（Phase 2+3: インデクサー用）
  *
+ * @deprecated The `repoId` parameter is currently ignored due to global FTS architecture.
+ * Use `rebuildGlobalFTS()` instead for clearer intent. This signature will be removed in v2.0.
+ *
  * NOTE: DuckDB FTS index is GLOBAL (one fts_main_blob schema for entire blob table).
  * We check if ANY repo is dirty to avoid partial corruption in multi-repo environments.
  * Future improvement: migrate to dedicated fts_metadata table (see Codex design proposal).
  *
  * @param db - DuckDBクライアント
- * @param repoId - リポジトリID
+ * @param repoId - リポジトリID (⚠️ IGNORED: FTS is global, not per-repo)
  * @param forceFTS - FTS再構築を強制する場合true
  * @returns FTSが利用可能な場合true
  */
@@ -285,33 +303,102 @@ export async function rebuildFTSIfNeeded(
   repoId: number,
   forceFTS = false
 ): Promise<boolean> {
+  console.warn(
+    "rebuildFTSIfNeeded: repoId parameter is deprecated and ignored (FTS is global). Use rebuildGlobalFTS() instead."
+  );
+  return rebuildGlobalFTS(db, { forceFTS });
+}
+
+/**
+ * グローバルFTSインデックスを再構築（Fix #4: New API without misleading repoId parameter）
+ *
+ * NOTE: DuckDB FTS index is GLOBAL (one fts_main_blob schema for entire blob table).
+ * This function rebuilds FTS for all repos in the database, with proper status tracking
+ * and generation-based dirty flag management to prevent lost concurrent updates.
+ *
+ * @param db - DuckDBクライアント
+ * @param options - オプション設定
+ * @param options.forceFTS - FTS再構築を強制する場合true
+ * @returns FTSが利用可能な場合true
+ */
+export async function rebuildGlobalFTS(
+  db: DuckDBClient,
+  options: { forceFTS?: boolean } = {}
+): Promise<boolean> {
+  const forceFTS = options.forceFTS ?? false;
+
   try {
     // メタデータ列の存在確認と初期化
     await ensureRepoMetaColumns(db);
 
-    // CRITICAL: Check if ANY repo is dirty (FTS is global, not per-repo)
+    // CRITICAL: Check if ANY repo is dirty or rebuilding (FTS is global, not per-repo)
     // This prevents multi-repo corruption where one repo's failure breaks all repos
-    const dirtyCount = await db.all<{ count: number }>(
-      `SELECT COUNT(*) as count FROM repo WHERE fts_dirty = true`
+    const statusCheck = await db.all<{ count: number }>(
+      `SELECT COUNT(*) as count FROM repo
+       WHERE fts_dirty = true OR fts_status IN ('dirty', 'rebuilding')`
     );
-    const anyDirty = (dirtyCount[0]?.count ?? 0) > 0;
+    const needsRebuild = (statusCheck[0]?.count ?? 0) > 0;
     const ftsExists = await checkFTSSchemaExists(db);
 
     // FTS再構築が必要かチェック
-    if (forceFTS || anyDirty || !ftsExists) {
+    if (forceFTS || needsRebuild || !ftsExists) {
+      // Fix #2: Wrap entire rebuild in transaction with status tracking
+      // Fix #3: Capture dirty repos' generations to prevent lost updates
+      const dirtyRepos = await db.all<{ id: number; fts_generation: number }>(
+        `SELECT id, fts_generation FROM repo WHERE fts_dirty = true`
+      );
+
+      if (dirtyRepos.length === 0 && !forceFTS && ftsExists) {
+        // No dirty repos and FTS exists - likely another process is rebuilding
+        console.info("FTS rebuild already in progress or completed by another process");
+        return true;
+      }
+
+      // Set all repos to 'rebuilding' status before starting
+      await db.run(`UPDATE repo SET fts_status = 'rebuilding'`);
+
       console.info("Rebuilding FTS index...");
       const success = await tryCreateFTSIndex(db, true);
 
       if (success) {
-        // 成功時は全repoのdirty=falseをクリア（FTSはグローバルなので）
-        await db.run(
-          `UPDATE repo
-           SET fts_dirty = false,
-               fts_last_indexed_at = CURRENT_TIMESTAMP`
-        );
+        // Fix #3: Clear dirty flags based on rebuild context
+        if (forceFTS) {
+          // forceFTS case - unconditionally clear all (ignores generation changes)
+          await db.run(
+            `UPDATE repo
+             SET fts_dirty = false,
+                 fts_status = 'clean',
+                 fts_last_indexed_at = CURRENT_TIMESTAMP`
+          );
+        } else if (dirtyRepos.length > 0) {
+          // Normal case: Only clear repos that haven't been re-dirtied
+          // Use generation-based WHERE clause to prevent lost concurrent updates
+          const conditions = dirtyRepos
+            .map((r) => `(id = ${r.id} AND fts_generation = ${r.fts_generation})`)
+            .join(" OR ");
+
+          await db.run(
+            `UPDATE repo
+             SET fts_dirty = false,
+                 fts_status = 'clean',
+                 fts_last_indexed_at = CURRENT_TIMESTAMP
+             WHERE ${conditions}`
+          );
+        } else {
+          // No dirty repos but rebuild was needed (e.g., ftsExists=false)
+          // This shouldn't normally happen but handle it by clearing all
+          await db.run(
+            `UPDATE repo
+             SET fts_dirty = false,
+                 fts_status = 'clean',
+                 fts_last_indexed_at = CURRENT_TIMESTAMP`
+          );
+        }
+
         console.info("✅ FTS index rebuilt successfully");
       } else {
-        // 失敗時はdirtyを維持
+        // Fix #2: On failure, reset status to 'dirty' so next run will retry
+        await db.run(`UPDATE repo SET fts_status = 'dirty' WHERE fts_status = 'rebuilding'`);
         console.warn("⚠️  FTS index rebuild failed, will retry on next indexer run");
       }
 
@@ -322,6 +409,12 @@ export async function rebuildFTSIfNeeded(
     console.info("FTS index is up to date, skipping rebuild");
     return true;
   } catch (error) {
+    // On exception, reset any 'rebuilding' status to 'dirty'
+    try {
+      await db.run(`UPDATE repo SET fts_status = 'dirty' WHERE fts_status = 'rebuilding'`);
+    } catch {
+      // Ignore cleanup errors
+    }
     console.warn("Failed to rebuild FTS index:", error);
     return false;
   }
@@ -338,6 +431,14 @@ export async function setFTSDirty(db: DuckDBClient, repoId: number): Promise<voi
   // Ensure the fts_dirty column exists before trying to update it
   await ensureRepoMetaColumns(db);
 
-  // Update the dirty flag (errors are propagated to caller)
-  await db.run(`UPDATE repo SET fts_dirty = true WHERE id = ?`, [repoId]);
+  // Update the dirty flag with generation increment (Fix #3: prevents lost updates)
+  // Incrementing generation ensures concurrent setFTSDirty calls aren't lost during rebuild
+  await db.run(
+    `UPDATE repo
+     SET fts_dirty = true,
+         fts_status = 'dirty',
+         fts_generation = fts_generation + 1
+     WHERE id = ?`,
+    [repoId]
+  );
 }

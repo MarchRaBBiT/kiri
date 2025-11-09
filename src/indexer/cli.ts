@@ -698,7 +698,10 @@ export async function runIndexer(options: IndexerOptions): Promise<void> {
 
         // Fix #4: Handle deleted files from watch mode (uncommitted deletions)
         if (missingPaths.length > 0) {
-          await deleteFileRecords(db, repoId, missingPaths);
+          // Loop through each missing file and delete with headCommit
+          for (const path of missingPaths) {
+            await deleteFileRecords(db, repoId, headCommit, path);
+          }
           console.info(
             `Removed ${missingPaths.length} missing file(s) from index (watch mode deletion).`
           );

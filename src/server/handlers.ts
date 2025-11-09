@@ -952,8 +952,14 @@ function applyFileTypeBoost(
     ".git/",
     "node_modules/",
   ];
-  if (blacklistedDirs.some((dir) => path.startsWith(dir))) {
-    return -100; // Effectively remove it
+  for (const dir of blacklistedDirs) {
+    if (path.startsWith(dir)) {
+      // FIX: boost_profile="docs" の場合は docs/ ブラックリストをスキップ
+      if (profile === "docs" && dir === "docs/") {
+        continue;
+      }
+      return -100; // Effectively remove it
+    }
   }
 
   if (profile === "none") {

@@ -142,10 +142,11 @@ export class IndexWatcher {
 
     // Security: Reject paths outside repository
     // ".." indicates parent directory traversal
-    if (rel.startsWith("..") || rel === "") {
+    if (rel.startsWith("..")) {
       return null;
     }
 
+    // Allow empty string (repo root itself) for chokidar directory watching
     // Normalize to forward slash for cross-platform compatibility
     // Windows uses backslash, but git and denylist rules expect forward slash
     return rel.split(sep).join("/");
@@ -170,8 +171,10 @@ export class IndexWatcher {
       ignoreInitial: true, // Don't trigger on existing files
       ignored: (path: string) => {
         const relativePath = this.normalizePathForRepo(path);
-        // Reject paths outside repo or invalid paths
-        if (!relativePath) return true;
+        // Reject paths outside repo or invalid paths (explicit null check, not falsy check)
+        if (relativePath === null) {
+          return true;
+        }
         return denylistFilter.isDenied(relativePath);
       },
       // Editor-specific handling
@@ -184,22 +187,31 @@ export class IndexWatcher {
       // depth option omitted for no depth limit
     });
 
-    // Register event handlers
-    this.watcher
-      .on("add", (path) => this.scheduleReindex("add", path))
-      .on("change", (path) => this.scheduleReindex("change", path))
-      .on("unlink", (path) => this.scheduleReindex("unlink", path))
-      .on("error", (error) => {
-        process.stderr.write(
-          `❌ File watcher error: ${error instanceof Error ? error.message : String(error)}\n`
-        );
+    // Return promise that resolves when watcher is fully initialized
+    return new Promise<void>((resolve) => {
+      // Register event handlers
+      this.watcher!.on("add", (path) => {
+        this.scheduleReindex("add", path);
       })
-      .on("ready", () => {
-        process.stderr.write(
-          `👁️  Watch mode started. Monitoring ${this.options.repoRoot} for changes...\n`
-        );
-        process.stderr.write(`   Debounce: ${this.options.debounceMs}ms\n`);
-      });
+        .on("change", (path) => {
+          this.scheduleReindex("change", path);
+        })
+        .on("unlink", (path) => {
+          this.scheduleReindex("unlink", path);
+        })
+        .on("error", (error) => {
+          process.stderr.write(
+            `❌ File watcher error: ${error instanceof Error ? error.message : String(error)}\n`
+          );
+        })
+        .on("ready", () => {
+          process.stderr.write(
+            `👁️  Watch mode started. Monitoring ${this.options.repoRoot} for changes...\n`
+          );
+          process.stderr.write(`   Debounce: ${this.options.debounceMs}ms\n`);
+          resolve(); // Resolve promise when watcher is ready
+        });
+    });
   }
 
   /**
@@ -269,6 +281,11 @@ export class IndexWatcher {
 
     // Check if already reindexing
     if (this.isReindexing) {
+      // Fix #6: Restore changedPaths back to pendingFiles to prevent data loss
+      for (const path of changedPaths) {
+        this.pendingFiles.add(path);
+      }
+
       process.stderr.write(
         `⏳ Reindex already in progress. Will reindex again after completion.\n`
       );
@@ -375,12 +392,20 @@ export class IndexWatcher {
           this.reindexTimer = null;
         }
 
-        // If more changes occurred during reindex, schedule another one
-        if (this.pendingReindex) {
+        // Fix #7: If more changes occurred during reindex, trigger direct retry
+        if (this.pendingReindex && this.pendingFiles.size > 0) {
           process.stderr.write(
             `🔁 New changes detected during reindex. Scheduling another reindex...\n`
           );
-          this.scheduleReindex("batch", "(multiple files)");
+
+          // Direct retry without file system event dependency
+          // Don't clear pendingFiles here - let the timer callback handle it
+          this.reindexTimer = setTimeout(() => {
+            this.reindexTimer = null;
+            const changedPaths = Array.from(this.pendingFiles);
+            this.pendingFiles.clear();
+            void this.executeReindex(changedPaths);
+          }, this.options.debounceMs);
         }
       }
     })();

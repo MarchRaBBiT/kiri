@@ -9,6 +9,7 @@ import { generateEmbedding } from "../shared/embedding.js";
 import { analyzeSource, buildFallbackSnippet } from "./codeintel.js";
 import { getDefaultBranch, getHeadCommit, gitLsFiles } from "./git.js";
 import { detectLanguage } from "./language.js";
+import { getIndexerQueue } from "./queue.js";
 import { ensureBaseSchema, ensureRepoMetaColumns, rebuildFTSIfNeeded } from "./schema.js";
 import { IndexWatcher } from "./watch.js";
 
@@ -602,144 +603,193 @@ export async function runIndexer(options: IndexerOptions): Promise<void> {
   const repoRoot = resolve(options.repoRoot);
   const databasePath = resolve(options.databasePath);
 
-  const db = await DuckDBClient.connect({ databasePath, ensureDirectory: true });
-  try {
-    await ensureBaseSchema(db);
-    // Phase 3: Ensure FTS metadata columns exist for existing DBs (migration)
-    await ensureRepoMetaColumns(db);
+  // DuckDB single-writer制約対応: 同じdatabasePathへの並列書き込みを防ぐため、
+  // databasePathごとのキューで直列化する
+  return getIndexerQueue(databasePath).add(async () => {
+    const db = await DuckDBClient.connect({ databasePath, ensureDirectory: true });
+    try {
+      await ensureBaseSchema(db);
+      // Phase 3: Ensure FTS metadata columns exist for existing DBs (migration)
+      await ensureRepoMetaColumns(db);
 
-    const [headCommit, defaultBranch] = await Promise.all([
-      getHeadCommit(repoRoot),
-      getDefaultBranch(repoRoot),
-    ]);
+      const [headCommit, defaultBranch] = await Promise.all([
+        getHeadCommit(repoRoot),
+        getDefaultBranch(repoRoot),
+      ]);
 
-    const repoId = await ensureRepo(db, repoRoot, defaultBranch);
+      const repoId = await ensureRepo(db, repoRoot, defaultBranch);
 
-    // Incremental mode: only reindex files in changedPaths
-    if (options.changedPaths && options.changedPaths.length > 0) {
-      // First, reconcile deleted files (handle renames/deletions)
-      const deletedPaths = await reconcileDeletedFiles(db, repoId, repoRoot);
-      if (deletedPaths.length > 0) {
-        console.info(`Removed ${deletedPaths.length} deleted file(s) from index.`);
-      }
+      // Incremental mode: only reindex files in changedPaths
+      if (options.changedPaths && options.changedPaths.length > 0) {
+        // First, reconcile deleted files (handle renames/deletions)
+        const deletedPaths = await reconcileDeletedFiles(db, repoId, repoRoot);
+        if (deletedPaths.length > 0) {
+          console.info(`Removed ${deletedPaths.length} deleted file(s) from index.`);
+        }
 
-      const existingHashes = await getExistingFileHashes(db, repoId);
-      const { blobs, files, embeddings } = await scanFilesInBatches(repoRoot, options.changedPaths);
+        const existingHashes = await getExistingFileHashes(db, repoId);
+        const { blobs, files, embeddings } = await scanFilesInBatches(
+          repoRoot,
+          options.changedPaths
+        );
 
-      // Filter out files that haven't actually changed (same hash)
-      const changedFiles: FileRecord[] = [];
-      const changedBlobs = new Map<string, BlobRecord>();
+        // Filter out files that haven't actually changed (same hash)
+        const changedFiles: FileRecord[] = [];
+        const changedBlobs = new Map<string, BlobRecord>();
 
-      for (const file of files) {
-        const existingHash = existingHashes.get(file.path);
-        if (existingHash !== file.blobHash) {
-          changedFiles.push(file);
-          const blob = blobs.get(file.blobHash);
-          if (blob) {
-            changedBlobs.set(blob.hash, blob);
+        for (const file of files) {
+          const existingHash = existingHashes.get(file.path);
+          if (existingHash !== file.blobHash) {
+            changedFiles.push(file);
+            const blob = blobs.get(file.blobHash);
+            if (blob) {
+              changedBlobs.set(blob.hash, blob);
+            }
           }
         }
-      }
 
-      if (changedFiles.length === 0) {
-        console.info(
-          `No actual changes detected in ${options.changedPaths.length} file(s). Skipping reindex.`
-        );
-        // Still update timestamp to indicate we checked
-        if (defaultBranch) {
-          await db.run(
-            "UPDATE repo SET indexed_at = CURRENT_TIMESTAMP, default_branch = ? WHERE id = ?",
-            [defaultBranch, repoId]
+        if (changedFiles.length === 0) {
+          console.info(
+            `No actual changes detected in ${options.changedPaths.length} file(s). Skipping reindex.`
           );
-        } else {
-          await db.run("UPDATE repo SET indexed_at = CURRENT_TIMESTAMP WHERE id = ?", [repoId]);
+          // Still update timestamp to indicate we checked
+          if (defaultBranch) {
+            await db.run(
+              "UPDATE repo SET indexed_at = CURRENT_TIMESTAMP, default_branch = ? WHERE id = ?",
+              [defaultBranch, repoId]
+            );
+          } else {
+            await db.run("UPDATE repo SET indexed_at = CURRENT_TIMESTAMP WHERE id = ?", [repoId]);
+          }
+          return;
         }
+
+        // Process all changed files in a single transaction for atomicity
+        const fileSet = new Set<string>(files.map((f) => f.path));
+        let processedCount = 0;
+
+        await db.transaction(async () => {
+          for (const file of changedFiles) {
+            const blob = changedBlobs.get(file.blobHash);
+            if (!blob) continue;
+
+            // Build code intelligence for this file
+            const fileSymbols: SymbolRow[] = [];
+            const fileSnippets: SnippetRow[] = [];
+            const fileDependencies: DependencyRow[] = [];
+
+            if (!file.isBinary && blob.content) {
+              const analysis = await analyzeSource(
+                file.path,
+                file.lang,
+                blob.content,
+                fileSet,
+                repoRoot
+              );
+              for (const symbol of analysis.symbols) {
+                fileSymbols.push({
+                  path: file.path,
+                  symbolId: symbol.symbolId,
+                  name: symbol.name,
+                  kind: symbol.kind,
+                  rangeStartLine: symbol.rangeStartLine,
+                  rangeEndLine: symbol.rangeEndLine,
+                  signature: symbol.signature,
+                  doc: symbol.doc,
+                });
+              }
+              for (const snippet of analysis.snippets) {
+                fileSnippets.push({
+                  path: file.path,
+                  snippetId: snippet.startLine,
+                  startLine: snippet.startLine,
+                  endLine: snippet.endLine,
+                  symbolId: snippet.symbolId,
+                });
+              }
+              for (const dep of analysis.dependencies) {
+                fileDependencies.push({
+                  srcPath: file.path,
+                  dstKind: dep.dstKind,
+                  dst: dep.dst,
+                  rel: dep.rel,
+                });
+              }
+            } else {
+              // Binary or no content: add fallback snippet
+              const fallback = buildFallbackSnippet(blob.lineCount ?? 1);
+              fileSnippets.push({
+                path: file.path,
+                snippetId: fallback.startLine,
+                startLine: fallback.startLine,
+                endLine: fallback.endLine,
+                symbolId: fallback.symbolId,
+              });
+            }
+
+            const fileEmbedding = embeddings.find((e) => e.path === file.path) ?? null;
+
+            // Delete old records for this file (within main transaction)
+            await deleteFileRecords(db, repoId, headCommit, file.path);
+
+            // Insert new records (within main transaction)
+            await persistBlobs(db, new Map([[blob.hash, blob]]));
+            await persistTrees(db, repoId, headCommit, [file]);
+            await persistFiles(db, repoId, [file]);
+            await persistSymbols(db, repoId, fileSymbols);
+            await persistSnippets(db, repoId, fileSnippets);
+            await persistDependencies(db, repoId, fileDependencies);
+            if (fileEmbedding) {
+              await persistEmbeddings(db, repoId, [fileEmbedding]);
+            }
+
+            processedCount++;
+          }
+
+          // Update timestamp and mark FTS dirty inside transaction for atomicity
+          if (defaultBranch) {
+            await db.run(
+              "UPDATE repo SET indexed_at = CURRENT_TIMESTAMP, default_branch = ?, fts_dirty = true WHERE id = ?",
+              [defaultBranch, repoId]
+            );
+          } else {
+            await db.run(
+              "UPDATE repo SET indexed_at = CURRENT_TIMESTAMP, fts_dirty = true WHERE id = ?",
+              [repoId]
+            );
+          }
+        });
+
+        console.info(
+          `Incrementally indexed ${processedCount} changed file(s) for repo ${repoRoot} at ${databasePath} (commit ${headCommit.slice(0, 12)})`
+        );
+
+        // Phase 2+3: Rebuild FTS index after incremental updates (dirty=true triggers rebuild)
+        await rebuildFTSIfNeeded(db, repoId);
         return;
       }
 
-      // Process all changed files in a single transaction for atomicity
-      const fileSet = new Set<string>(files.map((f) => f.path));
-      let processedCount = 0;
+      // Full mode: reindex entire repository
+      const paths = await gitLsFiles(repoRoot);
+      const { blobs, files, embeddings } = await scanFilesInBatches(repoRoot, paths);
+      const codeIntel = await buildCodeIntel(files, blobs, repoRoot);
 
       await db.transaction(async () => {
-        for (const file of changedFiles) {
-          const blob = changedBlobs.get(file.blobHash);
-          if (!blob) continue;
+        await db.run("DELETE FROM tree WHERE repo_id = ?", [repoId]);
+        await db.run("DELETE FROM file WHERE repo_id = ?", [repoId]);
+        await db.run("DELETE FROM symbol WHERE repo_id = ?", [repoId]);
+        await db.run("DELETE FROM snippet WHERE repo_id = ?", [repoId]);
+        await db.run("DELETE FROM dependency WHERE repo_id = ?", [repoId]);
+        await db.run("DELETE FROM file_embedding WHERE repo_id = ?", [repoId]);
+        await persistBlobs(db, blobs);
+        await persistTrees(db, repoId, headCommit, files);
+        await persistFiles(db, repoId, files);
+        await persistSymbols(db, repoId, codeIntel.symbols);
+        await persistSnippets(db, repoId, codeIntel.snippets);
+        await persistDependencies(db, repoId, codeIntel.dependencies);
+        await persistEmbeddings(db, repoId, embeddings);
 
-          // Build code intelligence for this file
-          const fileSymbols: SymbolRow[] = [];
-          const fileSnippets: SnippetRow[] = [];
-          const fileDependencies: DependencyRow[] = [];
-
-          if (!file.isBinary && blob.content) {
-            const analysis = await analyzeSource(
-              file.path,
-              file.lang,
-              blob.content,
-              fileSet,
-              repoRoot
-            );
-            for (const symbol of analysis.symbols) {
-              fileSymbols.push({
-                path: file.path,
-                symbolId: symbol.symbolId,
-                name: symbol.name,
-                kind: symbol.kind,
-                rangeStartLine: symbol.rangeStartLine,
-                rangeEndLine: symbol.rangeEndLine,
-                signature: symbol.signature,
-                doc: symbol.doc,
-              });
-            }
-            for (const snippet of analysis.snippets) {
-              fileSnippets.push({
-                path: file.path,
-                snippetId: snippet.startLine,
-                startLine: snippet.startLine,
-                endLine: snippet.endLine,
-                symbolId: snippet.symbolId,
-              });
-            }
-            for (const dep of analysis.dependencies) {
-              fileDependencies.push({
-                srcPath: file.path,
-                dstKind: dep.dstKind,
-                dst: dep.dst,
-                rel: dep.rel,
-              });
-            }
-          } else {
-            // Binary or no content: add fallback snippet
-            const fallback = buildFallbackSnippet(blob.lineCount ?? 1);
-            fileSnippets.push({
-              path: file.path,
-              snippetId: fallback.startLine,
-              startLine: fallback.startLine,
-              endLine: fallback.endLine,
-              symbolId: fallback.symbolId,
-            });
-          }
-
-          const fileEmbedding = embeddings.find((e) => e.path === file.path) ?? null;
-
-          // Delete old records for this file (within main transaction)
-          await deleteFileRecords(db, repoId, headCommit, file.path);
-
-          // Insert new records (within main transaction)
-          await persistBlobs(db, new Map([[blob.hash, blob]]));
-          await persistTrees(db, repoId, headCommit, [file]);
-          await persistFiles(db, repoId, [file]);
-          await persistSymbols(db, repoId, fileSymbols);
-          await persistSnippets(db, repoId, fileSnippets);
-          await persistDependencies(db, repoId, fileDependencies);
-          if (fileEmbedding) {
-            await persistEmbeddings(db, repoId, [fileEmbedding]);
-          }
-
-          processedCount++;
-        }
-
-        // Update timestamp and mark FTS dirty inside transaction for atomicity
+        // Update timestamp and mark FTS dirty inside transaction to ensure atomicity
         if (defaultBranch) {
           await db.run(
             "UPDATE repo SET indexed_at = CURRENT_TIMESTAMP, default_branch = ?, fts_dirty = true WHERE id = ?",
@@ -754,57 +804,15 @@ export async function runIndexer(options: IndexerOptions): Promise<void> {
       });
 
       console.info(
-        `Incrementally indexed ${processedCount} changed file(s) for repo ${repoRoot} at ${databasePath} (commit ${headCommit.slice(0, 12)})`
+        `Indexed ${files.length} files for repo ${repoRoot} at ${databasePath} (commit ${headCommit.slice(0, 12)})`
       );
 
-      // Phase 2+3: Rebuild FTS index after incremental updates (dirty=true triggers rebuild)
-      await rebuildFTSIfNeeded(db, repoId);
-      return;
+      // Phase 2+3: Force rebuild FTS index after full reindex
+      await rebuildFTSIfNeeded(db, repoId, true);
+    } finally {
+      await db.close();
     }
-
-    // Full mode: reindex entire repository
-    const paths = await gitLsFiles(repoRoot);
-    const { blobs, files, embeddings } = await scanFilesInBatches(repoRoot, paths);
-    const codeIntel = await buildCodeIntel(files, blobs, repoRoot);
-
-    await db.transaction(async () => {
-      await db.run("DELETE FROM tree WHERE repo_id = ?", [repoId]);
-      await db.run("DELETE FROM file WHERE repo_id = ?", [repoId]);
-      await db.run("DELETE FROM symbol WHERE repo_id = ?", [repoId]);
-      await db.run("DELETE FROM snippet WHERE repo_id = ?", [repoId]);
-      await db.run("DELETE FROM dependency WHERE repo_id = ?", [repoId]);
-      await db.run("DELETE FROM file_embedding WHERE repo_id = ?", [repoId]);
-      await persistBlobs(db, blobs);
-      await persistTrees(db, repoId, headCommit, files);
-      await persistFiles(db, repoId, files);
-      await persistSymbols(db, repoId, codeIntel.symbols);
-      await persistSnippets(db, repoId, codeIntel.snippets);
-      await persistDependencies(db, repoId, codeIntel.dependencies);
-      await persistEmbeddings(db, repoId, embeddings);
-
-      // Update timestamp and mark FTS dirty inside transaction to ensure atomicity
-      if (defaultBranch) {
-        await db.run(
-          "UPDATE repo SET indexed_at = CURRENT_TIMESTAMP, default_branch = ?, fts_dirty = true WHERE id = ?",
-          [defaultBranch, repoId]
-        );
-      } else {
-        await db.run(
-          "UPDATE repo SET indexed_at = CURRENT_TIMESTAMP, fts_dirty = true WHERE id = ?",
-          [repoId]
-        );
-      }
-    });
-
-    console.info(
-      `Indexed ${files.length} files for repo ${repoRoot} at ${databasePath} (commit ${headCommit.slice(0, 12)})`
-    );
-
-    // Phase 2+3: Force rebuild FTS index after full reindex
-    await rebuildFTSIfNeeded(db, repoId, true);
-  } finally {
-    await db.close();
-  }
+  });
 }
 
 function parseArg(flag: string): string | undefined {

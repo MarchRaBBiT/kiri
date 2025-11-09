@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { runIndexer } from "../../src/indexer/cli.js";
+import { clearAllQueues } from "../../src/indexer/queue.js";
 import { checkFTSSchemaExists } from "../../src/indexer/schema.js";
 import { DuckDBClient } from "../../src/shared/duckdb.js";
 import { createTempRepo } from "../helpers/test-repo.js";
@@ -20,6 +21,8 @@ describe("FTS rebuild lifecycle (E2E)", () => {
     for (const target of cleanupTargets.splice(0, cleanupTargets.length)) {
       await target.dispose();
     }
+    // Clear queue state to ensure test isolation
+    clearAllQueues();
   });
 
   it("sets dirty=true and rebuilds FTS after initial full indexing", async () => {
@@ -171,7 +174,7 @@ describe("FTS rebuild lifecycle (E2E)", () => {
     expect(afterRows[0]?.fts_dirty).toBe(false);
   });
 
-  it.skip("correctly handles multi-repo FTS initialization", async () => {
+  it("correctly handles multi-repo FTS initialization", async () => {
     const repo1 = await createTempRepo({
       "repo1.ts": ["export const repo1 = 'first';"].join("\n"),
     });
@@ -261,9 +264,7 @@ describe("FTS rebuild lifecycle (E2E)", () => {
   });
 
   // Fix #5: Concurrency tests
-  // TODO: This test is flaky due to DB table creation timing issues
-  // Need to add proper synchronization before re-enabling
-  it.skip("handles concurrent indexer runs safely without corruption", async () => {
+  it("handles concurrent indexer runs safely without corruption", async () => {
     const repo = await createTempRepo({
       "src/file1.ts": ["export const a = 1;"].join("\n"),
       "src/file2.ts": ["export const b = 2;"].join("\n"),

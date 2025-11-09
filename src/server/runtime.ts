@@ -1,7 +1,8 @@
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, realpathSync } from "node:path";
 
 import { checkFTSAvailability } from "../indexer/schema.js";
 import { DuckDBClient } from "../shared/duckdb.js";
+import { ensureDbParentDir, normalizeDbPath } from "../shared/utils/path.js";
 
 import { bootstrapServer, type BootstrapOptions } from "./bootstrap.js";
 import { ServerContext } from "./context.js";
@@ -29,8 +30,20 @@ export interface ServerRuntime {
 }
 
 export async function createServerRuntime(options: CommonServerOptions): Promise<ServerRuntime> {
-  const databasePath = resolve(options.databasePath);
-  const repoRoot = resolve(options.repoRoot);
+  // Fix #4: Normalize repoRoot same way as indexer to ensure resolveRepoId works
+  // If indexer stored /System/Volumes/Data/Users/..., server must use the same path
+  let repoRoot: string;
+  try {
+    repoRoot = realpathSync.native(resolve(options.repoRoot));
+  } catch {
+    repoRoot = resolve(options.repoRoot);
+  }
+
+  // Fix #4: Normalize databasePath for consistency with indexer
+  // Ensure parent exists before normalization to guarantee correct path
+  await ensureDbParentDir(options.databasePath);
+  const databasePath = normalizeDbPath(options.databasePath);
+
   const defaultLockPath = join(dirname(databasePath), "security.lock");
 
   const bootstrapOptions: BootstrapOptions = {};

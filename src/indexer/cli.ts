@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 import { DuckDBClient } from "../shared/duckdb.js";
 import { generateEmbedding } from "../shared/embedding.js";
 import { acquireLock, releaseLock, LockfileError, getLockOwner } from "../shared/utils/lockfile.js";
-import { normalizeDbPath } from "../shared/utils/path.js";
+import { normalizeDbPath, ensureDbParentDir } from "../shared/utils/path.js";
 
 import { analyzeSource, buildFallbackSnippet } from "./codeintel.js";
 import { getDefaultBranch, getHeadCommit, gitLsFiles } from "./git.js";
@@ -641,6 +641,10 @@ export async function runIndexer(options: IndexerOptions): Promise<void> {
     repoRoot = resolve(options.repoRoot);
   }
 
+  // Fix #2: Ensure parent directory exists BEFORE normalization
+  // This guarantees consistent path normalization on first and subsequent runs
+  await ensureDbParentDir(options.databasePath);
+
   // Critical: Use normalizeDbPath to ensure consistent path across runs
   // This prevents lock file and queue key bypass when DB is accessed via symlink
   databasePath = normalizeDbPath(options.databasePath);
@@ -695,17 +699,6 @@ export async function runIndexer(options: IndexerOptions): Promise<void> {
           repoRoot,
           options.changedPaths
         );
-
-        // Fix #4: Handle deleted files from watch mode (uncommitted deletions)
-        if (missingPaths.length > 0) {
-          // Loop through each missing file and delete with headCommit
-          for (const path of missingPaths) {
-            await deleteFileRecords(db, repoId, headCommit, path);
-          }
-          console.info(
-            `Removed ${missingPaths.length} missing file(s) from index (watch mode deletion).`
-          );
-        }
 
         // Filter out files that haven't actually changed (same hash)
         const changedFiles: FileRecord[] = [];
@@ -764,6 +757,19 @@ export async function runIndexer(options: IndexerOptions): Promise<void> {
         let processedCount = 0;
 
         await db.transaction(async () => {
+          // Fix #5: Handle deleted files from watch mode (uncommitted deletions) INSIDE transaction
+          // This ensures deletion + FTS dirty flag update are atomic
+          if (missingPaths.length > 0) {
+            // Loop through each missing file and delete with headCommit
+            for (const path of missingPaths) {
+              await deleteFileRecords(db, repoId, headCommit, path);
+            }
+            console.info(
+              `Removed ${missingPaths.length} missing file(s) from index (watch mode deletion).`
+            );
+          }
+
+          // Process changed files
           for (const file of changedFiles) {
             const blob = changedBlobs.get(file.blobHash);
             if (!blob) continue;

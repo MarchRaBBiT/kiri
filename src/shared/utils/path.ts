@@ -1,34 +1,50 @@
 import { dirname, basename, join, resolve, realpathSync } from "node:path";
+import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 
 /**
- * Normalizes a database path by resolving the parent directory to its canonical form.
+ * Normalizes a database path by resolving to its canonical form.
  *
  * This prevents lock file and queue key bypass issues caused by symlinks or OS path aliases.
  * The normalization strategy is:
  * 1. Resolve to absolute path
- * 2. Normalize parent directory using realpathSync (follows symlinks)
- * 3. Append the original filename (which may not exist yet)
+ * 2. If file exists, normalize the full path using realpathSync (follows symlinks)
+ * 3. If file doesn't exist, normalize parent directory and append filename
  *
- * Why normalize parent instead of full path?
+ * Why this two-stage approach?
  * - Database file may not exist yet (first indexer run)
  * - realpathSync throws ENOENT on non-existent files
- * - Parent directory is created by ensureDirectory option before DB connection
+ * - Must call ensureDbParentDir BEFORE this function to ensure parent exists
+ * - Once file exists, we normalize the full path to prevent symlink bypass
  *
  * @param input - Path to database file (may be relative or absolute)
- * @returns Normalized absolute path with canonical parent directory
+ * @returns Normalized absolute path (full path if exists, parent+filename if not)
  *
  * @example
- * // First run (DB doesn't exist, accessed via symlink):
- * normalizeDbPath("/link/to/db.duckdb")  // "/real/path/db.duckdb"
+ * // First run (DB doesn't exist, symlink parent):
+ * ensureDbParentDir("/link/to/db.duckdb");  // Creates /real/path/
+ * normalizeDbPath("/link/to/db.duckdb")     // "/real/path/db.duckdb"
  *
- * // Second run (DB exists, accessed via real path):
- * normalizeDbPath("/real/path/db.duckdb")  // "/real/path/db.duckdb"
+ * // Second run (DB exists, accessed via symlink):
+ * normalizeDbPath("/link/db.duckdb")        // "/real/path/db.duckdb"
  *
  * // Result: Same normalized path → same lock file, same queue key
  */
 export function normalizeDbPath(input: string): string {
   const abs = resolve(input);
+
+  // Fix #1: If file exists, normalize the full path including the file itself
+  // This prevents symlink bypass: /tmp/db.duckdb -> /var/index.duckdb
+  if (existsSync(abs)) {
+    try {
+      return realpathSync.native(abs);
+    } catch (error) {
+      // Fallback to parent normalization if full path fails
+      // (e.g., permissions issue)
+    }
+  }
+
+  // File doesn't exist yet - normalize parent and append filename
   const parentDir = dirname(abs);
   const filename = basename(abs);
 
@@ -37,8 +53,8 @@ export function normalizeDbPath(input: string): string {
     const canonicalParent = realpathSync.native(parentDir);
     return join(canonicalParent, filename);
   } catch (error) {
-    // Parent directory doesn't exist yet - this is OK for database paths
-    // The DuckDBClient's ensureDirectory option will create it
+    // Parent directory doesn't exist yet - caller should have called ensureDbParentDir
+    // Return unnormalized path as fallback (will cause issues!)
     return abs;
   }
 }

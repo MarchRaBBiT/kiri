@@ -1,5 +1,5 @@
-import { realpathSync } from "node:fs";
-import { resolve, relative, sep } from "node:path";
+import { realpathSync, mkdirSync } from "node:fs";
+import { resolve, relative, sep, dirname, isAbsolute } from "node:path";
 import { performance } from "node:perf_hooks";
 
 import { watch, type FSWatcher } from "chokidar";
@@ -88,6 +88,16 @@ export class IndexWatcher {
       repoRoot = resolve(options.repoRoot);
     }
 
+    // Fix #2: Ensure parent directory exists BEFORE normalization
+    // This guarantees consistent path normalization on first and subsequent runs
+    // Using sync version because constructors can't be async
+    try {
+      const parentDir = dirname(resolve(options.databasePath));
+      mkdirSync(parentDir, { recursive: true });
+    } catch {
+      // Ignore if already exists or permission denied
+    }
+
     // Critical: Use normalizeDbPath to ensure consistent path with cli.ts
     // This prevents lock file and queue key mismatch
     databasePath = normalizeDbPath(options.databasePath);
@@ -133,6 +143,8 @@ export class IndexWatcher {
    * - Use path.relative() instead of string replacement
    * - Normalize path separator to forward slash (git-compatible)
    * - Reject paths outside repository (security check)
+   * - Reject Windows cross-drive paths and UNC paths
+   * - Resolve symlinks to prevent bypass via junctions/symlinks
    *
    * @param absPath - Absolute path from file watcher
    * @returns Git-compatible relative path, or null if outside repo
@@ -140,10 +152,36 @@ export class IndexWatcher {
   private normalizePathForRepo(absPath: string): string | null {
     const rel = relative(this.options.repoRoot, absPath);
 
-    // Security: Reject paths outside repository
-    // ".." indicates parent directory traversal
-    if (rel.startsWith("..")) {
+    // Fix #3: Security - Reject paths outside repository
+    // - Parent directory traversal: ".."
+    // - Absolute paths (Unix): starts with "/"
+    // - Absolute paths (Windows): starts with drive letter "C:" or "C:\"
+    // - UNC paths (Windows): starts with "\\" or "//"
+    // Note: Empty string is ALLOWED (represents repo root for chokidar directory watching)
+    if (
+      rel.startsWith("..") ||
+      isAbsolute(rel) ||
+      /^[A-Za-z]:/.test(rel) ||
+      rel.startsWith("\\\\") ||
+      rel.startsWith("//")
+    ) {
       return null;
+    }
+
+    // Fix #3: Additional safety - Resolve symlinks and verify real path is inside repo
+    // This prevents bypass via junction points or symlinks pointing outside the repo
+    try {
+      const realAbsPath = realpathSync.native(absPath);
+      const realRepoRoot = this.options.repoRoot; // Already normalized in constructor
+      const realRel = relative(realRepoRoot, realAbsPath);
+
+      // Double-check the real path is still inside repo
+      if (realRel.startsWith("..") || isAbsolute(realRel)) {
+        return null;
+      }
+    } catch {
+      // File might not exist yet (being created), allow it
+      // The initial `rel` check above already validated it's within repo bounds
     }
 
     // Allow empty string (repo root itself) for chokidar directory watching

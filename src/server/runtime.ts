@@ -32,6 +32,9 @@ export interface ServerRuntime {
 export async function createServerRuntime(options: CommonServerOptions): Promise<ServerRuntime> {
   const repoPathCandidates = getRepoPathCandidates(options.repoRoot);
   const repoRoot = repoPathCandidates[0];
+  if (!repoRoot) {
+    throw new Error(`Unable to resolve repository root for ${options.repoRoot}`);
+  }
 
   // Fix #4: Normalize databasePath for consistency with indexer
   // Ensure parent exists before normalization to guarantee correct path

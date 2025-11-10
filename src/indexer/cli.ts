@@ -690,6 +690,9 @@ async function deleteFileRecords(
 export async function runIndexer(options: IndexerOptions): Promise<void> {
   const repoPathCandidates = getRepoPathCandidates(options.repoRoot);
   const repoRoot = repoPathCandidates[0];
+  if (!repoRoot) {
+    throw new Error(`Unable to resolve repository root for ${options.repoRoot}`);
+  }
   let databasePath: string;
 
   // Fix #2: Ensure parent directory exists BEFORE normalization
@@ -725,27 +728,28 @@ export async function runIndexer(options: IndexerOptions): Promise<void> {
 
     let db: DuckDBClient | null = null;
     try {
-      db = await DuckDBClient.connect({ databasePath, ensureDirectory: true });
-      await ensureBaseSchema(db);
+      const dbClient = await DuckDBClient.connect({ databasePath, ensureDirectory: true });
+      db = dbClient;
+      await ensureBaseSchema(dbClient);
       // Phase 3: Ensure FTS metadata columns exist for existing DBs (migration)
-      await ensureRepoMetaColumns(db);
+      await ensureRepoMetaColumns(dbClient);
 
       const [headCommit, defaultBranch] = await Promise.all([
         getHeadCommit(repoRoot),
         getDefaultBranch(repoRoot),
       ]);
 
-      const repoId = await ensureRepo(db, repoRoot, defaultBranch, repoPathCandidates);
+      const repoId = await ensureRepo(dbClient, repoRoot, defaultBranch, repoPathCandidates);
 
       // Incremental mode: only reindex files in changedPaths (empty array means no-op)
       if (options.changedPaths) {
         // First, reconcile deleted files (handle renames/deletions)
-        const deletedPaths = await reconcileDeletedFiles(db, repoId, repoRoot);
+        const deletedPaths = await reconcileDeletedFiles(dbClient, repoId, repoRoot);
         if (deletedPaths.length > 0) {
           console.info(`Removed ${deletedPaths.length} deleted file(s) from index.`);
         }
 
-        const existingHashes = await getExistingFileHashes(db, repoId);
+        const existingHashes = await getExistingFileHashes(dbClient, repoId);
         const { blobs, files, embeddings, missingPaths } = await scanFilesInBatches(
           repoRoot,
           options.changedPaths
@@ -776,27 +780,29 @@ export async function runIndexer(options: IndexerOptions): Promise<void> {
             console.info(`${deletedPaths.length} file(s) deleted (git) - marking FTS dirty`);
 
             if (defaultBranch) {
-              await db.run(
+              await dbClient.run(
                 "UPDATE repo SET indexed_at = CURRENT_TIMESTAMP, default_branch = ?, fts_dirty = true, fts_generation = fts_generation + 1 WHERE id = ?",
                 [defaultBranch, repoId]
               );
             } else {
-              await db.run(
+              await dbClient.run(
                 "UPDATE repo SET indexed_at = CURRENT_TIMESTAMP, fts_dirty = true, fts_generation = fts_generation + 1 WHERE id = ?",
                 [repoId]
               );
             }
 
-            await rebuildFTSIfNeeded(db, repoId);
+            await rebuildFTSIfNeeded(dbClient, repoId);
           } else {
             // No deletions either - just update timestamp
             if (defaultBranch) {
-              await db.run(
+              await dbClient.run(
                 "UPDATE repo SET indexed_at = CURRENT_TIMESTAMP, default_branch = ? WHERE id = ?",
                 [defaultBranch, repoId]
               );
             } else {
-              await db.run("UPDATE repo SET indexed_at = CURRENT_TIMESTAMP WHERE id = ?", [repoId]);
+              await dbClient.run("UPDATE repo SET indexed_at = CURRENT_TIMESTAMP WHERE id = ?", [
+                repoId,
+              ]);
             }
           }
 
@@ -811,13 +817,13 @@ export async function runIndexer(options: IndexerOptions): Promise<void> {
         }
         let processedCount = 0;
 
-        await db.transaction(async () => {
+        await dbClient.transaction(async () => {
           // Fix #5: Handle deleted files from watch mode (uncommitted deletions) INSIDE transaction
           // This ensures deletion + FTS dirty flag update are atomic
           if (missingPaths.length > 0) {
             // Loop through each missing file and delete with headCommit
             for (const path of missingPaths) {
-              await deleteFileRecords(db, repoId, headCommit, path);
+              await deleteFileRecords(dbClient, repoId, headCommit, path);
             }
             console.info(
               `Removed ${missingPaths.length} missing file(s) from index (watch mode deletion).`
@@ -886,17 +892,17 @@ export async function runIndexer(options: IndexerOptions): Promise<void> {
             const fileEmbedding = embeddingMap.get(file.path) ?? null;
 
             // Delete old records for this file (within main transaction)
-            await deleteFileRecords(db, repoId, headCommit, file.path);
+            await deleteFileRecords(dbClient, repoId, headCommit, file.path);
 
             // Insert new records (within main transaction)
-            await persistBlobs(db, new Map([[blob.hash, blob]]));
-            await persistTrees(db, repoId, headCommit, [file]);
-            await persistFiles(db, repoId, [file]);
-            await persistSymbols(db, repoId, fileSymbols);
-            await persistSnippets(db, repoId, fileSnippets);
-            await persistDependencies(db, repoId, fileDependencies);
+            await persistBlobs(dbClient, new Map([[blob.hash, blob]]));
+            await persistTrees(dbClient, repoId, headCommit, [file]);
+            await persistFiles(dbClient, repoId, [file]);
+            await persistSymbols(dbClient, repoId, fileSymbols);
+            await persistSnippets(dbClient, repoId, fileSnippets);
+            await persistDependencies(dbClient, repoId, fileDependencies);
             if (fileEmbedding) {
-              await persistEmbeddings(db, repoId, [fileEmbedding]);
+              await persistEmbeddings(dbClient, repoId, [fileEmbedding]);
             }
 
             processedCount++;
@@ -905,12 +911,12 @@ export async function runIndexer(options: IndexerOptions): Promise<void> {
           // Update timestamp and mark FTS dirty inside transaction for atomicity
           // Fix: Increment fts_generation to prevent lost updates during concurrent rebuilds
           if (defaultBranch) {
-            await db.run(
+            await dbClient.run(
               "UPDATE repo SET indexed_at = CURRENT_TIMESTAMP, default_branch = ?, fts_dirty = true, fts_generation = fts_generation + 1 WHERE id = ?",
               [defaultBranch, repoId]
             );
           } else {
-            await db.run(
+            await dbClient.run(
               "UPDATE repo SET indexed_at = CURRENT_TIMESTAMP, fts_dirty = true, fts_generation = fts_generation + 1 WHERE id = ?",
               [repoId]
             );
@@ -922,7 +928,7 @@ export async function runIndexer(options: IndexerOptions): Promise<void> {
         );
 
         // Phase 2+3: Rebuild FTS index after incremental updates (dirty=true triggers rebuild)
-        await rebuildFTSIfNeeded(db, repoId);
+        await rebuildFTSIfNeeded(dbClient, repoId);
         return;
       }
 
@@ -940,30 +946,30 @@ export async function runIndexer(options: IndexerOptions): Promise<void> {
 
       const codeIntel = await buildCodeIntel(files, blobs, repoRoot);
 
-      await db.transaction(async () => {
-        await db.run("DELETE FROM tree WHERE repo_id = ?", [repoId]);
-        await db.run("DELETE FROM file WHERE repo_id = ?", [repoId]);
-        await db.run("DELETE FROM symbol WHERE repo_id = ?", [repoId]);
-        await db.run("DELETE FROM snippet WHERE repo_id = ?", [repoId]);
-        await db.run("DELETE FROM dependency WHERE repo_id = ?", [repoId]);
-        await db.run("DELETE FROM file_embedding WHERE repo_id = ?", [repoId]);
-        await persistBlobs(db, blobs);
-        await persistTrees(db, repoId, headCommit, files);
-        await persistFiles(db, repoId, files);
-        await persistSymbols(db, repoId, codeIntel.symbols);
-        await persistSnippets(db, repoId, codeIntel.snippets);
-        await persistDependencies(db, repoId, codeIntel.dependencies);
-        await persistEmbeddings(db, repoId, embeddings);
+      await dbClient.transaction(async () => {
+        await dbClient.run("DELETE FROM tree WHERE repo_id = ?", [repoId]);
+        await dbClient.run("DELETE FROM file WHERE repo_id = ?", [repoId]);
+        await dbClient.run("DELETE FROM symbol WHERE repo_id = ?", [repoId]);
+        await dbClient.run("DELETE FROM snippet WHERE repo_id = ?", [repoId]);
+        await dbClient.run("DELETE FROM dependency WHERE repo_id = ?", [repoId]);
+        await dbClient.run("DELETE FROM file_embedding WHERE repo_id = ?", [repoId]);
+        await persistBlobs(dbClient, blobs);
+        await persistTrees(dbClient, repoId, headCommit, files);
+        await persistFiles(dbClient, repoId, files);
+        await persistSymbols(dbClient, repoId, codeIntel.symbols);
+        await persistSnippets(dbClient, repoId, codeIntel.snippets);
+        await persistDependencies(dbClient, repoId, codeIntel.dependencies);
+        await persistEmbeddings(dbClient, repoId, embeddings);
 
         // Update timestamp and mark FTS dirty inside transaction to ensure atomicity
         // Fix: Increment fts_generation to prevent lost updates during concurrent rebuilds
         if (defaultBranch) {
-          await db.run(
+          await dbClient.run(
             "UPDATE repo SET indexed_at = CURRENT_TIMESTAMP, default_branch = ?, fts_dirty = true, fts_generation = fts_generation + 1 WHERE id = ?",
             [defaultBranch, repoId]
           );
         } else {
-          await db.run(
+          await dbClient.run(
             "UPDATE repo SET indexed_at = CURRENT_TIMESTAMP, fts_dirty = true, fts_generation = fts_generation + 1 WHERE id = ?",
             [repoId]
           );
@@ -975,7 +981,7 @@ export async function runIndexer(options: IndexerOptions): Promise<void> {
       );
 
       // Phase 2+3: Force rebuild FTS index after full reindex
-      await rebuildFTSIfNeeded(db, repoId, true);
+      await rebuildFTSIfNeeded(dbClient, repoId, true);
     } finally {
       // Fix #2: Ensure lock is released even if DB connection fails
       if (db) {

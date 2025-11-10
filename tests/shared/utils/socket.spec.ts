@@ -1,3 +1,7 @@
+import { existsSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -67,7 +71,17 @@ describe("Socket Path Utility", () => {
 
         expect(result.startsWith("/tmp/kiri-")).toBe(true);
         expect(result.endsWith(".sock")).toBe(true);
-        expect(result.length).toBeLessThanOrEqual(96);
+        expect(Buffer.byteLength(result, "utf8")).toBeLessThanOrEqual(96);
+      });
+
+      it("should fall back for multibyte paths", () => {
+        Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+        process.env.KIRI_SOCKET_DIR = "/tmp";
+
+        const multibyte = `/${"深".repeat(40)}/index.duckdb`;
+        const result = getSocketPath(multibyte);
+
+        expect(result.startsWith("/tmp/kiri-")).toBe(true);
       });
 
       it("should allow overriding fallback directory via KIRI_SOCKET_DIR", () => {
@@ -86,6 +100,28 @@ describe("Socket Path Utility", () => {
 
         const veryLongPath = `/repo/${"component".repeat(30)}/db.duckdb`;
         expect(() => getSocketPath(veryLongPath)).toThrow(/KIRI_SOCKET_DIR/);
+      });
+
+      it("should create fallback directory when missing", () => {
+        Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+        const tempDir = path.join(os.tmpdir(), `kiri-fallback-${Date.now()}`);
+        process.env.KIRI_SOCKET_DIR = tempDir;
+
+        const cleanup = () => {
+          if (existsSync(tempDir)) {
+            rmSync(tempDir, { recursive: true, force: true });
+          }
+        };
+
+        try {
+          expect(existsSync(tempDir)).toBe(false);
+          const longPath = `/repo/${"component".repeat(25)}/db.duckdb`;
+          const result = getSocketPath(longPath);
+          expect(result.startsWith(`${tempDir}/kiri-`)).toBe(true);
+          expect(existsSync(tempDir)).toBe(true);
+        } finally {
+          cleanup();
+        }
       });
     });
 

@@ -6,6 +6,7 @@
  * - Windows: Named pipes (e.g., \\.\pipe\kiri-<hash>)
  */
 
+import { mkdirSync } from "node:fs";
 import * as crypto from "crypto";
 import * as os from "os";
 import * as path from "path";
@@ -17,6 +18,18 @@ const SOCKET_DIR_ENV = "KIRI_SOCKET_DIR";
 function sanitizeBaseName(fileName: string): string {
   const sanitized = fileName.replace(/[^a-zA-Z0-9]/g, "-");
   return sanitized.length > 0 ? sanitized.toLowerCase() : "db";
+}
+
+function ensureFallbackDir(dirPath: string): void {
+  try {
+    mkdirSync(dirPath, { recursive: true, mode: 0o700 });
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    throw new Error(
+      `Failed to prepare socket directory ${dirPath}: ${err.message}. ` +
+        `Set ${SOCKET_DIR_ENV} to a writable directory.`
+    );
+  }
 }
 
 function buildFallbackUnixSocketPath(databasePath: string): string {
@@ -31,7 +44,8 @@ function buildFallbackUnixSocketPath(databasePath: string): string {
   ];
 
   for (const candidate of candidates) {
-    if (candidate.length <= UNIX_SOCKET_PATH_MAX) {
+    if (Buffer.byteLength(candidate, "utf8") <= UNIX_SOCKET_PATH_MAX) {
+      ensureFallbackDir(path.dirname(candidate));
       return candidate;
     }
   }
@@ -88,7 +102,7 @@ export function getSocketPath(databasePath: string): string {
   }
 
   const defaultSocketPath = `${databasePath}.sock`;
-  if (defaultSocketPath.length <= UNIX_SOCKET_PATH_MAX) {
+  if (Buffer.byteLength(defaultSocketPath, "utf8") <= UNIX_SOCKET_PATH_MAX) {
     return defaultSocketPath;
   }
 

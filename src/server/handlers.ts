@@ -1,10 +1,12 @@
 import path from "node:path";
 
+import { checkFTSSchemaExists } from "../indexer/schema.js";
 import { DuckDBClient } from "../shared/duckdb.js";
 import { generateEmbedding, structuralSimilarity } from "../shared/embedding.js";
 import { encode as encodeGPT, tokenizeText } from "../shared/tokenizer.js";
+import { getRepoPathCandidates, normalizeRepoPath } from "../shared/utils/path.js";
 
-import { ServerContext } from "./context.js";
+import { FtsStatusCache, ServerContext } from "./context.js";
 import { coerceProfileName, loadScoringProfile, type ScoringWeights } from "./scoring.js";
 
 // Configuration file patterns (v0.8.0+: consolidated to avoid duplication)
@@ -151,6 +153,82 @@ const CONFIG_PATTERNS = [
   ".circleci/config.yml",
   ".github/workflows",
 ] as const;
+
+const FTS_STATUS_CACHE_TTL_MS = 10_000;
+
+async function hasDirtyRepos(db: DuckDBClient): Promise<boolean> {
+  const statusCheck = await db.all<{ count: number }>(
+    `SELECT COUNT(*) as count FROM repo
+       WHERE fts_dirty = true OR fts_status IN ('dirty', 'rebuilding')`
+  );
+  return (statusCheck[0]?.count ?? 0) > 0;
+}
+
+async function refreshFtsStatus(context: ServerContext): Promise<FtsStatusCache> {
+  const previousReady = context.features?.fts ?? false;
+  const cache: FtsStatusCache = {
+    ready: false,
+    schemaExists: false,
+    anyDirty: false,
+    lastChecked: Date.now(),
+  };
+
+  try {
+    cache.schemaExists = await checkFTSSchemaExists(context.db);
+    if (!cache.schemaExists) {
+      context.warningManager.warnForRequest(
+        "fts-schema-missing",
+        "FTS schema not found, falling back to ILIKE"
+      );
+    } else {
+      cache.anyDirty = await hasDirtyRepos(context.db);
+      if (cache.anyDirty) {
+        context.warningManager.warnForRequest(
+          "fts-stale",
+          "FTS index is stale or rebuilding, using ILIKE fallback. Run indexer to update FTS."
+        );
+      } else {
+        await context.db.run("LOAD fts;");
+        cache.ready = true;
+      }
+    }
+  } catch (error) {
+    cache.ready = false;
+    cache.schemaExists = false;
+    context.warningManager.warnForRequest(
+      "fts-check-failed",
+      `FTS availability check failed: ${error}`
+    );
+  }
+
+  if (!context.features) {
+    context.features = {};
+  }
+  context.features.fts = cache.ready;
+  context.ftsStatusCache = cache;
+
+  if (cache.ready && !previousReady) {
+    console.info("✅ FTS recovered and enabled");
+  } else if (!cache.ready && previousReady) {
+    console.warn("⚠️  FTS became unavailable; falling back to ILIKE");
+  }
+
+  return cache;
+}
+
+async function getFreshFtsStatus(context: ServerContext): Promise<FtsStatusCache> {
+  const cache = context.ftsStatusCache;
+  if (cache && Date.now() - cache.lastChecked < FTS_STATUS_CACHE_TTL_MS) {
+    if (cache.ready) {
+      const dirtyNow = await hasDirtyRepos(context.db);
+      if (dirtyNow) {
+        return refreshFtsStatus(context);
+      }
+    }
+    return cache;
+  }
+  return refreshFtsStatus(context);
+}
 
 /**
  * Check if a file path represents a configuration file
@@ -951,8 +1029,14 @@ function applyFileTypeBoost(
     ".git/",
     "node_modules/",
   ];
-  if (blacklistedDirs.some((dir) => path.startsWith(dir))) {
-    return -100; // Effectively remove it
+  for (const dir of blacklistedDirs) {
+    if (path.startsWith(dir)) {
+      // FIX: boost_profile="docs" の場合は docs/ ブラックリストをスキップ
+      if (profile === "docs" && dir === "docs/") {
+        continue;
+      }
+      return -100; // Effectively remove it
+    }
   }
 
   if (profile === "none") {
@@ -1288,7 +1372,9 @@ export async function filesSearch(
   }
 
   const limit = normalizeLimit(params.limit);
-  const hasFTS = context.features?.fts ?? false;
+
+  const ftsStatus = await getFreshFtsStatus(context);
+  const hasFTS = ftsStatus.ready;
 
   let sql: string;
   let values: unknown[];
@@ -2228,8 +2314,22 @@ export async function depsClosure(
 
 export async function resolveRepoId(db: DuckDBClient, repoRoot: string): Promise<number> {
   try {
-    const rows = await db.all<{ id: number }>("SELECT id FROM repo WHERE root = ?", [repoRoot]);
+    const candidates = getRepoPathCandidates(repoRoot);
+    const normalized = candidates[0];
+    const placeholders = candidates.map(() => "?").join(", ");
+    const rows = await db.all<{ id: number; root: string }>(
+      `SELECT id, root FROM repo WHERE root IN (${placeholders}) LIMIT 1`,
+      candidates
+    );
+
     if (rows.length === 0) {
+      const existingRows = await db.all<{ id: number; root: string }>("SELECT id, root FROM repo");
+      for (const candidate of existingRows) {
+        if (normalizeRepoPath(candidate.root) === normalized) {
+          await db.run("UPDATE repo SET root = ? WHERE id = ?", [normalized, candidate.id]);
+          return candidate.id;
+        }
+      }
       throw new Error(
         "Target repository is missing from DuckDB. Run the indexer before starting the server."
       );
@@ -2237,6 +2337,9 @@ export async function resolveRepoId(db: DuckDBClient, repoRoot: string): Promise
     const row = rows[0];
     if (!row) {
       throw new Error("Failed to retrieve repository record. Database returned empty result.");
+    }
+    if (row.root !== normalized) {
+      await db.run("UPDATE repo SET root = ? WHERE id = ?", [normalized, row.id]);
     }
     return row.id;
   } catch (error) {

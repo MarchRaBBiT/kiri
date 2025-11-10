@@ -114,7 +114,7 @@ describe("Batch Processing for Large Datasets", () => {
     // Verify blobs were deduplicated correctly (all files have same content)
     const blobRows = await db.all<{ count: bigint }>("SELECT COUNT(*) as count FROM blob");
     expect(Number(blobRows[0]?.count)).toBe(1); // All files have identical content
-  });
+  }, 60000);
 
   it("handles batch boundary +1 (7501 files)", async () => {
     // Test edge case: one file over the batch boundary

@@ -111,7 +111,9 @@ async function runUnitTests(options: VerificationOptions): Promise<TestResult> {
   );
 
   try {
-    const result = await runCommand("pnpm", args, { timeout: 120000 });
+    const result = await runCommand("pnpm", args, {
+      timeout: options.skipCoverage ? 150000 : 210000,
+    });
     const duration = Date.now() - start;
 
     if (result.exitCode === 0) {

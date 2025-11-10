@@ -2,7 +2,7 @@
 
 > Intelligent code context extraction for LLMs via Model Context Protocol
 
-[![Version](https://img.shields.io/badge/version-0.9.6-blue.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-0.9.7-blue.svg)](package.json)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.6-blue.svg)](https://www.typescriptlang.org/)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
@@ -18,6 +18,13 @@
 - **👁️ Auto-Sync**: Watch mode automatically re-indexes when files change
 - **🛡️ Reliable**: Degrade-first architecture works without optional extensions
 - **📝 Phrase-Aware**: Recognizes compound terms (kebab-case, snake_case) for precise matching
+- **🔒 Concurrency-Safe** _(new in v0.9.7)_: Per-database queues + canonicalized DuckDB paths prevent FTS rebuild conflicts and keep locks consistent across symlinks
+
+## 🆕 What’s New in v0.9.7
+
+- Automatic degrade to ILIKE search while FTS rebuilds are running—no more stale results or schema errors mid-rebuild
+- Normalized database paths shared across CLI, watcher, and server bootstrap so lock files and queues stay in sync
+- Expanded regression suite (`fts.e2e`, schema migration specs, FTS cache tests) and longer verification timeouts via `pnpm run verify -- --skip-coverage`
 
 ## ⚙️ Prerequisites
 

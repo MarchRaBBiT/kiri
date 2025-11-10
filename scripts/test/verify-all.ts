@@ -1,4 +1,5 @@
 #!/usr/bin/env tsx
+/* global fetch */
 /**
  * KIRI Comprehensive Test & Verification Script
  *

@@ -2,7 +2,7 @@
 
 > Intelligent code context extraction for LLMs via Model Context Protocol
 
-[![Version](https://img.shields.io/badge/version-0.9.8-blue.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-0.9.9-blue.svg)](package.json)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.6-blue.svg)](https://www.typescriptlang.org/)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
@@ -116,7 +116,7 @@ For very large repositories (10,000+ files), you may need to increase the timeou
 | `KIRI_DAEMON_READY_TIMEOUT` | `240`            | Daemon initialization timeout in seconds. Increase for very large repositories                                        |
 | `KIRI_SOCKET_DIR`           | OS tmp directory | Directory for Unix socket fallback when repo paths are too long (e.g., `/var/run/kiri`). Keeps worktree sockets short |
 
-> **Tip**: If you encounter `listen EINVAL` on deep worktrees, set `export KIRI_SOCKET_DIR=/var/run/kiri` (or any short 0700 directory) before launching `kiri`. This fallback ships in v0.9.8+, and an explicit path keeps logs and cleanup predictable.
+> **Tip**: If you encounter `listen EINVAL` on deep worktrees, set `export KIRI_SOCKET_DIR=/var/run/kiri` (or any short 0700 directory) before launching `kiri`. This fallback ships in v0.9.9+, and an explicit path keeps logs and cleanup predictable.
 
 **Dart Analysis Server Configuration:**
 

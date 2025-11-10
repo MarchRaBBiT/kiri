@@ -15,6 +15,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Import dependency resolution with wildcard and static import support
 - Full test coverage with 23 test cases
 
+## [0.9.9] - 2025-11-10
+
+### Added
+
+- Byte-length aware Unix domain socket fallback that automatically shortens paths and honors the `KIRI_SOCKET_DIR` override for worktrees with deep prefixes.
+- Regression tests covering fallback generation, multibyte paths, directory auto-creation, and debug messaging.
+
+### Fixed
+
+- `isDaemonRunning` and other passive health checks no longer attempt to create socket directories, preventing permission errors for non-privileged clients.
+
 ## [0.9.8] - 2025-11-10
 
 ### Fixed

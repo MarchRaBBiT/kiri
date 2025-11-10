@@ -156,6 +156,14 @@ const CONFIG_PATTERNS = [
 
 const FTS_STATUS_CACHE_TTL_MS = 10_000;
 
+async function hasDirtyRepos(db: DuckDBClient): Promise<boolean> {
+  const statusCheck = await db.all<{ count: number }>(
+    `SELECT COUNT(*) as count FROM repo
+       WHERE fts_dirty = true OR fts_status IN ('dirty', 'rebuilding')`
+  );
+  return (statusCheck[0]?.count ?? 0) > 0;
+}
+
 async function refreshFtsStatus(context: ServerContext): Promise<FtsStatusCache> {
   const previousReady = context.features?.fts ?? false;
   const cache: FtsStatusCache = {
@@ -173,11 +181,7 @@ async function refreshFtsStatus(context: ServerContext): Promise<FtsStatusCache>
         "FTS schema not found, falling back to ILIKE"
       );
     } else {
-      const statusCheck = await context.db.all<{ count: number }>(
-        `SELECT COUNT(*) as count FROM repo
-         WHERE fts_dirty = true OR fts_status IN ('dirty', 'rebuilding')`
-      );
-      cache.anyDirty = (statusCheck[0]?.count ?? 0) > 0;
+      cache.anyDirty = await hasDirtyRepos(context.db);
       if (cache.anyDirty) {
         context.warningManager.warnForRequest(
           "fts-stale",
@@ -215,6 +219,12 @@ async function refreshFtsStatus(context: ServerContext): Promise<FtsStatusCache>
 async function getFreshFtsStatus(context: ServerContext): Promise<FtsStatusCache> {
   const cache = context.ftsStatusCache;
   if (cache && Date.now() - cache.lastChecked < FTS_STATUS_CACHE_TTL_MS) {
+    if (cache.ready) {
+      const dirtyNow = await hasDirtyRepos(context.db);
+      if (dirtyNow) {
+        return refreshFtsStatus(context);
+      }
+    }
     return cache;
   }
   return refreshFtsStatus(context);

@@ -1010,6 +1010,25 @@ function splitQueryWords(query: string): string[] {
 }
 
 /**
+ * パス固有のマルチプライヤーを取得（最長プレフィックスマッチ）
+ * 配列の順序に依存せず、常に最長一致のプレフィックスを選択
+ * @param filePath - ファイルパス
+ * @param profileConfig - ブーストプロファイル設定
+ * @returns パス固有のマルチプライヤー（マッチなしの場合は1.0）
+ */
+function getPathMultiplier(filePath: string, profileConfig: BoostProfileConfig): number {
+  let bestMatch = { prefix: "", multiplier: 1.0 };
+
+  for (const { prefix, multiplier } of profileConfig.pathMultipliers) {
+    if (filePath.startsWith(prefix) && prefix.length > bestMatch.prefix.length) {
+      bestMatch = { prefix, multiplier };
+    }
+  }
+
+  return bestMatch.multiplier;
+}
+
+/**
  * files_search専用のファイルタイプブースト適用（v0.7.0+: 設定可能な乗算的ペナルティ）
  * context_bundleと同じ乗算的ペナルティロジックを使用
  * @param path - ファイルパス
@@ -1037,8 +1056,8 @@ function applyFileTypeBoost(
 
   for (const dir of blacklistedDirs) {
     if (path.startsWith(dir)) {
-      // ✅ Decoupled: Check blacklist exceptions from profile config
-      if (profileConfig.blacklistExceptions.includes(dir)) {
+      // ✅ Decoupled: Check denylist overrides from profile config
+      if (profileConfig.denylistOverrides.includes(dir)) {
         continue;
       }
       return -100; // Effectively remove it
@@ -1065,12 +1084,11 @@ function applyFileTypeBoost(
   // ✅ Step 3: Implementation files with path-specific boosts
   const implMultiplier = profileConfig.fileTypeMultipliers.impl;
 
-  // ✅ Check path-specific multipliers (longest prefix first for correct priority)
-  for (const { prefix, multiplier: pathBoost } of profileConfig.pathMultipliers) {
-    if (path.startsWith(prefix)) {
-      multiplier *= implMultiplier * pathBoost;
-      return baseScore * multiplier;
-    }
+  // ✅ Use longest-prefix-match logic (order-independent)
+  const pathBoost = getPathMultiplier(path, profileConfig);
+  if (pathBoost !== 1.0) {
+    multiplier *= implMultiplier * pathBoost;
+    return baseScore * multiplier;
   }
 
   // Fallback for other src/ files
@@ -1170,8 +1188,8 @@ function applyAdditiveFilePenalties(
 
   for (const dir of blacklistedDirs) {
     if (path.startsWith(dir)) {
-      // ✅ Decoupled: Check blacklist exceptions from profile config
-      if (profileConfig.blacklistExceptions.includes(dir)) {
+      // ✅ Decoupled: Check denylist overrides from profile config
+      if (profileConfig.denylistOverrides.includes(dir)) {
         continue; // Skip this blacklisted directory
       }
       candidate.score = -100;
@@ -1286,21 +1304,20 @@ function applyFileTypeMultipliers(
   // ✅ Step 3: Implementation files with path-specific boosts
   const implMultiplier = profileConfig.fileTypeMultipliers.impl;
 
-  // ✅ Check path-specific multipliers (longest prefix first for correct priority)
-  for (const { prefix, multiplier: pathBoost } of profileConfig.pathMultipliers) {
-    if (path.startsWith(prefix)) {
-      candidate.scoreMultiplier *= implMultiplier * pathBoost;
+  // ✅ Use longest-prefix-match logic (order-independent)
+  const pathBoost = getPathMultiplier(path, profileConfig);
+  if (pathBoost !== 1.0) {
+    candidate.scoreMultiplier *= implMultiplier * pathBoost;
 
-      // Add specific reason based on path
-      if (prefix === "src/app/") {
-        candidate.reasons.add("boost:app-file");
-      } else if (prefix === "src/components/") {
-        candidate.reasons.add("boost:component-file");
-      } else if (prefix === "src/lib/") {
-        candidate.reasons.add("boost:lib-file");
-      }
-      return;
+    // Add specific reason based on matched path
+    if (path.startsWith("src/app/")) {
+      candidate.reasons.add("boost:app-file");
+    } else if (path.startsWith("src/components/")) {
+      candidate.reasons.add("boost:component-file");
+    } else if (path.startsWith("src/lib/")) {
+      candidate.reasons.add("boost:lib-file");
     }
+    return;
   }
 
   // Fallback for other src/ files

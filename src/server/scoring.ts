@@ -187,10 +187,16 @@ export function loadScoringProfile(profileName?: ScoringProfileName | null): Sco
 
     if (hasCustomConfig) {
       console.warn(
-        "[DEPRECATION WARNING] config/scoring-profiles.yml is no longer used in v0.9.10+. " +
-          "Boost profiles now use fixed multipliers from src/server/boost-profiles.ts. " +
-          "Your custom docPenaltyMultiplier, configPenaltyMultiplier, and implBoostMultiplier " +
-          "settings will be ignored. See CHANGELOG.md for details."
+        "[DEPRECATION WARNING] config/scoring-profiles.yml is no longer used in v0.9.10+.\n" +
+          `Your custom values: { docPenaltyMultiplier: ${profiles.default.docPenaltyMultiplier}, ` +
+          `configPenaltyMultiplier: ${profiles.default.configPenaltyMultiplier}, ` +
+          `implBoostMultiplier: ${profiles.default.implBoostMultiplier} }\n` +
+          "Boost profiles now use fixed multipliers from src/server/boost-profiles.ts.\n" +
+          "Please select a built-in profile via 'boost_profile' parameter:\n" +
+          "  - 'default': prioritizes implementation (impl: 1.3x, docs: 0.5x)\n" +
+          "  - 'balanced': equal weight (impl: 1.0x, docs: 1.0x) - NEW in v0.9.10\n" +
+          "  - 'docs': prioritizes documentation (docs: 1.5x, impl: 0.5x)\n" +
+          "See docs/search-ranking.md for details."
       );
     }
   }

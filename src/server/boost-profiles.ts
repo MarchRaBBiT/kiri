@@ -16,8 +16,12 @@
  * Defines how different file types should be ranked
  */
 export interface BoostProfileConfig {
-  /** Directories to exclude from blacklist (e.g., ["docs/"]) */
-  blacklistExceptions: string[];
+  /**
+   * Directories to allow even if they match global denylist patterns.
+   * Example: ["docs/"] allows docs/ files despite being blacklisted by default.
+   * This overrides the global blacklist in applyFileTypeBoost/applyAdditiveFilePenalties.
+   */
+  denylistOverrides: string[];
 
   /** Multiplicative factors for different file types */
   fileTypeMultipliers: {
@@ -51,7 +55,7 @@ export type BoostProfileName = "default" | "docs" | "none" | "balanced";
  */
 export const BOOST_PROFILES: Record<BoostProfileName, BoostProfileConfig> = {
   default: {
-    blacklistExceptions: [],
+    denylistOverrides: [],
     fileTypeMultipliers: {
       doc: 0.5, // 50% penalty for docs
       impl: 1.3, // 30% boost for implementation
@@ -67,7 +71,7 @@ export const BOOST_PROFILES: Record<BoostProfileName, BoostProfileConfig> = {
   },
 
   docs: {
-    blacklistExceptions: ["docs/"],
+    denylistOverrides: ["docs/"],
     fileTypeMultipliers: {
       doc: 1.5, // 50% boost for docs
       impl: 0.5, // 50% penalty for implementation
@@ -77,18 +81,24 @@ export const BOOST_PROFILES: Record<BoostProfileName, BoostProfileConfig> = {
   },
 
   balanced: {
-    blacklistExceptions: ["docs/"],
+    denylistOverrides: ["docs/"],
     fileTypeMultipliers: {
       doc: 1.0, // No penalty for docs
       impl: 1.0, // No boost for implementation
-      config: 0.3, // Relaxed penalty for config (was 0.05)
+      // Config files in balanced mode are considered more relevant for understanding
+      // a project's structure alongside its documentation. Therefore, we use a
+      // higher multiplier (0.3x vs 0.05x in default) to keep them accessible.
+      config: 0.3,
     },
     pathMultipliers: [], // No path-specific boosts in balanced mode
-    skipConfigAdditivePenalty: true, // Use only multiplicative penalty for config files
+    // Skip additive penalty (-1.5) for config files; use only multiplicative penalty.
+    // This prevents config files from being completely deprioritized in balanced searches
+    // where understanding project setup is often as important as code/docs.
+    skipConfigAdditivePenalty: true,
   },
 
   none: {
-    blacklistExceptions: [],
+    denylistOverrides: [],
     fileTypeMultipliers: {
       doc: 1.0, // No penalty/boost
       impl: 1.0, // No penalty/boost

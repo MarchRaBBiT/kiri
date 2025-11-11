@@ -29,8 +29,18 @@ export interface BoostProfileConfig {
     config: number;
   };
 
-  /** Path-specific multipliers (e.g., src/app/ gets higher boost than src/) */
-  pathMultipliers: Record<string, number>;
+  /**
+   * Path-specific multipliers (e.g., src/app/ gets higher boost than src/)
+   * Array is sorted by prefix length (longest first) to ensure correct matching priority
+   */
+  pathMultipliers: Array<{ prefix: string; multiplier: number }>;
+
+  /**
+   * Skip additive penalty for config files (-1.5 score penalty)
+   * and only apply multiplicative penalty (e.g., 0.3x multiplier)
+   * @default false
+   */
+  skipConfigAdditivePenalty?: boolean;
 }
 
 export type BoostProfileName = "default" | "docs" | "none" | "balanced";
@@ -47,12 +57,13 @@ export const BOOST_PROFILES: Record<BoostProfileName, BoostProfileConfig> = {
       impl: 1.3, // 30% boost for implementation
       config: 0.05, // 95% penalty for config files
     },
-    pathMultipliers: {
-      "src/app/": 1.4,
-      "src/components/": 1.3,
-      "src/lib/": 1.2,
-      "src/": 1.0,
-    },
+    // ✅ Sorted by prefix length (longest first) for correct matching priority
+    pathMultipliers: [
+      { prefix: "src/components/", multiplier: 1.3 },
+      { prefix: "src/app/", multiplier: 1.4 },
+      { prefix: "src/lib/", multiplier: 1.2 },
+      { prefix: "src/", multiplier: 1.0 },
+    ],
   },
 
   docs: {
@@ -62,7 +73,7 @@ export const BOOST_PROFILES: Record<BoostProfileName, BoostProfileConfig> = {
       impl: 0.5, // 50% penalty for implementation
       config: 0.05, // Config files still penalized
     },
-    pathMultipliers: {}, // No path-specific boosts in docs mode
+    pathMultipliers: [], // No path-specific boosts in docs mode
   },
 
   balanced: {
@@ -72,7 +83,8 @@ export const BOOST_PROFILES: Record<BoostProfileName, BoostProfileConfig> = {
       impl: 1.0, // No boost for implementation
       config: 0.3, // Relaxed penalty for config (was 0.05)
     },
-    pathMultipliers: {}, // No path-specific boosts in balanced mode
+    pathMultipliers: [], // No path-specific boosts in balanced mode
+    skipConfigAdditivePenalty: true, // Use only multiplicative penalty for config files
   },
 
   none: {
@@ -82,7 +94,7 @@ export const BOOST_PROFILES: Record<BoostProfileName, BoostProfileConfig> = {
       impl: 1.0, // No penalty/boost
       config: 1.0, // No penalty/boost
     },
-    pathMultipliers: {},
+    pathMultipliers: [],
   },
 };
 

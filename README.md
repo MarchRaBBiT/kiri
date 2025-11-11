@@ -507,7 +507,17 @@ const db = await DuckDBClient.connect({
 Control search ranking behavior with the `boost_profile` parameter:
 
 - **`"default"`** (default): Prioritizes implementation files (`src/*.ts`) over documentation
+  - Implementation files get 30% boost, documentation files get 50% penalty
+  - Config files heavily penalized (95% reduction)
+  - `docs/` directory is blacklisted
 - **`"docs"`**: Prioritizes documentation files (`*.md`) over implementation
+  - Documentation files get 50% boost, implementation files get 50% penalty
+  - `docs/` directory is included in search results
+- **`"balanced"`** (NEW in v0.9.10): Equal weight for docs and implementation
+  - Both documentation and implementation files: no penalty/boost (1.0x)
+  - Config files: relaxed penalty (0.3x, compared to 0.05x in default)
+  - `docs/` directory is included in search results
+  - No path-specific multipliers (treats all `src/` equally)
 - **`"none"`**: Pure BM25 scoring without file type adjustments
 
 ```typescript
@@ -516,6 +526,9 @@ files_search({ query: "authentication", boost_profile: "default" });
 
 // Find documentation
 files_search({ query: "setup guide", boost_profile: "docs" });
+
+// Balanced search (docs and code equally weighted)
+files_search({ query: "authentication design", boost_profile: "balanced" });
 
 // Pure BM25 ranking without boosting
 files_search({ query: "API", boost_profile: "none" });

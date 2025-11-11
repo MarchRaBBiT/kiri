@@ -1065,9 +1065,9 @@ function applyFileTypeBoost(
   // ✅ Step 3: Implementation files with path-specific boosts
   const implMultiplier = profileConfig.fileTypeMultipliers.impl;
 
-  // Check path-specific multipliers first
-  for (const [pathPrefix, pathBoost] of Object.entries(profileConfig.pathMultipliers)) {
-    if (path.startsWith(pathPrefix)) {
+  // ✅ Check path-specific multipliers (longest prefix first for correct priority)
+  for (const { prefix, multiplier: pathBoost } of profileConfig.pathMultipliers) {
+    if (path.startsWith(prefix)) {
       multiplier *= implMultiplier * pathBoost;
       return baseScore * multiplier;
     }
@@ -1227,10 +1227,10 @@ function applyAdditiveFilePenalties(
     fileName === "docker-compose.yml" ||
     fileName === "docker-compose.yaml"
   ) {
-    // For balanced profile (config multiplier = 0.3), skip additive penalty and let multiplicative penalty be applied
-    // This ensures 0.3x multiplier is applied in applyFileTypeMultipliers
-    if (profileConfig.fileTypeMultipliers.config === 0.3) {
-      return false; // Continue to multiplicative penalty
+    // ✅ Use explicit flag instead of magic number (0.3) to determine behavior
+    // This decouples profile detection from multiplier values
+    if (profileConfig.skipConfigAdditivePenalty) {
+      return false; // Continue to multiplicative penalty only
     }
     // For other profiles, apply strong additive penalty
     candidate.score -= 1.5;
@@ -1286,17 +1286,17 @@ function applyFileTypeMultipliers(
   // ✅ Step 3: Implementation files with path-specific boosts
   const implMultiplier = profileConfig.fileTypeMultipliers.impl;
 
-  // Check path-specific multipliers first
-  for (const [pathPrefix, pathBoost] of Object.entries(profileConfig.pathMultipliers)) {
-    if (path.startsWith(pathPrefix)) {
+  // ✅ Check path-specific multipliers (longest prefix first for correct priority)
+  for (const { prefix, multiplier: pathBoost } of profileConfig.pathMultipliers) {
+    if (path.startsWith(prefix)) {
       candidate.scoreMultiplier *= implMultiplier * pathBoost;
 
       // Add specific reason based on path
-      if (pathPrefix === "src/app/") {
+      if (prefix === "src/app/") {
         candidate.reasons.add("boost:app-file");
-      } else if (pathPrefix === "src/components/") {
+      } else if (prefix === "src/components/") {
         candidate.reasons.add("boost:component-file");
-      } else if (pathPrefix === "src/lib/") {
+      } else if (prefix === "src/lib/") {
         candidate.reasons.add("boost:lib-file");
       }
       return;

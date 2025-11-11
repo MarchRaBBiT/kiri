@@ -1,4 +1,5 @@
 #!/usr/bin/env tsx
+/* global fetch */
 /**
  * KIRI Golden Set Benchmark Script
  *
@@ -11,16 +12,13 @@
  *   tsx scripts/eval/run-golden.ts --k 10 --verbose
  */
 
+import { spawn, type ChildProcess, execSync } from "node:child_process";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { spawn, type ChildProcess, execSync } from "node:child_process";
+
 import { parse as parseYAML } from "yaml";
 
-import {
-  evaluateRetrieval,
-  type RetrievalEvent,
-  type RetrievalMetrics,
-} from "../../src/eval/metrics.js";
+import { evaluateRetrieval, type RetrievalEvent } from "../../src/eval/metrics.js";
 
 // ============================================================================
 // Glob Pattern Matching

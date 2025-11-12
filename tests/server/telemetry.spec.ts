@@ -224,19 +224,33 @@ describe("Issue #68: Telemetry Functions", () => {
 
     it("should verify Issue #68 root cause: penalties never applied when pathMatchHits always > 0", () => {
       // Simulate KIRI's actual behavior: all candidates have path matches
-      const candidates: TestCandidate[] = Array.from({ length: 50 }, (_, i) => ({
-        pathMatchHits: Math.max(1, Math.floor(Math.random() * 10)), // Always >= 1
-        penalties: [], // Path miss penalty NOT applied (condition: pathMatchHits === 0)
-      }));
+      // Spec-First: Use deterministic distribution instead of random to ensure test stability
+      // Expected distribution based on typical KIRI behavior:
+      // - Tier 1 (1 hit): 20% = 10 candidates
+      // - Tier 2 (2 hits): 20% = 10 candidates
+      // - Tier 3 (3 hits): 20% = 10 candidates
+      // - Tier 4+ (4+ hits): 40% = 20 candidates
+      const candidates: TestCandidate[] = [
+        ...Array.from({ length: 10 }, () => ({ pathMatchHits: 1, penalties: [] })),
+        ...Array.from({ length: 10 }, () => ({ pathMatchHits: 2, penalties: [] })),
+        ...Array.from({ length: 10 }, () => ({ pathMatchHits: 3, penalties: [] })),
+        ...Array.from({ length: 20 }, (_, i) => ({
+          pathMatchHits: 4 + (i % 6), // 4, 5, 6, 7, 8, 9
+          penalties: [],
+        })),
+      ];
 
       const result = computePenaltyTelemetry(candidates);
 
       // Root cause verification
       expect(result.pathMatchDistribution.zero).toBe(0); // No candidates with zero hits
       expect(result.pathMissPenalties).toBe(0); // Therefore, no penalties applied
-      expect(
-        result.pathMatchDistribution.one + result.pathMatchDistribution.fourPlus
-      ).toBeGreaterThan(40);
+      // Verify expected distribution (Spec-First)
+      expect(result.pathMatchDistribution.one).toBe(10);
+      expect(result.pathMatchDistribution.two).toBe(10);
+      expect(result.pathMatchDistribution.three).toBe(10);
+      expect(result.pathMatchDistribution.fourPlus).toBe(20);
+      expect(result.pathMatchDistribution.total).toBe(50);
     });
   });
 });

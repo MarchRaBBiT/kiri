@@ -1209,10 +1209,16 @@ function applyPathBasedScoring(
     return;
   }
 
+  // hasAddedScore gates additive boosts; pathMatchHits/reasons still track every hit for penalties/debugging.
+  let hasAddedScore = false;
+
   // フレーズがパスに完全一致する場合（最高の重み）
   for (const phrase of extractedTerms.phrases) {
     if (lowerPath.includes(phrase)) {
-      candidate.score += weights.pathMatch * 1.5; // 1.5倍のブースト
+      if (!hasAddedScore) {
+        candidate.score += weights.pathMatch * 1.5; // 1.5倍のブースト
+        hasAddedScore = true;
+      }
       candidate.reasons.add(`path-phrase:${phrase}`);
       candidate.pathMatchHits++; // Issue #68: Track path match for penalty calculation
     }
@@ -1222,7 +1228,10 @@ function applyPathBasedScoring(
   const pathParts = lowerPath.split("/");
   for (const segment of extractedTerms.pathSegments) {
     if (pathParts.includes(segment)) {
-      candidate.score += weights.pathMatch;
+      if (!hasAddedScore) {
+        candidate.score += weights.pathMatch;
+        hasAddedScore = true;
+      }
       candidate.reasons.add(`path-segment:${segment}`);
       candidate.pathMatchHits++; // Issue #68: Track path match for penalty calculation
     }
@@ -1233,7 +1242,10 @@ function applyPathBasedScoring(
 
   for (const keyword of extractedTerms.keywords) {
     if (lowerPath.includes(keyword)) {
-      candidate.score += weights.pathMatch * 0.5; // 0.5倍のブースト
+      if (!hasAddedScore) {
+        candidate.score += weights.pathMatch * 0.5; // 0.5倍のブースト
+        hasAddedScore = true;
+      }
       candidate.reasons.add(`path-keyword:${keyword}`);
       candidate.pathMatchHits++; // Issue #68: Track path match for penalty calculation
       matchedKeywords.add(keyword); // Track for abbreviation expansion
@@ -1284,7 +1296,10 @@ function applyPathBasedScoring(
 
         if (lowerPath.includes(term)) {
           // Lower weight (0.4x) for abbreviation-expanded matches
-          candidate.score += weights.pathMatch * 0.4;
+          if (!hasAddedScore) {
+            candidate.score += weights.pathMatch * 0.4;
+            hasAddedScore = true;
+          }
           candidate.reasons.add(`abbr-path:${keyword}→${term}`);
           candidate.pathMatchHits++; // Count for penalty calculation
           break; // Only count first match per keyword to avoid over-boosting

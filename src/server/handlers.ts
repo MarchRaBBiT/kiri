@@ -8,6 +8,7 @@ import { encode as encodeGPT, tokenizeText } from "../shared/tokenizer.js";
 import { getRepoPathCandidates, normalizeRepoPath } from "../shared/utils/path.js";
 
 import { expandAbbreviations } from "./abbreviations.js";
+import { createServerServices, ServerServices } from "./services/index.js";
 import { RepoRepository } from "./services/repo-repository.js";
 import { RepoResolver } from "./services/repo-resolver.js";
 
@@ -2691,12 +2692,15 @@ export async function depsClosure(
  *
  * @param db - DuckDBクライアント
  * @param repoRoot - リポジトリのrootパス
+ * @param services - オプショナルなServerServices（指定がなければ新規作成される）
  * @returns リポジトリID
  * @throws Error リポジトリがインデックスされていない場合
  */
-export async function resolveRepoId(db: DuckDBClient, repoRoot: string): Promise<number> {
-  const repository = new RepoRepository(db);
-  const resolver = new RepoResolver(repository);
-
-  return await resolver.resolveId(repoRoot);
+export async function resolveRepoId(
+  db: DuckDBClient,
+  repoRoot: string,
+  services?: ServerServices
+): Promise<number> {
+  const svc = services ?? createServerServices(db);
+  return await svc.repoResolver.resolveId(repoRoot);
 }

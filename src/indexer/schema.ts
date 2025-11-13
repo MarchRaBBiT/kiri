@@ -223,6 +223,33 @@ export async function ensureNormalizedRootColumn(db: DuckDBClient): Promise<void
     }
   });
 
+  // 重複排除: UNIQUE index 作成前に重複する normalized_root を統合
+  await db.transaction(async () => {
+    const duplicates = await db.all<{ normalized_root: string; ids: string }>(
+      `SELECT normalized_root, STRING_AGG(CAST(id AS VARCHAR), ',') as ids
+       FROM repo
+       WHERE normalized_root IS NOT NULL
+       GROUP BY normalized_root
+       HAVING COUNT(*) > 1`
+    );
+
+    if (duplicates.length > 0) {
+      // 各重複グループについて、最小IDのレコードを残して他を削除
+      for (const dup of duplicates) {
+        const ids = dup.ids
+          .split(",")
+          .map(Number)
+          .sort((a, b) => a - b);
+        const keepId = ids[0]; // 最小IDを保持
+        const deleteIds = ids.slice(1); // それ以外を削除
+
+        for (const id of deleteIds) {
+          await db.run(`DELETE FROM repo WHERE id = ?`, [id]);
+        }
+      }
+    }
+  });
+
   // インデックスの存在確認
   const indexes = await db.all<{ index_name: string }>(
     `SELECT index_name FROM duckdb_indexes() WHERE index_name = 'repo_normalized_root_idx'`

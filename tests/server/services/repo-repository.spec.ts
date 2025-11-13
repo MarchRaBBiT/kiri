@@ -39,7 +39,9 @@ describe("RepoRepository", () => {
           .fn()
           // First call: direct root lookup fails
           .mockResolvedValueOnce([])
-          // Second call: normalized_root lookup succeeds
+          // Second call: column existence check succeeds
+          .mockResolvedValueOnce([{ column_name: "normalized_root" }])
+          // Third call: normalized_root lookup succeeds
           .mockResolvedValueOnce([{ id: 2, root: "/Users/user/project" }]),
       } as unknown as DuckDBClient;
 
@@ -47,7 +49,7 @@ describe("RepoRepository", () => {
       const result = await repository.findByPaths(["/users/user/project"]);
 
       expect(result).toEqual({ id: 2, root: "/Users/user/project" });
-      expect(mockDb.all).toHaveBeenCalledTimes(2);
+      expect(mockDb.all).toHaveBeenCalledTimes(3);
     });
 
     it("returns null when both direct and normalized lookups fail", async () => {
@@ -56,7 +58,9 @@ describe("RepoRepository", () => {
           .fn()
           // First call: direct root lookup fails
           .mockResolvedValueOnce([])
-          // Second call: normalized_root lookup fails
+          // Second call: column existence check succeeds
+          .mockResolvedValueOnce([{ column_name: "normalized_root" }])
+          // Third call: normalized_root lookup fails
           .mockResolvedValueOnce([]),
       } as unknown as DuckDBClient;
 
@@ -64,7 +68,7 @@ describe("RepoRepository", () => {
       const result = await repository.findByPaths(["/nonexistent/path"]);
 
       expect(result).toBeNull();
-      expect(mockDb.all).toHaveBeenCalledTimes(2);
+      expect(mockDb.all).toHaveBeenCalledTimes(3);
     });
   });
 

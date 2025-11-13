@@ -38,12 +38,21 @@ export function createServerContext(options: {
   ftsStatusCache?: FtsStatusCache;
   warningManager: WarningManager;
 }): ServerContext {
-  return {
+  const context: ServerContext = {
     db: options.db,
     repoId: options.repoId,
     services: options.services,
-    features: options.features,
-    ftsStatusCache: options.ftsStatusCache,
     warningManager: options.warningManager,
   };
+
+  // exactOptionalPropertyTypes: true を満たすため、undefined の場合は代入しない
+  if (options.features !== undefined) {
+    context.features = options.features;
+  }
+
+  if (options.ftsStatusCache !== undefined) {
+    context.ftsStatusCache = options.ftsStatusCache;
+  }
+
+  return context;
 }

@@ -8,6 +8,7 @@ import { runIndexer } from "../../src/indexer/cli.js";
 import { ServerContext } from "../../src/server/context.js";
 import { resolveRepoId, snippetsGet } from "../../src/server/handlers.js";
 import { WarningManager } from "../../src/server/rpc.js";
+import { createServerServices } from "../../src/server/services/index.js";
 import { DuckDBClient } from "../../src/shared/duckdb.js";
 import { createTempRepo } from "../helpers/test-repo.js";
 
@@ -60,7 +61,12 @@ describe("snippets_get", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
-    const context: ServerContext = { db, repoId, warningManager: new WarningManager() };
+    const context: ServerContext = {
+      db,
+      repoId,
+      services: createServerServices(db),
+      warningManager: new WarningManager(),
+    };
 
     const snippet = await snippetsGet(context, { path: "src/main.ts", start_line: 5 });
     expect(snippet.path).toBe("src/main.ts");
@@ -92,7 +98,12 @@ describe("snippets_get", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
-    const context: ServerContext = { db, repoId, warningManager: new WarningManager() };
+    const context: ServerContext = {
+      db,
+      repoId,
+      services: createServerServices(db),
+      warningManager: new WarningManager(),
+    };
 
     const snippet = await snippetsGet(context, { path: "src/util.ts", start_line: 2, end_line: 3 });
     expect(snippet.startLine).toBe(2);
@@ -120,7 +131,12 @@ describe("snippets_get", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
-    const context: ServerContext = { db, repoId, warningManager: new WarningManager() };
+    const context: ServerContext = {
+      db,
+      repoId,
+      services: createServerServices(db),
+      warningManager: new WarningManager(),
+    };
 
     const snippet = await snippetsGet(context, { path: "src/data.ts", compact: true });
     expect(snippet.content).toBeUndefined();
@@ -152,7 +168,12 @@ describe("snippets_get", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
-    const context: ServerContext = { db, repoId, warningManager: new WarningManager() };
+    const context: ServerContext = {
+      db,
+      repoId,
+      services: createServerServices(db),
+      warningManager: new WarningManager(),
+    };
 
     const snippet = await snippetsGet(context, {
       path: "src/logic.ts",
@@ -190,7 +211,12 @@ describe("snippets_get", () => {
     );
 
     const repoId = await resolveRepoId(db, repo.path);
-    const context: ServerContext = { db, repoId, warningManager: new WarningManager() };
+    const context: ServerContext = {
+      db,
+      repoId,
+      services: createServerServices(db),
+      warningManager: new WarningManager(),
+    };
 
     await expect(snippetsGet(context, { path: "src/data.ts" })).rejects.toThrow(
       /Snippet content was NULL for src\/data\.ts/
@@ -225,7 +251,12 @@ describe("snippets_get", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
-    const context: ServerContext = { db, repoId, warningManager: new WarningManager() };
+    const context: ServerContext = {
+      db,
+      repoId,
+      services: createServerServices(db),
+      warningManager: new WarningManager(),
+    };
 
     const snippet = await snippetsGet(context, { path: "src/header.ts", start_line: 1 });
     expect(snippet.symbolName).toBe("firstFunc");
@@ -261,7 +292,12 @@ describe("snippets_get", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
-    const context: ServerContext = { db, repoId, warningManager: new WarningManager() };
+    const context: ServerContext = {
+      db,
+      repoId,
+      services: createServerServices(db),
+      warningManager: new WarningManager(),
+    };
 
     const snippet = await snippetsGet(context, { path: "src/footer.ts", start_line: 999 });
     expect(snippet.symbolName).toBe("epsilon");

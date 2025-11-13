@@ -1,8 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { RepoNotFoundError } from "../../../src/server/handlers.js";
 import { RepoRepository } from "../../../src/server/services/repo-repository.js";
-import { RepoResolver } from "../../../src/server/services/repo-resolver.js";
+import { RepoNotFoundError, RepoResolver } from "../../../src/server/services/repo-resolver.js";
 
 describe("RepoResolver", () => {
   describe("resolveId", () => {

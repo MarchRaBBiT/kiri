@@ -42,6 +42,13 @@ export class RepoResolver {
     const candidates = getRepoPathCandidates(repoRoot);
     const normalized = candidates[0];
 
+    // exactOptionalPropertyTypes 対応: candidates[0] が undefined の場合はエラー
+    if (!normalized) {
+      throw new RepoNotFoundError(
+        `Repository ${repoRoot} path normalization failed. Check path validity.`
+      );
+    }
+
     // 高速パス: 直接検索を試みる
     let repo = await this.repository.findByPaths(candidates);
 

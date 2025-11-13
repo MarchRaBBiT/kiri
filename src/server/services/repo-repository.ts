@@ -21,6 +21,20 @@ export class RepoRepository {
   constructor(private db: DuckDBClient) {}
 
   /**
+   * normalized_root 列が存在するかチェックする。
+   * 後方互換性のため、カラム存在チェックを行う。
+   *
+   * @returns カラムが存在する場合は true
+   */
+  private async hasNormalizedRootColumn(): Promise<boolean> {
+    const cols = await this.db.all<{ column_name: string }>(
+      `SELECT column_name FROM duckdb_columns()
+       WHERE table_name = 'repo' AND column_name = 'normalized_root'`
+    );
+    return cols.length > 0;
+  }
+
+  /**
    * 指定されたパス候補のいずれかに一致するリポジトリを検索する。
    * Phase 1: normalized_root列を使用した高速検索をサポート。
    *
@@ -40,18 +54,23 @@ export class RepoRepository {
     );
 
     if (rows.length > 0) {
-      return rows[0];
+      return rows[0] ?? null; // exactOptionalPropertyTypes 対応: undefined を null に変換
     }
 
-    // Step 2: Try normalized_root lookup (fast path with index)
-    const normalizedCandidates = candidates.map((c) => normalizeRepoPath(c));
-    const normalizedPlaceholders = normalizedCandidates.map(() => "?").join(", ");
-    rows = await this.db.all<RepoRecord>(
-      `SELECT id, root FROM repo WHERE normalized_root IN (${normalizedPlaceholders}) LIMIT 1`,
-      normalizedCandidates
-    );
+    // Step 2: Try normalized_root lookup (fast path with index) if column exists
+    const hasNormalizedRoot = await this.hasNormalizedRootColumn();
+    if (hasNormalizedRoot) {
+      const normalizedCandidates = candidates.map((c) => normalizeRepoPath(c));
+      const normalizedPlaceholders = normalizedCandidates.map(() => "?").join(", ");
+      rows = await this.db.all<RepoRecord>(
+        `SELECT id, root FROM repo WHERE normalized_root IN (${normalizedPlaceholders}) LIMIT 1`,
+        normalizedCandidates
+      );
 
-    return rows[0] || null;
+      return rows[0] ?? null; // exactOptionalPropertyTypes 対応: undefined を null に変換
+    }
+
+    return null;
   }
 
   /**

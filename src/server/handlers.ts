@@ -6,8 +6,11 @@ import { DuckDBClient } from "../shared/duckdb.js";
 import { generateEmbedding, structuralSimilarity } from "../shared/embedding.js";
 import { encode as encodeGPT, tokenizeText } from "../shared/tokenizer.js";
 import { getRepoPathCandidates, normalizeRepoPath } from "../shared/utils/path.js";
+import { RepoPathNormalizer } from "../shared/utils/repo-path-normalizer.js";
 
 import { expandAbbreviations } from "./abbreviations.js";
+import { RepoRepository } from "./services/repo-repository.js";
+import { RepoResolver } from "./services/repo-resolver.js";
 import {
   type BoostProfileName,
   type BoostProfileConfig,
@@ -2820,42 +2823,20 @@ export async function depsClosure(
   };
 }
 
+/**
+ * リポジトリのrootパスをデータベースIDに解決する。
+ *
+ * この関数は下位互換性のために保持されているが、内部的には新しいRepoResolverを使用する。
+ *
+ * @param db - DuckDBクライアント
+ * @param repoRoot - リポジトリのrootパス
+ * @returns リポジトリID
+ * @throws Error リポジトリがインデックスされていない場合
+ */
 export async function resolveRepoId(db: DuckDBClient, repoRoot: string): Promise<number> {
-  try {
-    const candidates = getRepoPathCandidates(repoRoot);
-    const normalized = candidates[0];
-    const placeholders = candidates.map(() => "?").join(", ");
-    const rows = await db.all<{ id: number; root: string }>(
-      `SELECT id, root FROM repo WHERE root IN (${placeholders}) LIMIT 1`,
-      candidates
-    );
+  const normalizer = new RepoPathNormalizer();
+  const repository = new RepoRepository(db);
+  const resolver = new RepoResolver(repository, normalizer);
 
-    if (rows.length === 0) {
-      const existingRows = await db.all<{ id: number; root: string }>("SELECT id, root FROM repo");
-      for (const candidate of existingRows) {
-        if (normalizeRepoPath(candidate.root) === normalized) {
-          await db.run("UPDATE repo SET root = ? WHERE id = ?", [normalized, candidate.id]);
-          return candidate.id;
-        }
-      }
-      throw new Error(
-        "Target repository is missing from DuckDB. Run the indexer before starting the server."
-      );
-    }
-    const row = rows[0];
-    if (!row) {
-      throw new Error("Failed to retrieve repository record. Database returned empty result.");
-    }
-    if (row.root !== normalized) {
-      await db.run("UPDATE repo SET root = ? WHERE id = ?", [normalized, row.id]);
-    }
-    return row.id;
-  } catch (error) {
-    if (error instanceof Error && error.message.includes("Table with name repo")) {
-      throw new Error(
-        "Target repository is missing from DuckDB. Run the indexer before starting the server."
-      );
-    }
-    throw error;
-  }
+  return await resolver.resolveId(repoRoot);
 }

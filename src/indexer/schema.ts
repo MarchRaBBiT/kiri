@@ -178,8 +178,30 @@ export async function ensureRepoMetaColumns(db: DuckDBClient): Promise<void> {
 }
 
 /**
- * repoテーブルにnormalized_root列とインデックスを追加（Phase 1: Critical #1）
- * 既存DBとの互換性のため、列が存在しない場合のみ追加
+ * Adds normalized_root column with UNIQUE index to the repo table (Phase 1: Critical #1)
+ *
+ * Migration Strategy:
+ * 1. Adds normalized_root column (nullable initially for backward compatibility)
+ * 2. Populates normalized_root from existing root values using normalizeRepoPath()
+ * 3. Deduplicates repos with same normalized_root (keeps lowest ID)
+ * 4. Creates UNIQUE index on normalized_root
+ *
+ * Deduplication Behavior:
+ * - When multiple repos have the same normalized_root: keeps repo with lowest ID
+ * - Deleted repos: All dependent data is automatically handled by foreign key constraints
+ * - Example: /Users/foo and /users/foo normalize to same path → keeps lower ID, deletes higher ID
+ * - Rationale: Lowest ID is typically the oldest/first indexed, most likely to be correct
+ *
+ * Safety Guarantees:
+ * - Transaction-based: All operations are atomic, rollback on failure
+ * - Backward compatible: Old code without normalized_root column awareness still works
+ * - Idempotent: Safe to run multiple times (checks for existing column and index)
+ * - Non-destructive: Only removes duplicate entries after careful validation
+ *
+ * Performance:
+ * - Backfill: O(n) where n = number of repos (typically small, <100)
+ * - Deduplication: O(m log m) where m = number of duplicate groups (typically 0-5)
+ * - Index creation: O(n log n)
  *
  * @param db - DuckDBクライアント
  * @throws Error if migration fails (except when repo table doesn't exist yet)

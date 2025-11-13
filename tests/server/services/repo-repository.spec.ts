@@ -109,4 +109,53 @@ describe("RepoRepository", () => {
       );
     });
   });
+
+  describe("findByPaths - edge cases", () => {
+    it("handles malformed database response gracefully", async () => {
+      const mockDb = {
+        all: vi
+          .fn()
+          // Direct lookup returns malformed data (missing required fields)
+          .mockResolvedValueOnce([{ id: null, root: null }]),
+      } as unknown as DuckDBClient;
+
+      const repository = new RepoRepository(mockDb);
+      const result = await repository.findByPaths(["/test/path"]);
+
+      // Should still return the row even with null values
+      expect(result).toEqual({ id: null, root: null });
+    });
+
+    it("handles column existence check failure gracefully", async () => {
+      const mockDb = {
+        all: vi
+          .fn()
+          // Direct lookup fails
+          .mockResolvedValueOnce([])
+          // Column existence check throws error (e.g., permissions issue)
+          .mockRejectedValueOnce(new Error("Permission denied on system catalog")),
+      } as unknown as DuckDBClient;
+
+      const repository = new RepoRepository(mockDb);
+
+      // Should propagate the error
+      await expect(repository.findByPaths(["/test/path"])).rejects.toThrow(
+        "Permission denied on system catalog"
+      );
+    });
+
+    it("handles empty string in root field", async () => {
+      const mockDb = {
+        all: vi
+          .fn()
+          // Direct lookup returns repo with empty string root
+          .mockResolvedValueOnce([{ id: 1, root: "" }]),
+      } as unknown as DuckDBClient;
+
+      const repository = new RepoRepository(mockDb);
+      const result = await repository.findByPaths([""]);
+
+      expect(result).toEqual({ id: 1, root: "" });
+    });
+  });
 });

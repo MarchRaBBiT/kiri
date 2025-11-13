@@ -96,7 +96,7 @@ export class RepoRepository {
       if (error instanceof Error && error.message.includes("Table with name repo")) {
         return false;
       }
-      throw error;
+      throw new Error("Repo metadata check failed. Verify DuckDB permissions before retrying.");
     }
   }
 }

@@ -2191,7 +2191,7 @@ export async function contextBundle(
   if (artifacts.editing_path) {
     if (!SAFE_PATH_PATTERN.test(artifacts.editing_path)) {
       throw new Error(
-        `Invalid editing_path format. Path must contain only alphanumeric characters, underscores, dots, hyphens, and forward slashes.`
+        `Invalid editing_path format: ${artifacts.editing_path}. Use only A-Z, 0-9, _, ., -, / characters.`
       );
     }
     dependencySeeds.add(artifacts.editing_path);
@@ -2210,7 +2210,9 @@ export async function contextBundle(
     // 防御的チェック: プレースホルダーが正しい形式であることを確認
     // 期待される形式: "?, ?, ..." (クエスチョンマーク、カンマ、スペースのみ)
     if (!/^(\?)(,\s*\?)*$/.test(placeholders)) {
-      throw new Error("Invalid placeholder generation detected. Operation aborted for safety.");
+      throw new Error(
+        "Invalid dependency placeholder sequence detected. Remove unsafe dependency seeds and retry the request."
+      );
     }
 
     const depRows = await db.all<DependencyRow>(

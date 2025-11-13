@@ -32,7 +32,7 @@ describe("startServer", () => {
         databasePath: dbPath,
         securityLockPath: lockPath,
       })
-    ).rejects.toThrow(/Target repository is missing/);
+    ).rejects.toThrow(/was not indexed/);
 
     await rm(tempDir, { recursive: true, force: true });
   });

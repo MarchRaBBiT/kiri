@@ -108,14 +108,14 @@ export async function snippetsGet(
 
   if (rows.length === 0) {
     throw new Error(
-      "Requested snippet file was not indexed. Re-run the indexer or choose another path."
+      `Requested snippet file ${params.path} was not indexed. Re-run the indexer or choose another path.`
     );
   }
 
   const row = rows[0];
   if (!row) {
     throw new Error(
-      "Requested snippet file was not indexed. Re-run the indexer or choose another path."
+      `Requested snippet file ${params.path} was not indexed. Re-run the indexer or choose another path.`
     );
   }
 
@@ -126,7 +126,9 @@ export async function snippetsGet(
   }
 
   if (row.content === null) {
-    throw new Error("Snippet content is unavailable. Re-run the indexer to refresh DuckDB state.");
+    throw new Error(
+      `Snippet content was NULL for ${params.path}. Re-run the indexer with --full to repopulate blob content.`
+    );
   }
 
   const lines = row.content.split(/\r?\n/);

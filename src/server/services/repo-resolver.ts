@@ -34,7 +34,7 @@ export class RepoResolver {
     const tableExists = await this.repository.tableExists();
     if (!tableExists) {
       throw new RepoNotFoundError(
-        "Target repository is missing from DuckDB. Run the indexer before starting the server."
+        `Repository ${repoRoot} was not indexed. Run the indexer before starting the server.`
       );
     }
 
@@ -51,7 +51,7 @@ export class RepoResolver {
 
       if (!repo) {
         throw new RepoNotFoundError(
-          "Target repository is missing from DuckDB. Run the indexer before starting the server."
+          `Repository ${repoRoot} was not indexed. Run the indexer before starting the server.`
         );
       }
 

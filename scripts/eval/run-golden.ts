@@ -245,7 +245,8 @@ Options:
 
 class McpServerManager {
   private serverProc: ChildProcess | null = null;
-  private readonly port = 19999; // Use different port to avoid conflicts
+  private readonly basePort = 19999;
+  private assignedPort = this.basePort;
   private serverLogs = "";
 
   async start(dbPath: string, repoPath: string, verbose: boolean): Promise<void> {
@@ -254,12 +255,23 @@ class McpServerManager {
     }
     this.serverLogs = "";
     if (verbose) {
-      console.log(`  → Starting MCP server on port ${this.port}...`);
+      console.log(
+        `  → Starting MCP server on port ${this.port} (db=${dbPath}, repo=${repoPath})...`
+      );
     }
 
+    this.assignedPort = await findAvailablePort(this.basePort);
     this.serverProc = spawn(
       "tsx",
-      ["src/server/main.ts", "--port", String(this.port), "--db", dbPath, "--repo", repoPath],
+      [
+        "src/server/main.ts",
+        "--port",
+        String(this.assignedPort),
+        "--db",
+        dbPath,
+        "--repo",
+        repoPath,
+      ],
       {
         stdio: ["ignore", "pipe", "pipe"],
         cwd: process.cwd(),
@@ -291,7 +303,7 @@ class McpServerManager {
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
-        const response = await fetch(`http://localhost:${this.port}`, {
+        const response = await fetch(`http://localhost:${this.assignedPort}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -325,7 +337,7 @@ class McpServerManager {
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
-      const response = await fetch(`http://localhost:${this.port}`, {
+      const response = await fetch(`http://localhost:${this.assignedPort}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -357,16 +369,43 @@ class McpServerManager {
       this.serverProc.kill("SIGTERM");
       await new Promise((resolve) => setTimeout(resolve, 1000));
       this.serverProc = null;
+      this.assignedPort = this.basePort;
     }
   }
 
   getPort(): number {
-    return this.port;
+    return this.assignedPort;
   }
 
   isRunning(): boolean {
     return this.serverProc !== null;
   }
+}
+
+async function findAvailablePort(preferred: number, retries = 10): Promise<number> {
+  const net = await import("node:net");
+  let port = preferred;
+  for (let attempt = 0; attempt < retries; attempt += 1) {
+    const isFree = await new Promise<boolean>((resolve) => {
+      const tester = net.createServer();
+      tester.once("error", () => resolve(false));
+      tester.once("listening", () => tester.close(() => resolve(true)));
+      tester.listen(port, "127.0.0.1");
+    });
+    if (isFree) {
+      return port;
+    }
+    port += 1;
+  }
+  // Port 0 lets the OS assign a free port
+  return new Promise<number>((resolve) => {
+    const server = net.createServer();
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      const freePort = typeof address === "object" && address ? address.port : preferred;
+      server.close(() => resolve(freePort));
+    });
+  });
 }
 
 // ============================================================================
@@ -534,7 +573,13 @@ async function main(): Promise<void> {
     for (const query of goldenSet.queries) {
       const repoId = resolveQueryRepo(query);
       await ensureServerForRepo(repoId);
+      console.log(
+        `  → Executing ${query.id} on repo '${repoId}' (db=${repoMap.get(repoId)?.dbPath})`
+      );
       const result = await executeQueryWithRetry(server, query, goldenSet.defaultParams, options);
+      if (options.verbose) {
+        console.log(`    ↪ Retrieved paths: ${result.retrieved.slice(0, 5).join(", ")}`);
+      }
       queryResults.push(result);
 
       const status = result.status === "success" ? "✓" : "✗";

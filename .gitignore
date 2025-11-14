@@ -1,6 +1,8 @@
 node_modules/
 dist/
 var/
+external/vscode/
+external/*/.kiri/
 *.log
 .env*
 .DS_Store

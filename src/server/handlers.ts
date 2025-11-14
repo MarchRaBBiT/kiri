@@ -369,6 +369,8 @@ interface HintExpansionConfig {
   dbQueryBudget: number;
   dirBoost: number;
   depBoost: number;
+  substringLimit: number;
+  substringBoost: number;
 }
 
 interface HintExpansionState {
@@ -388,6 +390,8 @@ function createHintExpansionConfig(weights: ScoringWeights): HintExpansionConfig
     dbQueryBudget: Math.max(0, HINT_DB_QUERY_BUDGET),
     dirBoost: computeHintPriorityBoost(weights) * 0.35,
     depBoost: weights.dependency * 0.8,
+    substringLimit: Math.max(0, HINT_SUBSTRING_LIMIT),
+    substringBoost: Math.max(0, HINT_SUBSTRING_BOOST),
   };
 }
 
@@ -432,6 +436,7 @@ const HINT_PRIORITY_BASE_BONUS = parseFloat(process.env.KIRI_HINT_BASE_BONUS ?? 
 const HINT_DIR_FEATURE_ENABLED = envFlagEnabled(process.env.KIRI_HINT_ENABLE_DIR, false);
 const HINT_DEP_FEATURE_ENABLED = envFlagEnabled(process.env.KIRI_HINT_ENABLE_DEP, false);
 const HINT_SEM_FEATURE_ENABLED = envFlagEnabled(process.env.KIRI_HINT_ENABLE_SEM, false);
+const HINT_SUBSTRING_FEATURE_ENABLED = envFlagEnabled(process.env.KIRI_HINT_ENABLE_SUBSTRING, true);
 
 const HINT_DIR_LIMIT = HINT_DIR_FEATURE_ENABLED
   ? Math.max(0, parseInt(process.env.KIRI_HINT_NEAR_LIMIT_DIR ?? "2", 10))
@@ -459,6 +464,10 @@ const HINT_PER_HINT_LIMIT = HINT_EXPANSION_ENABLED
 const HINT_DB_QUERY_BUDGET = HINT_EXPANSION_ENABLED
   ? Math.max(1, parseInt(process.env.KIRI_HINT_DB_QUERY_LIMIT ?? "12", 10))
   : 0;
+const HINT_SUBSTRING_LIMIT = HINT_SUBSTRING_FEATURE_ENABLED
+  ? Math.max(0, parseInt(process.env.KIRI_HINT_SUBSTRING_LIMIT ?? "3", 10))
+  : 0;
+const HINT_SUBSTRING_BOOST = parseFloat(process.env.KIRI_HINT_SUBSTRING_BOOST ?? "3");
 
 function envFlagEnabled(value: string | undefined, defaultEnabled: boolean): boolean {
   if (value === undefined) {
@@ -1139,6 +1148,41 @@ function applyHintReasonBoost(
     candidate.ext = ext;
   }
   return true;
+}
+
+async function addHintSubstringMatches(
+  db: DuckDBClient,
+  repoId: number,
+  hints: string[],
+  candidates: Map<string, CandidateInfo>,
+  limitPerHint: number,
+  boost: number
+): Promise<void> {
+  if (limitPerHint <= 0 || boost <= 0) {
+    return;
+  }
+  for (const hint of hints) {
+    if (!SAFE_PATH_PATTERN.test(hint.replace(/[^a-zA-Z0-9_.-]/g, ""))) {
+      continue;
+    }
+    const rows = await db.all<{ path: string }>(
+      `
+        SELECT path
+        FROM file
+        WHERE repo_id = ?
+          AND is_binary = FALSE
+          AND LOWER(path) LIKE '%' || ? || '%'
+        ORDER BY path
+        LIMIT ?
+      `,
+      [repoId, hint, limitPerHint]
+    );
+    for (const row of rows) {
+      const candidate = ensureCandidate(candidates, row.path);
+      const reason = `artifact:hint_sub:${hint}:${row.path}`;
+      applyHintReasonBoost(candidate, reason, boost);
+    }
+  }
 }
 
 async function addHintDirectoryNeighbors(
@@ -2680,6 +2724,20 @@ export async function contextBundle(
       weights,
       config: createHintExpansionConfig(weights),
     });
+  }
+
+  const substringHints = artifactHints
+    .filter((hint) => !hint.includes("/") && hint.length >= 3)
+    .map((hint) => hint.toLowerCase());
+  if (substringHints.length > 0) {
+    await addHintSubstringMatches(
+      db,
+      repoId,
+      substringHints,
+      candidates,
+      HINT_SUBSTRING_LIMIT,
+      HINT_SUBSTRING_BOOST
+    );
   }
 
   if (artifacts.editing_path) {

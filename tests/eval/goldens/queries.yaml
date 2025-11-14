@@ -12,12 +12,14 @@ repos:
   vscode:
     repoPath: "external/vscode"
     dbPath: "external/vscode/.kiri/index.duckdb"
+
 queries:
   - id: vscode-editor-contributions
     query: "registerWorkbenchContribution workbench part"
     tool: "context_bundle"
     intent: "Find where workbench contributions are registered for editor"
     category: "editor"
+    repo: "vscode"
     expected:
       paths:
         - "src/vs/workbench/browser/workbench.ts"
@@ -26,11 +28,13 @@ queries:
     hints:
       - "registerWorkbenchContribution"
       - "workbench.contribution.ts"
+
   - id: vscode-tree-data-provider
     query: "TreeDataProvider registerTreeDataProvider"
     tool: "context_bundle"
     intent: "Locate TreeDataProvider API implementation"
     category: "api"
+    repo: "vscode"
     expected:
       paths:
         - "src/vs/workbench/api/common/extHostTreeViews.ts"
@@ -39,11 +43,13 @@ queries:
     hints:
       - "registerTreeDataProvider"
       - "extHostTreeViews.ts"
+
   - id: vscode-debug-adapter
     query: "DebugAdapter tracker session"
     tool: "context_bundle"
     intent: "Inspect debug adapter tracker service"
     category: "debug"
+    repo: "vscode"
     expected:
       paths:
         - "src/vs/workbench/contrib/debug/browser/debugAdapterManager.ts"
@@ -52,3 +58,138 @@ queries:
     hints:
       - "DebugAdapterTrackerFactory"
       - "debugAdapterManager.ts"
+
+  - id: vscode-terminal-prompt
+    query: "terminal shell integration prompt decoration"
+    tool: "context_bundle"
+    intent: "Understand terminal shell integration prompt decoration"
+    category: "feature"
+    repo: "vscode"
+    expected:
+      paths:
+        - "src/vs/workbench/contrib/terminal/browser/terminalShellIntegration.ts"
+        - "src/vs/workbench/contrib/terminal/browser/terminalInstance.ts"
+    tags: ["terminal", "shell", "prompt"]
+    hints:
+      - "terminalShellIntegration"
+      - "registerDecorationTypes"
+
+  - id: vscode-notebook-kernel
+    query: "NotebookKernelService resolveKernelSource"
+    tool: "context_bundle"
+    intent: "Trace notebook kernel service resolution logic"
+    category: "api"
+    repo: "vscode"
+    expected:
+      paths:
+        - "src/vs/workbench/contrib/notebook/browser/services/notebookKernelServiceImpl.ts"
+        - "src/vs/workbench/contrib/notebook/common/notebookKernelService.ts"
+    tags: ["notebook", "kernel"]
+    hints:
+      - "NotebookKernelService"
+      - "resolveKernelSource"
+
+  - id: vscode-merge-editor
+    query: "merge editor diff algorithm chunk alignment"
+    tool: "context_bundle"
+    intent: "Inspect merge editor diff chunk alignment logic"
+    category: "feature"
+    repo: "vscode"
+    expected:
+      paths:
+        - "src/vs/workbench/contrib/mergeEditor/browser/mergeEditorModel.ts"
+        - "src/vs/workbench/contrib/mergeEditor/browser/mergeEditorViewModel.ts"
+    tags: ["merge", "diff", "editor"]
+    hints:
+      - "mergeEditorModel"
+      - "chunkAlignment"
+
+  - id: vscode-color-theme
+    query: "color registry registerColor workbench"
+    tool: "context_bundle"
+    intent: "Find color registry entries for workbench"
+    category: "editor"
+    repo: "vscode"
+    expected:
+      paths:
+        - "src/vs/platform/theme/common/colorRegistry.ts"
+        - "src/vs/workbench/common/theme.ts"
+    tags: ["color", "theme"]
+    hints:
+      - "registerColor"
+      - "colorRegistry"
+
+  - id: vscode-file-search
+    query: "ripgrepTextSearchEngine fileWalker"
+    tool: "context_bundle"
+    intent: "Inspect file search implementation"
+    category: "infra"
+    repo: "vscode"
+    expected:
+      paths:
+        - "src/vs/workbench/services/search/node/ripgrepTextSearchEngine.ts"
+        - "src/vs/workbench/services/search/common/searchExtTypes.ts"
+    tags: ["search", "ripgrep"]
+    hints:
+      - "ripgrepTextSearchEngine"
+      - "fileWalker"
+
+  - id: vscode-extension-activation
+    query: "ExtensionHostProcess setupActivationEvents"
+    tool: "context_bundle"
+    intent: "Understand extension activation event wiring"
+    category: "api"
+    repo: "vscode"
+    expected:
+      paths:
+        - "src/vs/workbench/api/common/extHostExtensionService.ts"
+        - "src/vs/workbench/services/extensions/browser/extensionHostProcess.ts"
+    tags: ["extension", "activation"]
+    hints:
+      - "setupActivationEvents"
+      - "ExtensionHostProcess"
+
+  - id: vscode-settings-sync
+    query: "settings sync keybindings merge conflict"
+    tool: "context_bundle"
+    intent: "Review settings sync merge logic"
+    category: "feature"
+    repo: "vscode"
+    expected:
+      paths:
+        - "src/vs/workbench/services/userDataSync/common/userDataSyncResources.ts"
+        - "src/vs/workbench/services/userDataSync/common/settingsSync.ts"
+    tags: ["sync", "settings"]
+    hints:
+      - "keybindingsMerge"
+      - "SyncResource"
+
+  - id: vscode-microtask-debug
+    query: "microtaskQueue tracer schedule vs/base"
+    tool: "context_bundle"
+    intent: "Inspect microtask queue tracer"
+    category: "debug"
+    repo: "vscode"
+    expected:
+      paths:
+        - "src/vs/base/common/microtaskQueue.ts"
+        - "src/vs/platform/telemetry/common/telemetryUtils.ts"
+    tags: ["microtask", "telemetry"]
+    hints:
+      - "MicrotaskQueueTracer"
+      - "scheduleMicrotask"
+
+  - id: vscode-task-terminal
+    query: "TaskTerminalShellIntegration registerRunProfiles"
+    tool: "context_bundle"
+    intent: "Understand task terminal shell integration run profiles"
+    category: "feature"
+    repo: "vscode"
+    expected:
+      paths:
+        - "src/vs/workbench/contrib/tasks/browser/terminalTaskSystem.ts"
+        - "src/vs/workbench/contrib/tasks/browser/terminalTaskSystemContribution.ts"
+    tags: ["task", "terminal"]
+    hints:
+      - "TaskTerminalShellIntegration"
+      - "registerRunProfiles"

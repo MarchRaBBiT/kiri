@@ -26,7 +26,7 @@ interface CLIOptions {
 function parseArgs(): CLIOptions {
   const args = process.argv.slice(2);
   const options: CLIOptions = {
-    dataset: "external/assay-kit/examples/kiri-integration/datasets/kiri-ab.yaml",
+    dataset: "datasets/kiri-ab.yaml",
     variantA: "default",
     variantB: "balanced",
     concurrency: 2,
@@ -97,7 +97,7 @@ function parseArgs(): CLIOptions {
 
 function printHelp(): void {
   console.log(
-    `\n🔬 Assay ComparisonRunner (KIRI Integration)\n\nUsage:\n  pnpm run assay:compare -- [options]\n\nOptions:\n  --dataset <path>          Dataset path (default: external/.../kiri-ab.yaml)\n  --variant-a <name>        Variant name for adapter A (default: default)\n  --variant-b <name>        Variant name for adapter B (default: balanced)\n  --concurrency <n>         Runner concurrency (default: 2)\n  --degradation <ratio>     Degradation threshold (default: 0.3)\n  --stats <method>          Statistical test (auto|paired-t|independent-t|mann-whitney-u)\n  --alpha <value>           Significance level (default: 0.05)\n  --correction <method>    Multiple comparison correction (none|bonferroni|holm, default: holm)\n  --help                    Show this message\n\nAvailable variants: ${getAvailableVariants().join(", ")}\n`
+    `\n🔬 Assay ComparisonRunner (KIRI Integration)\n\nUsage:\n  pnpm run assay:compare -- [options]\n\nOptions:\n  --dataset <path>          Dataset path (default: datasets/kiri-ab.yaml)\n  --variant-a <name>        Variant name for adapter A (default: default)\n  --variant-b <name>        Variant name for adapter B (default: balanced)\n  --concurrency <n>         Runner concurrency (default: 2)\n  --degradation <ratio>     Degradation threshold (default: 0.3)\n  --stats <method>          Statistical test (auto|paired-t|independent-t|mann-whitney-u)\n  --alpha <value>           Significance level (default: 0.05)\n  --correction <method>    Multiple comparison correction (none|bonferroni|holm, default: holm)\n  --help                    Show this message\n\nAvailable variants: ${getAvailableVariants().join(", ")}\n`
   );
 }
 

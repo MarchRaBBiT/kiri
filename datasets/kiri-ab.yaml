@@ -1,26 +1,58 @@
 # Query hint dataset for Issue #76 - adds metadata.hints so abstract prompts get concrete anchors.
-schemaVersion: "1.0"
+schemaVersion: "1.0.0"
+name: "kiri-ab-issue76"
 datasetId: "kiri-ab"
 description: "Minimal AB test queries focusing on abstract statistical/orchestrator terminology."
-version: "2025-11-13"
+version: "v2025-11-13"
+
+defaultParams:
+  k: 5
+  timeoutMs: 30000
+
 queries:
   - id: "q-testfail"
     text: "mann whitney u mannWhitneyU stats/tests.ts statistical analysis"
     goal: "Recover Mann-Whitney U implementation for regression debugging"
     metadata:
+      category: "testfail"
+      intent: "Locate Mann-Whitney U implementation"
+      tool: "context_bundle"
+      tags: ["stats", "tests"]
       hints:
         - "mannWhitneyU"
         - "stats/tests.ts"
         - "rank-biserial"
+      expected:
+        - "external/assay-kit/src/stats/mann-whitney.ts"
+        - "external/assay-kit/src/stats/rank-biserial.ts"
     expected:
       rationale: "Adds concrete function and file hints so search can find stats helpers."
   - id: "q-performance"
     text: "orchestrator orchestratorMain runtime/workerPool.ts scheduling latency"
     goal: "Locate orchestrator bottleneck hot path for perf triage"
     metadata:
+      category: "performance"
+      intent: "Locate orchestrator hot path"
+      tool: "context_bundle"
+      tags: ["orchestrator", "runtime"]
       hints:
         - "orchestratorMain"
         - "runtime/workerPool.ts"
         - "pipeline scheduler"
+      expected:
+        - "external/assay-kit/src/tuning/orchestrator.ts"
+        - "external/assay-kit/src/runtime/worker-pool.ts"
     expected:
       rationale: "Hints call out orchestrator entrypoints and worker pools referenced in perf threads."
+
+expected:
+  - id: "q-testfail"
+    reference:
+      paths:
+        - "external/assay-kit/src/stats/mann-whitney.ts"
+        - "external/assay-kit/src/stats/rank-biserial.ts"
+  - id: "q-performance"
+    reference:
+      paths:
+        - "external/assay-kit/src/tuning/orchestrator.ts"
+        - "external/assay-kit/src/runtime/worker-pool.ts"

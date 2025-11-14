@@ -11,13 +11,62 @@ import type {
 } from "../../external/assay-kit/src/index.ts";
 import { precisionAtK, recallAtK } from "../../external/assay-kit/src/index.ts";
 
+const MAX_QUERY_HINTS = 8;
+
 export interface KiriAdapterConfig {
   limit?: number;
   compact?: boolean;
   boostProfile?: string;
 }
 
-export class KiriSearchAdapter implements SearchAdapter<Query, Metrics> {
+interface KiriQueryMetadata extends Record<string, unknown> {
+  hints?: string[];
+  expected?: string[];
+}
+
+type KiriQuery = Query<Record<string, unknown>, KiriQueryMetadata>;
+
+interface ContextBundleArtifactsPayload {
+  hints: string[];
+}
+
+function normalizeQueryHints(hints?: unknown): string[] {
+  if (!Array.isArray(hints)) {
+    return [];
+  }
+
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+
+  for (const hint of hints) {
+    if (typeof hint !== "string") {
+      continue;
+    }
+    const trimmed = hint.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+    normalized.push(trimmed);
+    seen.add(trimmed);
+    if (normalized.length >= MAX_QUERY_HINTS) {
+      break;
+    }
+  }
+
+  return normalized;
+}
+
+function buildArtifactsFromMetadata(
+  metadata?: KiriQueryMetadata
+): ContextBundleArtifactsPayload | undefined {
+  const hints = normalizeQueryHints(metadata?.hints);
+  if (hints.length === 0) {
+    return undefined;
+  }
+  return { hints };
+}
+
+export class KiriSearchAdapter implements SearchAdapter<KiriQuery, Metrics> {
   private serverProcess: ChildProcess | null = null;
   private readonly port: number;
   private serverLogs = "";
@@ -38,7 +87,7 @@ export class KiriSearchAdapter implements SearchAdapter<Query, Metrics> {
     };
   }
 
-  async warmup(dataset: Dataset<Query>): Promise<void> {
+  async warmup(dataset: Dataset<KiriQuery>): Promise<void> {
     console.log(`🚀 Starting KIRI server on port ${this.port}...`);
 
     const cliPath = join(this.repoRoot, "node_modules/tsx/dist/cli.mjs");
@@ -90,7 +139,7 @@ export class KiriSearchAdapter implements SearchAdapter<Query, Metrics> {
     }
   }
 
-  async execute(query: Query, ctx: SearchAdapterContext): Promise<Metrics> {
+  async execute(query: KiriQuery, ctx: SearchAdapterContext): Promise<Metrics> {
     const startTime = Date.now();
 
     if (ctx.signal.aborted) {
@@ -106,6 +155,11 @@ export class KiriSearchAdapter implements SearchAdapter<Query, Metrics> {
 
       if (this.config.boostProfile && this.config.boostProfile !== "default") {
         kiriParams.boost_profile = this.config.boostProfile;
+      }
+
+      const artifacts = buildArtifactsFromMetadata(query.metadata);
+      if (artifacts) {
+        kiriParams.artifacts = artifacts;
       }
 
       const result = await this.callKiri(
@@ -185,7 +239,7 @@ export class KiriSearchAdapter implements SearchAdapter<Query, Metrics> {
     );
   }
 
-  private async callKiri(
+  protected async callKiri(
     method: string,
     params: Record<string, unknown>,
     timeoutMs: number,
@@ -243,7 +297,7 @@ export class KiriSearchAdapter implements SearchAdapter<Query, Metrics> {
     return [];
   }
 
-  private getExpectedPaths(query: Query): string[] {
+  private getExpectedPaths(query: KiriQuery): string[] {
     const expected = query.metadata?.expected;
     if (Array.isArray(expected)) {
       return expected as string[];

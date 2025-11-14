@@ -357,6 +357,40 @@ function computeHintPriorityBoost(weights: ScoringWeights): number {
   return Math.max(HINT_PRIORITY_BASE_BONUS, aggregate);
 }
 
+interface HintExpansionConfig {
+  dirLimit: number;
+  dirMaxFiles: number;
+  depOutLimit: number;
+  depInLimit: number;
+  semLimit: number;
+  semDirCandidateLimit: number;
+  semThreshold: number;
+  perHintLimit: number;
+  dbQueryBudget: number;
+  dirBoost: number;
+  depBoost: number;
+}
+
+interface HintExpansionState {
+  remainingDbQueries: number;
+}
+
+function createHintExpansionConfig(weights: ScoringWeights): HintExpansionConfig {
+  return {
+    dirLimit: Math.max(0, HINT_DIR_LIMIT),
+    dirMaxFiles: Math.max(1, HINT_DIR_MAX_FILES),
+    depOutLimit: Math.max(0, HINT_DEP_OUT_LIMIT),
+    depInLimit: Math.max(0, HINT_DEP_IN_LIMIT),
+    semLimit: Math.max(0, HINT_SEM_LIMIT),
+    semDirCandidateLimit: Math.max(1, HINT_SEM_DIR_CANDIDATE_LIMIT),
+    semThreshold: Number.isFinite(HINT_SEM_THRESHOLD) ? HINT_SEM_THRESHOLD : 0.65,
+    perHintLimit: Math.max(1, HINT_PER_HINT_LIMIT),
+    dbQueryBudget: Math.max(0, HINT_DB_QUERY_BUDGET),
+    dirBoost: computeHintPriorityBoost(weights) * 0.35,
+    depBoost: weights.dependency * 0.8,
+  };
+}
+
 export interface SemanticRerankCandidateInput {
   path: string;
   score?: number;
@@ -395,6 +429,16 @@ const SAFE_PATH_PATTERN = /^[a-zA-Z0-9_.\-/]+$/;
 const HINT_PRIORITY_TEXT_MULTIPLIER = parseFloat(process.env.KIRI_HINT_TEXT_MULTIPLIER ?? "6");
 const HINT_PRIORITY_PATH_MULTIPLIER = parseFloat(process.env.KIRI_HINT_PATH_MULTIPLIER ?? "2");
 const HINT_PRIORITY_BASE_BONUS = parseFloat(process.env.KIRI_HINT_BASE_BONUS ?? "5");
+const HINT_DIR_LIMIT = parseInt(process.env.KIRI_HINT_NEAR_LIMIT_DIR ?? "2", 10) || 0;
+const HINT_DIR_MAX_FILES = parseInt(process.env.KIRI_HINT_NEAR_MAX_FILES ?? "10", 10) || 10;
+const HINT_DEP_OUT_LIMIT = parseInt(process.env.KIRI_HINT_DEP_OUT_LIMIT ?? "1", 10) || 0;
+const HINT_DEP_IN_LIMIT = parseInt(process.env.KIRI_HINT_DEP_IN_LIMIT ?? "1", 10) || 0;
+const HINT_SEM_LIMIT = parseInt(process.env.KIRI_HINT_SEM_LIMIT ?? "0", 10) || 0;
+const HINT_SEM_DIR_CANDIDATE_LIMIT =
+  parseInt(process.env.KIRI_HINT_SEM_DIR_CANDIDATES ?? "20", 10) || 20;
+const HINT_SEM_THRESHOLD = parseFloat(process.env.KIRI_HINT_SEM_THRESHOLD ?? "0.65");
+const HINT_PER_HINT_LIMIT = parseInt(process.env.KIRI_HINT_PER_HINT_LIMIT ?? "6", 10) || 6;
+const HINT_DB_QUERY_BUDGET = parseInt(process.env.KIRI_HINT_DB_QUERY_LIMIT ?? "12", 10) || 12;
 
 // Issue #68: Path/Large File Penalty configuration (環境変数で上書き可能)
 const PATH_MISS_DELTA = parseFloat(process.env.KIRI_PATH_MISS_DELTA || "-0.5");
@@ -978,6 +1022,342 @@ function ensureCandidate(map: Map<string, CandidateInfo>, filePath: string): Can
     map.set(filePath, candidate);
   }
   return candidate;
+}
+
+interface ExpandHintParams {
+  db: DuckDBClient;
+  repoId: number;
+  hintPaths: string[];
+  candidates: Map<string, CandidateInfo>;
+  fileCache: Map<string, FileContentCacheEntry>;
+  weights: ScoringWeights;
+  config: HintExpansionConfig;
+}
+
+interface ExpandSingleHintParams extends ExpandHintParams {
+  hintPath: string;
+  state: HintExpansionState;
+}
+
+async function expandHintCandidatesForHints(params: ExpandHintParams): Promise<void> {
+  const { hintPaths, config } = params;
+  if (hintPaths.length === 0 || config.perHintLimit <= 0) {
+    return;
+  }
+
+  const state: HintExpansionState = { remainingDbQueries: config.dbQueryBudget };
+  for (const hintPath of hintPaths) {
+    if (state.remainingDbQueries <= 0) {
+      break;
+    }
+    await expandSingleHintNeighborhood({ ...params, hintPath, state });
+  }
+}
+
+async function expandSingleHintNeighborhood(args: ExpandSingleHintParams): Promise<void> {
+  const { config } = args;
+  let remaining = config.perHintLimit;
+  if (remaining <= 0) {
+    return;
+  }
+
+  if (config.dirLimit > 0) {
+    const added = await addHintDirectoryNeighbors(args, Math.min(config.dirLimit, remaining));
+    remaining -= added;
+    if (remaining <= 0) {
+      return;
+    }
+  }
+
+  if (config.depOutLimit > 0 || config.depInLimit > 0) {
+    const added = await addHintDependencyNeighbors(args, remaining);
+    remaining -= added;
+    if (remaining <= 0) {
+      return;
+    }
+  }
+
+  if (config.semLimit > 0) {
+    await addHintSemanticNeighbors(args, Math.min(config.semLimit, remaining));
+  }
+}
+
+function useHintDbBudget(state: HintExpansionState, cost = 1): boolean {
+  if (state.remainingDbQueries < cost) {
+    return false;
+  }
+  state.remainingDbQueries -= cost;
+  return true;
+}
+
+function applyHintReasonBoost(
+  candidate: CandidateInfo,
+  reason: string,
+  scoreDelta: number,
+  lang?: string | null,
+  ext?: string | null
+): boolean {
+  if (scoreDelta <= 0 || candidate.reasons.has(reason)) {
+    return false;
+  }
+  candidate.score += scoreDelta;
+  candidate.reasons.add(reason);
+  candidate.pathMatchHits = Math.max(candidate.pathMatchHits, 2);
+  candidate.matchLine ??= 1;
+  if (lang && !candidate.lang) {
+    candidate.lang = lang;
+  }
+  if (ext && !candidate.ext) {
+    candidate.ext = ext;
+  }
+  return true;
+}
+
+async function addHintDirectoryNeighbors(
+  args: ExpandSingleHintParams,
+  limit: number
+): Promise<number> {
+  if (limit <= 0) {
+    return 0;
+  }
+  const dir = path.posix.dirname(args.hintPath);
+  if (!dir || dir === "." || dir === "/") {
+    return 0;
+  }
+  if (!useHintDbBudget(args.state)) {
+    return 0;
+  }
+  const rows = await args.db.all<{ path: string; lang: string | null; ext: string | null }>(
+    `
+      SELECT path, lang, ext
+      FROM file
+      WHERE repo_id = ?
+        AND is_binary = FALSE
+        AND path LIKE ?
+      ORDER BY path
+      LIMIT ?
+    `,
+    [args.repoId, `${dir}/%`, args.config.dirMaxFiles + 1]
+  );
+  if (rows.length === 0 || rows.length > args.config.dirMaxFiles) {
+    return 0;
+  }
+  rows.sort((a, b) => hintNeighborRank(a.path) - hintNeighborRank(b.path));
+
+  let added = 0;
+  for (const row of rows) {
+    if (row.path === args.hintPath) {
+      continue;
+    }
+    if (!SAFE_PATH_PATTERN.test(row.path)) {
+      continue;
+    }
+    const candidate = ensureCandidate(args.candidates, row.path);
+    const reason = `artifact:hint_dir:${args.hintPath}:${row.path}`;
+    if (applyHintReasonBoost(candidate, reason, args.config.dirBoost, row.lang, row.ext)) {
+      added += 1;
+      if (added >= limit) {
+        break;
+      }
+    }
+  }
+
+  return added;
+}
+
+async function addHintDependencyNeighbors(
+  args: ExpandSingleHintParams,
+  perHintRemaining: number
+): Promise<number> {
+  if (perHintRemaining <= 0) {
+    return 0;
+  }
+  let added = 0;
+  if (args.config.depOutLimit > 0) {
+    const outLimit = Math.min(args.config.depOutLimit, perHintRemaining - added);
+    if (outLimit > 0) {
+      added += await addHintDependencyDirection(args, outLimit, "out");
+    }
+  }
+  if (perHintRemaining - added <= 0) {
+    return added;
+  }
+  if (args.config.depInLimit > 0) {
+    const inLimit = Math.min(args.config.depInLimit, perHintRemaining - added);
+    if (inLimit > 0) {
+      added += await addHintDependencyDirection(args, inLimit, "in");
+    }
+  }
+  return added;
+}
+
+async function addHintDependencyDirection(
+  args: ExpandSingleHintParams,
+  limit: number,
+  direction: "out" | "in"
+): Promise<number> {
+  if (limit <= 0) {
+    return 0;
+  }
+  if (!useHintDbBudget(args.state)) {
+    return 0;
+  }
+
+  const fetchLimit = Math.min(limit * 4, 25);
+  if (direction === "out") {
+    const rows = await args.db.all<{ dst: string }>(
+      `
+        SELECT dst
+        FROM dependency
+        WHERE repo_id = ?
+          AND src_path = ?
+          AND dst_kind = 'path'
+        LIMIT ?
+      `,
+      [args.repoId, args.hintPath, fetchLimit]
+    );
+    return applyDependencyRows(
+      args,
+      rows.map((row) => row.dst),
+      limit,
+      direction
+    );
+  }
+
+  const rows = await args.db.all<{ src_path: string }>(
+    `
+      SELECT src_path
+      FROM dependency
+      WHERE repo_id = ?
+        AND dst = ?
+        AND dst_kind = 'path'
+      LIMIT ?
+    `,
+    [args.repoId, args.hintPath, fetchLimit]
+  );
+  return applyDependencyRows(
+    args,
+    rows.map((row) => row.src_path),
+    limit,
+    direction
+  );
+}
+
+function applyDependencyRows(
+  args: ExpandSingleHintParams,
+  paths: string[],
+  limit: number,
+  direction: "out" | "in"
+): number {
+  if (paths.length === 0) {
+    return 0;
+  }
+  const uniquePaths = Array.from(new Set(paths)).filter((p) => p && SAFE_PATH_PATTERN.test(p));
+  uniquePaths.sort((a, b) => hintNeighborRank(a) - hintNeighborRank(b));
+  let added = 0;
+  for (const dependencyPath of uniquePaths) {
+    if (dependencyPath === args.hintPath) {
+      continue;
+    }
+    const candidate = ensureCandidate(args.candidates, dependencyPath);
+    const reason = `artifact:hint_dep_${direction}:${args.hintPath}:${dependencyPath}`;
+    if (applyHintReasonBoost(candidate, reason, args.config.depBoost)) {
+      added += 1;
+      if (added >= limit) {
+        break;
+      }
+    }
+  }
+  return added;
+}
+
+async function addHintSemanticNeighbors(
+  args: ExpandSingleHintParams,
+  limit: number
+): Promise<number> {
+  if (limit <= 0) {
+    return 0;
+  }
+  const dir = path.posix.dirname(args.hintPath);
+  if (!dir || dir === "." || dir === "/") {
+    return 0;
+  }
+  if (!useHintDbBudget(args.state)) {
+    return 0;
+  }
+  const rows = await args.db.all<{ path: string }>(
+    `
+      SELECT path
+      FROM file
+      WHERE repo_id = ?
+        AND is_binary = FALSE
+        AND path LIKE ?
+      ORDER BY path
+      LIMIT ?
+    `,
+    [args.repoId, `${dir}/%`, args.config.semDirCandidateLimit]
+  );
+  const candidatePaths = rows.map((row) => row.path).filter((p) => p !== args.hintPath);
+  if (candidatePaths.length === 0) {
+    return 0;
+  }
+  if (!useHintDbBudget(args.state)) {
+    return 0;
+  }
+  const embeddingMap = await fetchEmbeddingMap(args.db, args.repoId, [
+    args.hintPath,
+    ...candidatePaths,
+  ]);
+  const hintEmbedding = embeddingMap.get(args.hintPath);
+  if (!hintEmbedding) {
+    return 0;
+  }
+  let added = 0;
+  for (const candidatePath of candidatePaths) {
+    if (!SAFE_PATH_PATTERN.test(candidatePath)) {
+      continue;
+    }
+    const embedding = embeddingMap.get(candidatePath);
+    if (!embedding) {
+      continue;
+    }
+    const similarity = structuralSimilarity(hintEmbedding, embedding);
+    if (!Number.isFinite(similarity) || similarity < args.config.semThreshold) {
+      continue;
+    }
+    const candidate = ensureCandidate(args.candidates, candidatePath);
+    const reason = `artifact:hint_sem:${args.hintPath}:${candidatePath}`;
+    if (applyHintReasonBoost(candidate, reason, args.weights.structural * similarity)) {
+      added += 1;
+      if (added >= limit) {
+        break;
+      }
+    }
+  }
+  return added;
+}
+
+function hintNeighborRank(filePath: string): number {
+  if (filePath.startsWith("src/") || filePath.startsWith("external/assay-kit/src/")) {
+    return 0;
+  }
+  if (isTestLikePath(filePath)) {
+    return 2;
+  }
+  if (filePath.startsWith("docs/")) {
+    return 3;
+  }
+  return 1;
+}
+
+function isTestLikePath(filePath: string): boolean {
+  return (
+    /(^|\/)(tests?|__tests__|fixtures)\//.test(filePath) ||
+    filePath.endsWith(".spec.ts") ||
+    filePath.endsWith(".spec.tsx") ||
+    filePath.endsWith(".test.ts") ||
+    filePath.endsWith(".test.tsx")
+  );
 }
 
 function parseEmbedding(vectorJson: string | null, vectorDims: number | null): number[] | null {
@@ -2263,6 +2643,15 @@ export async function contextBundle(
       candidate.pathMatchHits = Math.max(candidate.pathMatchHits, 3); // Avoid graduated penalties
       candidate.matchLine ??= 1;
     }
+    await expandHintCandidatesForHints({
+      db,
+      repoId,
+      hintPaths: pathHintTargets,
+      candidates,
+      fileCache,
+      weights,
+      config: createHintExpansionConfig(weights),
+    });
   }
 
   if (artifacts.editing_path) {

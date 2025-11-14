@@ -3,7 +3,7 @@
  */
 
 import path from "node:path";
-import type { SymbolRecord, SnippetRecord, DependencyRecord } from "../codeintel.js";
+import type { DependencyRecord, SnippetRecord, SymbolRecord } from "../languages/types.js";
 import { DartAnalysisClient } from "./client.js";
 import { outlineToSymbols } from "./transform.js";
 import { isDartSdkAvailable } from "./sdk.js";

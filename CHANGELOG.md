@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Import dependency resolution with wildcard and static import support
   - Full test coverage with 23 test cases
 
+### Changed
+
+- **Modularized language analyzers**: extracted the TypeScript, Swift, PHP, Java, and Dart analyzers into `src/indexer/languages/` with a shared `LanguageAnalyzer` interface plus a registry in `src/indexer/languages/index.ts`, allowing `src/indexer/codeintel.ts` to delegate without language-specific branches.
+- **Documentation updates**: added a “Language Analyzer Architecture” section to `README.md` and expanded `docs/indexer.md` with a dedicated chapter that explains the shared records, registry, and checklist for adding new languages.
+
 ## [0.9.6] - 2025-11-07
 
 ### Added

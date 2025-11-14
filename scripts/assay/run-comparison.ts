@@ -1,6 +1,7 @@
 #!/usr/bin/env tsx
 import { copyFileSync, existsSync, mkdirSync } from "node:fs";
-import { join, dirname, extname } from "node:path";
+import { dirname, extname, join } from "node:path";
+
 import {
   loadDataset,
   ComparisonRunner,
@@ -85,6 +86,7 @@ function parseArgs(): CLIOptions {
       case "--help":
         printHelp();
         process.exit(0);
+        break;
       default:
         console.warn(`Unknown option: ${flag}`);
     }

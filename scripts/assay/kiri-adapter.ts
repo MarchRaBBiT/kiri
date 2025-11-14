@@ -1,3 +1,5 @@
+/* global fetch */
+
 import { spawn, type ChildProcess } from "node:child_process";
 import { join } from "node:path";
 import type {

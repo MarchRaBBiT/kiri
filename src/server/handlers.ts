@@ -350,6 +350,13 @@ function normalizeArtifactHints(hints?: string[]): string[] {
   return normalized;
 }
 
+function computeHintPriorityBoost(weights: ScoringWeights): number {
+  const textComponent = weights.textMatch * HINT_PRIORITY_TEXT_MULTIPLIER;
+  const pathComponent = weights.pathMatch * HINT_PRIORITY_PATH_MULTIPLIER;
+  const aggregate = textComponent + pathComponent + weights.editingPath + weights.dependency;
+  return Math.max(HINT_PRIORITY_BASE_BONUS, aggregate);
+}
+
 export interface SemanticRerankCandidateInput {
   path: string;
   score?: number;
@@ -385,6 +392,9 @@ const FALLBACK_SNIPPET_WINDOW = 40; // Reduced from 120 to optimize token usage
 const MAX_RERANK_LIMIT = 50;
 const MAX_ARTIFACT_HINTS = 8;
 const SAFE_PATH_PATTERN = /^[a-zA-Z0-9_.\-/]+$/;
+const HINT_PRIORITY_TEXT_MULTIPLIER = parseFloat(process.env.KIRI_HINT_TEXT_MULTIPLIER ?? "6");
+const HINT_PRIORITY_PATH_MULTIPLIER = parseFloat(process.env.KIRI_HINT_PATH_MULTIPLIER ?? "2");
+const HINT_PRIORITY_BASE_BONUS = parseFloat(process.env.KIRI_HINT_BASE_BONUS ?? "5");
 
 // Issue #68: Path/Large File Penalty configuration (環境変数で上書き可能)
 const PATH_MISS_DELTA = parseFloat(process.env.KIRI_PATH_MISS_DELTA || "-0.5");
@@ -2245,14 +2255,12 @@ export async function contextBundle(
   }
 
   if (pathHintTargets.length > 0) {
+    const hintBoost = computeHintPriorityBoost(weights);
     for (const hintPath of pathHintTargets) {
       const candidate = ensureCandidate(candidates, hintPath);
-      const baseBoost = Math.max(weights.dependency, weights.textMatch * 0.5);
-      if (baseBoost > 0) {
-        candidate.score += baseBoost;
-      }
+      candidate.score += hintBoost;
       candidate.reasons.add(`artifact:hint:${hintPath}`);
-      candidate.pathMatchHits = Math.max(candidate.pathMatchHits, 1);
+      candidate.pathMatchHits = Math.max(candidate.pathMatchHits, 3); // Avoid graduated penalties
       candidate.matchLine ??= 1;
     }
   }

@@ -1,6 +1,6 @@
 {
   "name": "kiri-mcp-server",
-  "version": "0.9.6",
+  "version": "0.10.0",
   "description": "KIRI context extraction platform",
   "type": "module",
   "packageManager": "pnpm@9.0.0",
@@ -63,6 +63,11 @@
     "verify:tools": "tsx scripts/test/verify-all.ts --category tools",
     "verify:watch": "tsx scripts/test/verify-all.ts --category watch",
     "verify:eval": "tsx scripts/test/verify-all.ts --category eval",
+    "eval:golden": "tsx scripts/eval/run-golden.ts",
+    "eval:golden:verbose": "tsx scripts/eval/run-golden.ts --verbose",
+    "assay:evaluate": "tsx scripts/assay/run-evaluation.ts",
+    "assay:compare": "tsx scripts/assay/run-comparison.ts",
+    "assay:compare:help": "tsx scripts/assay/run-comparison.ts --help",
     "check": "pnpm run lint && pnpm run test",
     "prepublishOnly": "pnpm run build"
   },
@@ -87,6 +92,8 @@
     "eslint": "^9.9.0",
     "eslint-config-prettier": "^9.1.0",
     "eslint-plugin-import": "^2.29.1",
+    "execa": "^9.6.0",
+    "fast-check": "^4.3.0",
     "lint-staged": "^15.2.10",
     "prettier": "^3.3.3",
     "simple-git-hooks": "^2.10.0",

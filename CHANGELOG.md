@@ -5,15 +5,82 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.10.0] - 2025-11-13
 
 ### Added
 
+- **"balanced" boost profile for equal weighting of docs and implementation**
+  - New boost_profile option that applies 1.0x multiplier to both documentation and implementation files
+  - Allows docs/ directory files (via blacklistExceptions)
+  - Still penalizes config files (0.3x multiplier)
+  - No path-specific multipliers (unlike "default" profile)
+  - Works consistently across `files_search` and `context_bundle`
+  - Addresses [#63](https://github.com/CAPHTECH/kiri/issues/63) - documentation discovery issues
 - **Java language support with tree-sitter-java**
   - Symbol extraction for classes, interfaces, enums, annotations, methods, constructors, and fields
   - Javadoc comment parsing
-  - Import dependency resolution with wildcard and static import support
-  - Full test coverage with 23 test cases
+- Import dependency resolution with wildcard and static import support
+- Full test coverage with 23 test cases
+- **Artifact hints for abstract query expansion ([#76](https://github.com/CAPHTECH/kiri/issues/76))**
+  - `context_bundle` now accepts `artifacts.hints` (string arrays) so callers can pass function names or file paths as concrete breadcrumbs.
+  - Hints are merged into keyword extraction, seeded as dependency candidates when path-like, and surface in `why` tags as `artifact:hint:*`.
+  - Documented the new field (English/Japanese API guides) and published `datasets/kiri-ab.yaml` containing the two failing evaluation queries from the issue for future A/B runs.
+
+### Changed
+
+- **Refactored boost profile logic to use table-driven configuration**
+  - Created centralized `src/server/boost-profiles.ts` module with `BoostProfileConfig` interface
+  - Replaced scattered if-statements across 3 functions with configuration lookups
+  - All boost profiles (default, docs, balanced, none) now use unified `BOOST_PROFILES` table
+  - Improved maintainability: adding new profiles no longer requires modifying multiple functions
+  - Added `isValidBoostProfile()` type guard for runtime validation
+- Updated `boost_profile` parameter validation in RPC handlers to use centralized validation
+
+### Deprecated
+
+- **`config/scoring-profiles.yml` user configuration is now ignored**
+  - The table-driven design uses fixed multipliers from `BOOST_PROFILES` constant
+  - User-configured `docPenaltyMultiplier`, `configPenaltyMultiplier`, and `implBoostMultiplier` no longer have effect
+  - This trade-off was made to improve maintainability and consistency across profiles
+  - Future versions may re-introduce profile customization via a different mechanism
+
+## [0.9.9] - 2025-11-10
+
+### Added
+
+- Byte-length aware Unix domain socket fallback that automatically shortens paths and honors the `KIRI_SOCKET_DIR` override for worktrees with deep prefixes.
+- Regression tests covering fallback generation, multibyte paths, directory auto-creation, and debug messaging.
+
+### Fixed
+
+- `isDaemonRunning` and other passive health checks no longer attempt to create socket directories, preventing permission errors for non-privileged clients.
+
+## [0.9.8] - 2025-11-10
+
+### Fixed
+
+- `ensureDatabaseIndexed` now invokes `runIndexer` with `skipLocking: true`, so first-time bootstrap no longer deadlocks on its own DuckDB lock file and `kiri`/`kiri-server` can index fresh repositories without manual intervention.
+
+### Added
+
+- Added `tests/server/indexBootstrap.spec.ts` to exercise the bootstrap path (first run + consecutive run) and prevent regressions around lock release.
+
+## [0.9.7] - 2025-11-10
+
+### Added
+
+- Introduced a per-database `p-queue` pipeline plus path normalization helpers so the indexer, watcher, and bootstrap scripts all serialize DuckDB writes and share consistent lock files across symlinked paths.
+- Added comprehensive regression coverage: FTS lifecycle E2E tests, schema migration specs, legacy repo path normalization tests, watcher lock specs, and a new FTS status cache unit test to prevent future regressions.
+
+### Changed
+
+- Server runtime now reuses the new normalization utilities, persists FTS metadata (`fts_dirty`, `fts_status`, `fts_generation`), and automatically downgrades to ILIKE whenever any repo reports a dirty index; once clean it reloads FTS without restarting.
+- `scripts/test/verify-all.ts` gained configurable timeouts (coverage-aware) and MCP tool/watch/eval phases now run as part of release verification.
+
+### Fixed
+
+- `files_search` and related handlers invalidate cached FTS status as soon as `fts_dirty` / `fts_status='rebuilding'` is observed, preventing stale or crashing BM25 queries during rebuilds.
+- Resolved duckdb path/lock mismatches that previously caused repo rows inserted via symlinks to be duplicated or skipped when resolving repositories on the server.
 
 ## [0.9.6] - 2025-11-07
 

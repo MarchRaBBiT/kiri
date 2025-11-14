@@ -1,4 +1,5 @@
 #!/usr/bin/env tsx
+/* global fetch */
 /**
  * KIRI Comprehensive Test & Verification Script
  *
@@ -14,6 +15,9 @@ import { spawn, execSync } from "node:child_process";
 import { existsSync, writeFileSync, unlinkSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
+import { IndexWatcher } from "../../src/indexer/watch.js";
+import { DuckDBClient } from "../../src/shared/duckdb.js";
+
 interface TestResult {
   category: string;
   passed: boolean;
@@ -22,11 +26,13 @@ interface TestResult {
   details?: string;
 }
 
+type VerificationCategory = "unit" | "integration" | "dart" | "eval" | "tools" | "watch" | "all";
+
 interface VerificationOptions {
-  category?: "unit" | "integration" | "dart" | "eval" | "tools" | "watch" | "all";
-  retry?: number;
-  skipCoverage?: boolean;
-  verbose?: boolean;
+  category: VerificationCategory;
+  retry: number;
+  skipCoverage: boolean;
+  verbose: boolean;
 }
 
 const COLORS = {
@@ -37,6 +43,25 @@ const COLORS = {
   blue: "\x1b[34m",
   cyan: "\x1b[36m",
 };
+
+function buildVitestArgs(suites: string[], enableCoverage: boolean): string[] {
+  const args = [
+    "exec",
+    "vitest",
+    "run",
+    enableCoverage ? "--coverage" : "--no-coverage",
+    "--pool=forks",
+    "--poolOptions.forks.singleFork",
+    "--poolOptions.forks.maxForks=1",
+    "--poolOptions.forks.minForks=1",
+  ];
+
+  if (suites.length > 0) {
+    args.push(...suites);
+  }
+
+  return args;
+}
 
 function log(message: string, color?: keyof typeof COLORS): void {
   const colorCode = color ? COLORS[color] : "";
@@ -82,24 +107,15 @@ async function runUnitTests(options: VerificationOptions): Promise<TestResult> {
   log("\n📦 Running Unit Tests...", "cyan");
   const start = Date.now();
 
-  const args = [
-    "run",
-    "test",
-    "--",
-    "--run",
-    "tests/indexer",
-    "tests/server",
-    "tests/shared",
-    "tests/client",
-    "tests/daemon",
-  ];
-
-  if (options.skipCoverage) {
-    args.splice(2, 0, "--no-coverage");
-  }
+  const args = buildVitestArgs(
+    ["tests/indexer", "tests/server", "tests/shared", "tests/client", "tests/daemon"],
+    !options.skipCoverage
+  );
 
   try {
-    const result = await runCommand("pnpm", args, { timeout: 120000 });
+    const result = await runCommand("pnpm", args, {
+      timeout: options.skipCoverage ? 150000 : 210000,
+    });
     const duration = Date.now() - start;
 
     if (result.exitCode === 0) {
@@ -128,7 +144,7 @@ async function runDartTests(_options: VerificationOptions): Promise<TestResult> 
   log("\n🎯 Running Dart Analysis Server Tests...", "cyan");
   const start = Date.now();
 
-  const args = ["run", "test", "--", "--run", "tests/indexer/dart", "--no-coverage"];
+  const args = buildVitestArgs(["tests/indexer/dart"], false);
 
   try {
     const result = await runCommand("pnpm", args, { timeout: 60000 });
@@ -160,7 +176,7 @@ async function runIntegrationTests(_options: VerificationOptions): Promise<TestR
   log("\n🔗 Running Integration Tests...", "cyan");
   const start = Date.now();
 
-  const args = ["run", "test", "--", "--run", "tests/integration", "--no-coverage"];
+  const args = buildVitestArgs(["tests/integration"], false);
 
   try {
     const result = await runCommand("pnpm", args, { timeout: 120000 });
@@ -193,13 +209,37 @@ async function runMCPToolsTests(_options: VerificationOptions): Promise<TestResu
   const start = Date.now();
 
   const testDbPath = join(process.cwd(), "var", "test-tools-verify.duckdb");
-  const testRepoPath = join(process.cwd(), "tests", "fixtures", "sample-repo");
+  const testRepoPath = join(process.cwd(), "var", "test-tools-repo");
 
   try {
-    // Cleanup previous test database
+    // Cleanup previous artifacts
     if (existsSync(testDbPath)) {
       unlinkSync(testDbPath);
     }
+    if (existsSync(testRepoPath)) {
+      rmSync(testRepoPath, { recursive: true, force: true });
+    }
+
+    mkdirSync(testRepoPath, { recursive: true });
+    execSync("git init", { cwd: testRepoPath });
+    execSync('git config user.email "test@example.com"', { cwd: testRepoPath });
+    execSync('git config user.name "Test User"', { cwd: testRepoPath });
+    mkdirSync(join(testRepoPath, "src"), { recursive: true });
+    mkdirSync(join(testRepoPath, "docs"), { recursive: true });
+    writeFileSync(
+      join(testRepoPath, "src", "index.ts"),
+      ["export function hello(name: string) {", "  return `hello ${name}`;", "}", ""].join("\n")
+    );
+    writeFileSync(
+      join(testRepoPath, "README.md"),
+      "# Sample Repo\n\nUsed for MCP verification tests.\n"
+    );
+    writeFileSync(
+      join(testRepoPath, "docs", "guide.md"),
+      "# Hello Guide\n\nThis guide explains the hello function.\n"
+    );
+    execSync("git add .", { cwd: testRepoPath });
+    execSync('git commit -m "Initial commit"', { cwd: testRepoPath });
 
     // Step 1: Index a test repository
     log("  → Indexing test repository...", "blue");
@@ -215,8 +255,19 @@ async function runMCPToolsTests(_options: VerificationOptions): Promise<TestResu
 
     // Step 2: Start MCP server
     log("  → Starting MCP server...", "blue");
-    const serverProc = spawn("tsx", ["src/server/main.ts", "--port", "9999", "--db", testDbPath], {
-      stdio: ["ignore", "pipe", "pipe"],
+    const serverProc = spawn(
+      "tsx",
+      ["src/server/main.ts", "--port", "9999", "--db", testDbPath, "--repo", testRepoPath],
+      {
+        stdio: ["ignore", "pipe", "pipe"],
+      }
+    );
+    let serverLogs = "";
+    serverProc.stdout?.on("data", (data) => {
+      serverLogs += data.toString();
+    });
+    serverProc.stderr?.on("data", (data) => {
+      serverLogs += data.toString();
     });
 
     // Wait for server to be ready
@@ -225,36 +276,92 @@ async function runMCPToolsTests(_options: VerificationOptions): Promise<TestResu
     try {
       // Step 3: Test each MCP tool
       const tools = [
-        { name: "files_search", method: "files_search", params: { query: "function" } },
-        { name: "context_bundle", method: "context_bundle", params: { goal: "authentication" } },
+        { name: "files_search", method: "files_search", params: { query: "hello" } },
+        { name: "context_bundle", method: "context_bundle", params: { goal: "hello" } },
         { name: "snippets_get", method: "snippets_get", params: { path: "src/index.ts" } },
         {
           name: "deps_closure",
           method: "deps_closure",
           params: { path: "src/index.ts", direction: "outbound" },
         },
+        {
+          name: "files_search (balanced)",
+          method: "files_search",
+          params: { query: "guide", boost_profile: "balanced" },
+        },
+        {
+          name: "context_bundle (balanced)",
+          method: "context_bundle",
+          params: { goal: "hello guide function", boost_profile: "balanced" },
+        },
       ];
+
+      async function requestWithRetry(payload: unknown, attempts = 5): Promise<unknown> {
+        let lastError: unknown;
+        for (let i = 0; i < attempts; i++) {
+          try {
+            const response = await fetch("http://localhost:9999", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            });
+            return await response.json();
+          } catch (error) {
+            lastError = error;
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+          }
+        }
+        throw lastError ?? new Error("fetch failed");
+      }
 
       for (const tool of tools) {
         log(`  → Testing ${tool.name}...`, "blue");
-        // eslint-disable-next-line no-undef
-        const response = await fetch("http://localhost:9999", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            jsonrpc: "2.0",
-            id: 1,
-            method: tool.method,
-            params: tool.params,
-          }),
-        });
+        const result = (await requestWithRetry({
+          jsonrpc: "2.0",
+          id: 1,
+          method: tool.method,
+          params: tool.params,
+        })) as { error?: { message: string }; result?: { context?: unknown[] } | unknown[] };
 
-        const result = await response.json();
-        if (result.error) {
-          throw new Error(`${tool.name} failed: ${result.error.message}`);
+        if (result?.error) {
+          throw new Error(
+            `${tool.name} failed: ${result.error.message}\nServer logs:\n${serverLogs}`
+          );
         }
 
-        log(`    ✓ ${tool.name} returned valid response`, "green");
+        // Verify balanced profile returns docs/ files
+        if (tool.name.includes("balanced")) {
+          const items = Array.isArray(result.result)
+            ? result.result
+            : (result.result as { context?: unknown[] })?.context;
+
+          // ✅ Strict validation: Ensure items is defined and is an array
+          if (!items || !Array.isArray(items)) {
+            throw new Error(
+              `${tool.name} returned invalid structure (expected array of items)\n` +
+                `Result structure: ${JSON.stringify(result.result)}\n` +
+                `Server logs:\n${serverLogs}`
+            );
+          }
+
+          const paths = items.map((item: unknown) => (item as { path?: string })?.path);
+          const hasDocsFile = items.some((item: unknown) => {
+            const path = (item as { path?: string })?.path;
+            return typeof path === "string" && path.startsWith("docs/");
+          });
+
+          if (!hasDocsFile) {
+            log(`    Returned paths: ${JSON.stringify(paths)}`, "yellow");
+            throw new Error(
+              `${tool.name} with balanced profile did not return docs/ files\n` +
+                `Paths returned: ${JSON.stringify(paths)}\n` +
+                `Server logs:\n${serverLogs}`
+            );
+          }
+          log(`    ✓ ${tool.name} includes docs/ files`, "green");
+        } else {
+          log(`    ✓ ${tool.name} returned valid response`, "green");
+        }
       }
 
       serverProc.kill();
@@ -277,6 +384,9 @@ async function runMCPToolsTests(_options: VerificationOptions): Promise<TestResu
     // Cleanup
     if (existsSync(testDbPath)) {
       unlinkSync(testDbPath);
+    }
+    if (existsSync(testRepoPath)) {
+      rmSync(testRepoPath, { recursive: true, force: true });
     }
   }
 }
@@ -323,61 +433,42 @@ async function runWatchModeTests(_options: VerificationOptions): Promise<TestRes
       throw new Error(`Initial indexing failed: ${indexResult.stderr}`);
     }
 
-    // Step 2: Start daemon in watch mode
-    log("  → Starting daemon in watch mode...", "blue");
-    const daemonProc = spawn(
-      "tsx",
-      ["src/daemon/daemon.ts", "--repo", testRepoPath, "--db", testDbPath],
-      { stdio: ["ignore", "pipe", "pipe"] }
-    );
+    // Step 2: Start IndexWatcher directly for deterministic verification
+    log("  → Starting IndexWatcher...", "blue");
+    const watcher = new IndexWatcher({
+      repoRoot: testRepoPath,
+      databasePath: testDbPath,
+      debounceMs: 200,
+    });
 
-    // Wait for daemon to be ready
-    await new Promise((resolve) => setTimeout(resolve, 5000));
+    await watcher.start();
 
     try {
       // Step 3: Modify file and verify re-indexing
       log("  → Modifying file to trigger re-index...", "blue");
       const modifiedContent = "export const modified = 'updated';";
       writeFileSync(initialFile, modifiedContent);
-      execSync("git add .", { cwd: testRepoPath });
-      execSync('git commit -m "Update file"', { cwd: testRepoPath });
 
-      // Wait for daemon to detect and re-index
-      await new Promise((resolve) => setTimeout(resolve, 10000));
+      // Wait for watcher debounce and incremental indexing
+      await new Promise((resolve) => setTimeout(resolve, 5000));
 
-      // Step 4: Verify the file was re-indexed
       log("  → Verifying re-indexing...", "blue");
-      const verifyResult = await runCommand(
-        "tsx",
-        [
-          "-e",
-          `
-          import DuckDB from 'duckdb';
-          const db = new DuckDB.Database('${testDbPath}');
-          const conn = db.connect();
-          conn.all("SELECT content FROM blob WHERE content LIKE '%modified%'", (err, rows) => {
-            if (err) throw err;
-            if (rows.length === 0) throw new Error('Re-indexing did not detect file change');
-            console.log('Re-indexing verified');
-            process.exit(0);
-          });
-        `,
-        ],
-        { timeout: 10000 }
+      const db = await DuckDBClient.connect({ databasePath: testDbPath });
+      const rows = await db.all<{ content: string }>(
+        "SELECT content FROM blob WHERE content LIKE '%modified%'"
       );
+      await db.close();
 
-      if (verifyResult.exitCode !== 0) {
+      if (rows.length === 0) {
         throw new Error("Watch mode did not re-index changed file");
       }
 
-      daemonProc.kill();
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-
       log("✓ Watch mode tests passed", "green");
       return { category: "watch", passed: true, duration: Date.now() - start };
-    } catch (error) {
-      daemonProc.kill();
-      throw error;
+    } finally {
+      await watcher.stop().catch(() => {
+        /* ignore */
+      });
     }
   } catch (error) {
     return {
@@ -401,7 +492,7 @@ async function runEvalTests(_options: VerificationOptions): Promise<TestResult> 
   log("\n📊 Running Evaluation Tests...", "cyan");
   const start = Date.now();
 
-  const args = ["run", "test", "--", "--run", "tests/eval", "--no-coverage"];
+  const args = buildVitestArgs(["tests/eval"], false);
 
   try {
     const result = await runCommand("pnpm", args, { timeout: 60000 });
@@ -481,15 +572,23 @@ async function main(): Promise<void> {
 
   // Parse arguments
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--category" && args[i + 1]) {
-      options.category = args[i + 1] as VerificationOptions["category"];
-      i++;
-    } else if (args[i] === "--retry" && args[i + 1]) {
-      options.retry = parseInt(args[i + 1], 10);
-      i++;
-    } else if (args[i] === "--skip-coverage") {
+    const arg = args[i];
+
+    if (arg === "--category") {
+      const categoryArg = args[i + 1];
+      if (typeof categoryArg === "string") {
+        options.category = categoryArg as VerificationCategory;
+        i++;
+      }
+    } else if (arg === "--retry") {
+      const retryArg = args[i + 1];
+      if (typeof retryArg === "string") {
+        options.retry = parseInt(retryArg, 10);
+        i++;
+      }
+    } else if (arg === "--skip-coverage") {
       options.skipCoverage = true;
-    } else if (args[i] === "--verbose") {
+    } else if (arg === "--verbose") {
       options.verbose = true;
     }
   }

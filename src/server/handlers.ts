@@ -1,10 +1,26 @@
+import fs from "node:fs";
 import path from "node:path";
 
+import { checkFTSSchemaExists } from "../indexer/schema.js";
 import { DuckDBClient } from "../shared/duckdb.js";
 import { generateEmbedding, structuralSimilarity } from "../shared/embedding.js";
 import { encode as encodeGPT, tokenizeText } from "../shared/tokenizer.js";
 
-import { ServerContext } from "./context.js";
+import { expandAbbreviations } from "./abbreviations.js";
+import { createServerServices, ServerServices } from "./services/index.js";
+
+// Re-export extracted handlers for backward compatibility
+export {
+  snippetsGet,
+  type SnippetsGetParams,
+  type SnippetResult,
+} from "./handlers/snippets-get.js";
+import {
+  type BoostProfileName,
+  type BoostProfileConfig,
+  getBoostProfile,
+} from "./boost-profiles.js";
+import { FtsStatusCache, ServerContext } from "./context.js";
 import { coerceProfileName, loadScoringProfile, type ScoringWeights } from "./scoring.js";
 
 // Configuration file patterns (v0.8.0+: consolidated to avoid duplication)
@@ -152,6 +168,82 @@ const CONFIG_PATTERNS = [
   ".github/workflows",
 ] as const;
 
+const FTS_STATUS_CACHE_TTL_MS = 10_000;
+
+async function hasDirtyRepos(db: DuckDBClient): Promise<boolean> {
+  const statusCheck = await db.all<{ count: number }>(
+    `SELECT COUNT(*) as count FROM repo
+       WHERE fts_dirty = true OR fts_status IN ('dirty', 'rebuilding')`
+  );
+  return (statusCheck[0]?.count ?? 0) > 0;
+}
+
+async function refreshFtsStatus(context: ServerContext): Promise<FtsStatusCache> {
+  const previousReady = context.features?.fts ?? false;
+  const cache: FtsStatusCache = {
+    ready: false,
+    schemaExists: false,
+    anyDirty: false,
+    lastChecked: Date.now(),
+  };
+
+  try {
+    cache.schemaExists = await checkFTSSchemaExists(context.db);
+    if (!cache.schemaExists) {
+      context.warningManager.warnForRequest(
+        "fts-schema-missing",
+        "FTS schema not found, falling back to ILIKE"
+      );
+    } else {
+      cache.anyDirty = await hasDirtyRepos(context.db);
+      if (cache.anyDirty) {
+        context.warningManager.warnForRequest(
+          "fts-stale",
+          "FTS index is stale or rebuilding, using ILIKE fallback. Run indexer to update FTS."
+        );
+      } else {
+        await context.db.run("LOAD fts;");
+        cache.ready = true;
+      }
+    }
+  } catch (error) {
+    cache.ready = false;
+    cache.schemaExists = false;
+    context.warningManager.warnForRequest(
+      "fts-check-failed",
+      `FTS availability check failed: ${error}`
+    );
+  }
+
+  if (!context.features) {
+    context.features = {};
+  }
+  context.features.fts = cache.ready;
+  context.ftsStatusCache = cache;
+
+  if (cache.ready && !previousReady) {
+    console.info("✅ FTS recovered and enabled");
+  } else if (!cache.ready && previousReady) {
+    console.warn("⚠️  FTS became unavailable; falling back to ILIKE");
+  }
+
+  return cache;
+}
+
+async function getFreshFtsStatus(context: ServerContext): Promise<FtsStatusCache> {
+  const cache = context.ftsStatusCache;
+  if (cache && Date.now() - cache.lastChecked < FTS_STATUS_CACHE_TTL_MS) {
+    if (cache.ready) {
+      const dirtyNow = await hasDirtyRepos(context.db);
+      if (dirtyNow) {
+        return refreshFtsStatus(context);
+      }
+    }
+    return cache;
+  }
+  return refreshFtsStatus(context);
+}
+
 /**
  * Check if a file path represents a configuration file
  * Supports multiple languages: JS/TS, Python, Ruby, Go, PHP, Java, Rust, C/C++, Docker, CI/CD
@@ -189,7 +281,7 @@ export interface FilesSearchParams {
   ext?: string;
   path_prefix?: string;
   limit?: number;
-  boost_profile?: "default" | "docs" | "none";
+  boost_profile?: BoostProfileName;
   compact?: boolean; // If true, omit preview to reduce token usage
 }
 
@@ -202,28 +294,13 @@ export interface FilesSearchResult {
   score: number;
 }
 
-export interface SnippetsGetParams {
-  path: string;
-  start_line?: number;
-  end_line?: number;
-  compact?: boolean; // If true, omit content payload entirely
-  includeLineNumbers?: boolean; // If true, prefix content lines with line numbers
-}
-
-export interface SnippetResult {
-  path: string;
-  startLine: number;
-  endLine: number;
-  content?: string;
-  totalLines: number;
-  symbolName: string | null;
-  symbolKind: string | null;
-}
+// SnippetsGetParams and SnippetResult are now exported from ./handlers/snippets-get.js
 
 export interface ContextBundleArtifacts {
   editing_path?: string;
   failing_tests?: string[];
   last_diff?: string;
+  hints?: string[];
 }
 
 export interface ContextBundleParams {
@@ -231,7 +308,7 @@ export interface ContextBundleParams {
   artifacts?: ContextBundleArtifacts;
   limit?: number;
   profile?: string;
-  boost_profile?: "default" | "docs" | "none";
+  boost_profile?: BoostProfileName;
   compact?: boolean; // If true, omit preview field to reduce token usage
   includeTokensEstimate?: boolean; // If true, compute tokens_estimate (slower)
 }
@@ -248,6 +325,29 @@ export interface ContextBundleResult {
   context: ContextBundleItem[];
   tokens_estimate?: number;
   warnings?: string[]; // Client-visible warnings (e.g., breaking changes, deprecations)
+}
+
+function normalizeArtifactHints(hints?: string[]): string[] {
+  if (!Array.isArray(hints)) {
+    return [];
+  }
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const rawHint of hints) {
+    if (typeof rawHint !== "string") {
+      continue;
+    }
+    const trimmed = rawHint.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+    normalized.push(trimmed);
+    seen.add(trimmed);
+    if (normalized.length >= MAX_ARTIFACT_HINTS) {
+      break;
+    }
+  }
+  return normalized;
 }
 
 export interface SemanticRerankCandidateInput {
@@ -274,7 +374,6 @@ export interface SemanticRerankResult {
 }
 
 const DEFAULT_SEARCH_LIMIT = 50;
-const DEFAULT_SNIPPET_WINDOW = 150;
 const DEFAULT_BUNDLE_LIMIT = 7; // Reduced from 12 to optimize token usage
 const MAX_BUNDLE_LIMIT = 20;
 const MAX_KEYWORDS = 12;
@@ -284,12 +383,18 @@ const MAX_DEPENDENCY_SEEDS_QUERY_LIMIT = 100; // SQL injection防御用の上限
 const NEARBY_LIMIT = 6;
 const FALLBACK_SNIPPET_WINDOW = 40; // Reduced from 120 to optimize token usage
 const MAX_RERANK_LIMIT = 50;
+const MAX_ARTIFACT_HINTS = 8;
+const SAFE_PATH_PATTERN = /^[a-zA-Z0-9_.\-/]+$/;
+
+// Issue #68: Path/Large File Penalty configuration (環境変数で上書き可能)
+const PATH_MISS_DELTA = parseFloat(process.env.KIRI_PATH_MISS_DELTA || "-0.5");
+const LARGE_FILE_DELTA = parseFloat(process.env.KIRI_LARGE_FILE_DELTA || "-0.8");
 const MAX_WHY_TAGS = 10;
 
 // 項目3: whyタグの優先度マップ（低い数値ほど高優先度）
 // All actual tag prefixes used in the codebase
 const WHY_TAG_PRIORITY: Record<string, number> = {
-  artifact: 1, // User-provided hints (editing_path, failing_tests)
+  artifact: 1, // User-provided hints (editing_path, failing_tests, hints)
   phrase: 2, // Multi-word literal matches (strongest signal)
   text: 3, // Single keyword matches
   "path-phrase": 4, // Path contains multi-word phrase
@@ -523,6 +628,85 @@ function findFirstMatchLine(content: string, query: string): number {
   return prefix.length === 0 ? 1 : prefixLines.length;
 }
 
+/**
+ * ペナルティ影響の記録（Issue #68: Path/Large File Penalties）
+ */
+interface PenaltyImpact {
+  kind: "path-miss" | "large-file";
+  delta: number; // Always negative
+  details?: Record<string, unknown>;
+}
+
+/**
+ * ペナルティ機能フラグ（Issue #68）
+ */
+interface PenaltyFlags {
+  pathPenalty: boolean; // KIRI_PATH_PENALTY
+  largeFilePenalty: boolean; // KIRI_LARGE_FILE_PENALTY
+}
+
+/**
+ * クエリ統計（Issue #68: Path Miss Penalty判定用）
+ */
+interface QueryStats {
+  wordCount: number;
+  avgWordLength: number;
+}
+
+/**
+ * pathMatchHits分布の型（Issue #68: Telemetry）
+ * LDE: 型駆動設計でデータ構造を明示
+ */
+interface PathMatchDistribution {
+  readonly zero: number; // pathMatchHits === 0 の候補数
+  readonly one: number; // pathMatchHits === 1 の候補数
+  readonly two: number; // pathMatchHits === 2 の候補数
+  readonly three: number; // pathMatchHits === 3 の候補数
+  readonly fourPlus: number; // pathMatchHits >= 4 の候補数
+  readonly total: number; // 全候補数
+}
+
+/**
+ * ペナルティ適用テレメトリー（Issue #68: Telemetry）
+ * LDE: イミュータブルなデータ構造
+ */
+interface PenaltyTelemetry {
+  readonly pathMissPenalties: number; // Path miss penalty適用数
+  readonly largeFilePenalties: number; // Large file penalty適用数
+  readonly totalCandidates: number; // 全候補数
+  readonly pathMatchDistribution: PathMatchDistribution; // pathMatchHits分布
+  readonly scoreStats: {
+    // スコア統計
+    readonly min: number;
+    readonly max: number;
+    readonly mean: number;
+    readonly median: number;
+  };
+}
+
+/**
+ * 段階的ペナルティの設定（Issue #68: Graduated Penalty）
+ * LDE: 型駆動設計で不変条件を保証
+ *
+ * ADR 002: Graduated Penalty System
+ * - tier0Delta: pathMatchHits === 0 (no path evidence)
+ * - tier1Delta: pathMatchHits === 1 (weak path evidence)
+ * - tier2Delta: pathMatchHits === 2 (moderate path evidence)
+ * - pathMatchHits >= 3: no penalty (strong path evidence)
+ *
+ * Invariants:
+ * - All delta values must be <= 0 (non-positive)
+ * - tier0Delta < tier1Delta < tier2Delta <= 0 (monotonicity)
+ */
+interface GraduatedPenaltyConfig {
+  readonly enabled: boolean; // KIRI_GRADUATED_PENALTY=1
+  readonly minWordCount: number; // Default: 2
+  readonly minAvgWordLength: number; // Default: 4.0
+  readonly tier0Delta: number; // pathMatchHits === 0, default: -0.8
+  readonly tier1Delta: number; // pathMatchHits === 1, default: -0.4
+  readonly tier2Delta: number; // pathMatchHits === 2, default: -0.2
+}
+
 interface CandidateInfo {
   path: string;
   score: number;
@@ -535,6 +719,8 @@ interface CandidateInfo {
   ext: string | null;
   embedding: number[] | null;
   semanticSimilarity: number | null;
+  pathMatchHits: number; // Track path match count for path-miss penalty (Issue #68)
+  penalties: PenaltyImpact[]; // Penalty log for telemetry (Issue #68)
 }
 
 interface FileContentCacheEntry {
@@ -728,6 +914,8 @@ function ensureCandidate(map: Map<string, CandidateInfo>, filePath: string): Can
       ext: null,
       embedding: null,
       semanticSimilarity: null,
+      pathMatchHits: 0, // Issue #68: Track path match count
+      penalties: [], // Issue #68: Penalty log for telemetry
     };
     map.set(filePath, candidate);
   }
@@ -876,19 +1064,6 @@ function buildSnippetPreview(content: string, startLine: number, endLine: number
   return `${snippet.slice(0, 239)}…`;
 }
 
-function prependLineNumbers(snippet: string, startLine: number): string {
-  const lines = snippet.split(/\r?\n/);
-  if (lines.length === 0) {
-    return snippet;
-  }
-  // Calculate required width from the last line number (dynamic sizing)
-  const endLine = startLine + lines.length - 1;
-  const width = String(endLine).length;
-  return lines
-    .map((line, index) => `${String(startLine + index).padStart(width, " ")}→${line}`)
-    .join("\n");
-}
-
 /**
  * トークン数を推定（コンテンツベース）
  * 実際のGPTトークナイザーを使用して正確にカウント
@@ -927,6 +1102,25 @@ function splitQueryWords(query: string): string[] {
 }
 
 /**
+ * パス固有のマルチプライヤーを取得（最長プレフィックスマッチ）
+ * 配列の順序に依存せず、常に最長一致のプレフィックスを選択
+ * @param filePath - ファイルパス
+ * @param profileConfig - ブーストプロファイル設定
+ * @returns パス固有のマルチプライヤー（マッチなしの場合は1.0）
+ */
+function getPathMultiplier(filePath: string, profileConfig: BoostProfileConfig): number {
+  let bestMatch = { prefix: "", multiplier: 1.0 };
+
+  for (const { prefix, multiplier } of profileConfig.pathMultipliers) {
+    if (filePath.startsWith(prefix) && prefix.length > bestMatch.prefix.length) {
+      bestMatch = { prefix, multiplier };
+    }
+  }
+
+  return bestMatch.multiplier;
+}
+
+/**
  * files_search専用のファイルタイプブースト適用（v0.7.0+: 設定可能な乗算的ペナルティ）
  * context_bundleと同じ乗算的ペナルティロジックを使用
  * @param path - ファイルパス
@@ -938,8 +1132,8 @@ function splitQueryWords(query: string): string[] {
 function applyFileTypeBoost(
   path: string,
   baseScore: number,
-  profile: "default" | "docs" | "none" = "default",
-  weights: ScoringWeights
+  profileConfig: BoostProfileConfig,
+  _weights: ScoringWeights
 ): number {
   // Blacklisted directories that are almost always irrelevant for code context
   const blacklistedDirs = [
@@ -951,60 +1145,48 @@ function applyFileTypeBoost(
     ".git/",
     "node_modules/",
   ];
-  if (blacklistedDirs.some((dir) => path.startsWith(dir))) {
-    return -100; // Effectively remove it
-  }
 
-  if (profile === "none") {
-    return baseScore;
-  }
-
-  // Extract file extension for type detection
-  const ext = path.includes(".") ? path.substring(path.lastIndexOf(".")) : null;
-
-  // ✅ UNIFIED LOGIC: Use same multiplicative penalties as context_bundle
-  if (profile === "docs") {
-    // Boost documentation files
-    if (path.endsWith(".md") || path.endsWith(".yaml") || path.endsWith(".yml")) {
-      return baseScore * 1.5; // 50% boost (same as context_bundle)
+  for (const dir of blacklistedDirs) {
+    if (path.startsWith(dir)) {
+      // ✅ Decoupled: Check denylist overrides from profile config
+      if (profileConfig.denylistOverrides.includes(dir)) {
+        continue;
+      }
+      return -100; // Effectively remove it
     }
-    // Penalty for implementation files in docs mode
-    if (
-      path.startsWith("src/") &&
-      (path.endsWith(".ts") || path.endsWith(".js") || path.endsWith(".tsx"))
-    ) {
-      return baseScore * 0.5; // 50% penalty
-    }
-    return baseScore;
   }
 
-  // Default profile: Use configurable multiplicative penalties
-  let multiplier = 1.0;
   const fileName = path.split("/").pop() ?? "";
+  const ext = path.includes(".") ? path.substring(path.lastIndexOf(".")) : null;
+  let multiplier = 1.0;
 
-  // ✅ Step 1: Config files get strongest penalty (95% reduction)
+  // ✅ Step 1: Config files
   if (isConfigFile(path, fileName)) {
-    multiplier *= weights.configPenaltyMultiplier; // 0.05 = 95% reduction
+    multiplier *= profileConfig.fileTypeMultipliers.config;
     return baseScore * multiplier;
   }
 
-  // ✅ Step 2: Documentation files get moderate penalty (50% reduction)
+  // ✅ Step 2: Documentation files
   const docExtensions = [".md", ".yaml", ".yml", ".mdc"];
   if (docExtensions.some((docExt) => path.endsWith(docExt))) {
-    multiplier *= weights.docPenaltyMultiplier; // 0.5 = 50% reduction
+    multiplier *= profileConfig.fileTypeMultipliers.doc;
     return baseScore * multiplier;
   }
 
-  // ✅ Step 3: Implementation file boosts
-  if (path.startsWith("src/app/")) {
-    multiplier *= weights.implBoostMultiplier * 1.4; // Extra boost for app files
-  } else if (path.startsWith("src/components/")) {
-    multiplier *= weights.implBoostMultiplier * 1.3;
-  } else if (path.startsWith("src/lib/")) {
-    multiplier *= weights.implBoostMultiplier * 1.2;
-  } else if (path.startsWith("src/")) {
+  // ✅ Step 3: Implementation files with path-specific boosts
+  const implMultiplier = profileConfig.fileTypeMultipliers.impl;
+
+  // ✅ Use longest-prefix-match logic (order-independent)
+  const pathBoost = getPathMultiplier(path, profileConfig);
+  if (pathBoost !== 1.0) {
+    multiplier *= implMultiplier * pathBoost;
+    return baseScore * multiplier;
+  }
+
+  // Fallback for other src/ files
+  if (path.startsWith("src/")) {
     if (ext === ".ts" || ext === ".tsx" || ext === ".js") {
-      multiplier *= weights.implBoostMultiplier; // Base impl boost
+      multiplier *= implMultiplier;
     }
   }
 
@@ -1030,12 +1212,18 @@ function applyPathBasedScoring(
     return;
   }
 
+  // hasAddedScore gates additive boosts; pathMatchHits/reasons still track every hit for penalties/debugging.
+  let hasAddedScore = false;
+
   // フレーズがパスに完全一致する場合（最高の重み）
   for (const phrase of extractedTerms.phrases) {
     if (lowerPath.includes(phrase)) {
-      candidate.score += weights.pathMatch * 1.5; // 1.5倍のブースト
+      if (!hasAddedScore) {
+        candidate.score += weights.pathMatch * 1.5; // 1.5倍のブースト
+        hasAddedScore = true;
+      }
       candidate.reasons.add(`path-phrase:${phrase}`);
-      return; // 最初のマッチのみ適用
+      candidate.pathMatchHits++; // Issue #68: Track path match for penalty calculation
     }
   }
 
@@ -1043,18 +1231,83 @@ function applyPathBasedScoring(
   const pathParts = lowerPath.split("/");
   for (const segment of extractedTerms.pathSegments) {
     if (pathParts.includes(segment)) {
-      candidate.score += weights.pathMatch;
+      if (!hasAddedScore) {
+        candidate.score += weights.pathMatch;
+        hasAddedScore = true;
+      }
       candidate.reasons.add(`path-segment:${segment}`);
-      return; // 最初のマッチのみ適用
+      candidate.pathMatchHits++; // Issue #68: Track path match for penalty calculation
     }
   }
 
   // 通常のキーワードがパスに含まれる場合（低い重み）
+  const matchedKeywords = new Set<string>();
+
   for (const keyword of extractedTerms.keywords) {
     if (lowerPath.includes(keyword)) {
-      candidate.score += weights.pathMatch * 0.5; // 0.5倍のブースト
+      if (!hasAddedScore) {
+        candidate.score += weights.pathMatch * 0.5; // 0.5倍のブースト
+        hasAddedScore = true;
+      }
       candidate.reasons.add(`path-keyword:${keyword}`);
-      return; // 最初のマッチのみ適用
+      candidate.pathMatchHits++; // Issue #68: Track path match for penalty calculation
+      matchedKeywords.add(keyword); // Track for abbreviation expansion
+    }
+  }
+
+  // ADR 003: Abbreviation expansion for keywords with zero exact matches
+  // Avoid double-counting by only expanding keywords that didn't match exactly
+  // Skip abbreviation expansion for files that will be heavily penalized (test/config/lock files)
+  const fileName = lowerPath.split("/").pop() ?? "";
+  const testPatterns = [".spec.ts", ".spec.js", ".test.ts", ".test.js", ".spec.tsx", ".test.tsx"];
+  const lockFiles = [
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+    "bun.lockb",
+    "gemfile.lock",
+    "cargo.lock",
+    "poetry.lock",
+  ];
+  const configPatterns = [
+    "tsconfig.json",
+    "vite.config",
+    "vitest.config",
+    "eslint.config",
+    "prettier.config",
+    "package.json",
+    ".env",
+    "dockerfile",
+  ];
+
+  const shouldSkipAbbreviation =
+    testPatterns.some((pattern) => lowerPath.endsWith(pattern)) ||
+    lockFiles.some((lock) => fileName === lock) ||
+    configPatterns.some((cfg) => fileName.includes(cfg));
+
+  if (!shouldSkipAbbreviation) {
+    for (const keyword of extractedTerms.keywords) {
+      if (matchedKeywords.has(keyword)) {
+        continue; // Skip keywords that already matched exactly
+      }
+
+      const expandedTerms = expandAbbreviations(keyword);
+
+      // Try each expanded variant (except the original keyword itself)
+      for (const term of expandedTerms) {
+        if (term === keyword) continue; // Skip original to avoid duplicate check
+
+        if (lowerPath.includes(term)) {
+          // Lower weight (0.4x) for abbreviation-expanded matches
+          if (!hasAddedScore) {
+            candidate.score += weights.pathMatch * 0.4;
+            hasAddedScore = true;
+          }
+          candidate.reasons.add(`abbr-path:${keyword}→${term}`);
+          candidate.pathMatchHits++; // Count for penalty calculation
+          break; // Only count first match per keyword to avoid over-boosting
+        }
+      }
     }
   }
 }
@@ -1070,7 +1323,7 @@ function applyAdditiveFilePenalties(
   path: string,
   lowerPath: string,
   fileName: string,
-  profile: "default" | "docs" | "none"
+  profileConfig: BoostProfileConfig
 ): boolean {
   // Blacklisted directories - effectively remove
   const blacklistedDirs = [
@@ -1095,12 +1348,12 @@ function applyAdditiveFilePenalties(
     "tmp/",
     "temp/",
   ];
+
   for (const dir of blacklistedDirs) {
     if (path.startsWith(dir)) {
-      // ✅ FIX (v0.9.0): boost_profile="docs"の場合はdocs/ブラックリストをスキップ
-      // これによりドキュメント検索が正しく機能する
-      if (profile === "docs" && dir === "docs/") {
-        continue; // このブラックリストエントリをスキップ
+      // ✅ Decoupled: Check denylist overrides from profile config
+      if (profileConfig.denylistOverrides.includes(dir)) {
+        continue; // Skip this blacklisted directory
       }
       candidate.score = -100;
       candidate.reasons.add("penalty:blacklisted-dir");
@@ -1132,7 +1385,7 @@ function applyAdditiveFilePenalties(
     return true;
   }
 
-  // Configuration files - strong penalty
+  // Configuration files - penalty handling depends on profile
   const configPatterns = [
     ".config.js",
     ".config.ts",
@@ -1155,6 +1408,12 @@ function applyAdditiveFilePenalties(
     fileName === "docker-compose.yml" ||
     fileName === "docker-compose.yaml"
   ) {
+    // ✅ Use explicit flag instead of magic number (0.3) to determine behavior
+    // This decouples profile detection from multiplier values
+    if (profileConfig.skipConfigAdditivePenalty) {
+      return false; // Continue to multiplicative penalty only
+    }
+    // For other profiles, apply strong additive penalty
     candidate.score -= 1.5;
     candidate.reasons.add("penalty:config-file");
     return true;
@@ -1179,58 +1438,56 @@ function applyFileTypeMultipliers(
   candidate: CandidateInfo,
   path: string,
   ext: string | null,
-  profile: "default" | "docs" | "none",
-  weights: ScoringWeights
+  profileConfig: BoostProfileConfig,
+  _weights: ScoringWeights
 ): void {
-  if (profile === "none") {
-    return;
+  const fileName = path.split("/").pop() ?? "";
+
+  // ✅ Step 1: Config files
+  if (isConfigFile(path, fileName)) {
+    candidate.scoreMultiplier *= profileConfig.fileTypeMultipliers.config;
+    candidate.reasons.add("penalty:config-file");
+    return; // Don't apply impl boosts to config files
   }
 
-  // ✅ CRITICAL SAFETY: profile="docs" mode boosts docs, skips penalties
-  if (profile === "docs") {
-    const docExtensions = [".md", ".yaml", ".yml", ".mdc"];
-    if (docExtensions.some((docExt) => path.endsWith(docExt))) {
-      candidate.scoreMultiplier *= 1.5; // 50% boost for docs
+  // ✅ Step 2: Documentation files
+  const docExtensions = [".md", ".yaml", ".yml", ".mdc"];
+  if (docExtensions.some((docExt) => path.endsWith(docExt))) {
+    const docMultiplier = profileConfig.fileTypeMultipliers.doc;
+    candidate.scoreMultiplier *= docMultiplier;
+
+    if (docMultiplier > 1.0) {
       candidate.reasons.add("boost:doc-file");
+    } else if (docMultiplier < 1.0) {
+      candidate.reasons.add("penalty:doc-file");
     }
-    // No penalty for implementation files in "docs" mode
-    return;
+    return; // Don't apply impl boosts to docs
   }
 
-  // DEFAULT PROFILE: Use MULTIPLICATIVE penalties for config/docs, MULTIPLICATIVE boosts for impl files
-  if (profile === "default") {
-    const fileName = path.split("/").pop() ?? "";
+  // ✅ Step 3: Implementation files with path-specific boosts
+  const implMultiplier = profileConfig.fileTypeMultipliers.impl;
 
-    // ✅ Step 1: Config files get strongest penalty (95% reduction)
-    if (isConfigFile(path, fileName)) {
-      candidate.scoreMultiplier *= weights.configPenaltyMultiplier; // 0.05 = 95% reduction
-      candidate.reasons.add("penalty:config-file");
-      return; // Don't apply impl boosts to config files
-    }
+  // ✅ Use longest-prefix-match logic (order-independent)
+  const pathBoost = getPathMultiplier(path, profileConfig);
+  if (pathBoost !== 1.0) {
+    candidate.scoreMultiplier *= implMultiplier * pathBoost;
 
-    // ✅ Step 2: Documentation files get moderate penalty (50% reduction)
-    const docExtensions = [".md", ".yaml", ".yml", ".mdc"];
-    if (docExtensions.some((docExt) => path.endsWith(docExt))) {
-      candidate.scoreMultiplier *= weights.docPenaltyMultiplier; // 0.5 = 50% reduction
-      candidate.reasons.add("penalty:doc-file");
-      return; // Don't apply impl boosts to docs
-    }
-
-    // ✅ Step 3: Implementation files get multiplicative boost
+    // Add specific reason based on matched path
     if (path.startsWith("src/app/")) {
-      candidate.scoreMultiplier *= weights.implBoostMultiplier * 1.4; // Extra boost for app files
       candidate.reasons.add("boost:app-file");
     } else if (path.startsWith("src/components/")) {
-      candidate.scoreMultiplier *= weights.implBoostMultiplier * 1.3;
       candidate.reasons.add("boost:component-file");
     } else if (path.startsWith("src/lib/")) {
-      candidate.scoreMultiplier *= weights.implBoostMultiplier * 1.2;
       candidate.reasons.add("boost:lib-file");
-    } else if (path.startsWith("src/")) {
-      if (ext === ".ts" || ext === ".tsx" || ext === ".js") {
-        candidate.scoreMultiplier *= weights.implBoostMultiplier;
-        candidate.reasons.add("boost:impl-file");
-      }
+    }
+    return;
+  }
+
+  // Fallback for other src/ files
+  if (path.startsWith("src/")) {
+    if (ext === ".ts" || ext === ".tsx" || ext === ".js") {
+      candidate.scoreMultiplier *= implMultiplier;
+      candidate.reasons.add("boost:impl-file");
     }
   }
 }
@@ -1250,14 +1507,10 @@ function applyFileTypeMultipliers(
 function applyBoostProfile(
   candidate: CandidateInfo,
   row: { path: string; ext: string | null },
-  profile: "default" | "docs" | "none",
+  profileConfig: BoostProfileConfig,
   weights: ScoringWeights,
   extractedTerms?: ExtractedTerms
 ): void {
-  if (profile === "none") {
-    return;
-  }
-
   const { path, ext } = row;
   const lowerPath = path.toLowerCase();
   const fileName = path.split("/").pop() ?? "";
@@ -1266,13 +1519,19 @@ function applyBoostProfile(
   applyPathBasedScoring(candidate, lowerPath, weights, extractedTerms);
 
   // Step 2: 加算的ペナルティ（ブラックリスト、テスト、lock、設定、マイグレーション）
-  const shouldStop = applyAdditiveFilePenalties(candidate, path, lowerPath, fileName, profile);
+  const shouldStop = applyAdditiveFilePenalties(
+    candidate,
+    path,
+    lowerPath,
+    fileName,
+    profileConfig
+  );
   if (shouldStop) {
     return; // ペナルティが適用された場合は処理終了
   }
 
   // Step 3: ファイルタイプ別の乗算的ペナルティ/ブースト
-  applyFileTypeMultipliers(candidate, path, ext, profile, weights);
+  applyFileTypeMultipliers(candidate, path, ext, profileConfig, weights);
 }
 
 export async function filesSearch(
@@ -1288,7 +1547,9 @@ export async function filesSearch(
   }
 
   const limit = normalizeLimit(params.limit);
-  const hasFTS = context.features?.fts ?? false;
+
+  const ftsStatus = await getFreshFtsStatus(context);
+  const hasFTS = ftsStatus.ready;
 
   let sql: string;
   let values: unknown[];
@@ -1372,6 +1633,7 @@ export async function filesSearch(
   const rows = await db.all<FileRow>(sql, values);
 
   const boostProfile = params.boost_profile ?? "default";
+  const profileConfig = getBoostProfile(boostProfile);
 
   // ✅ v0.7.0+: Load configurable scoring weights for unified boosting logic
   // Note: filesSearch doesn't have a separate profile parameter, uses default weights
@@ -1395,7 +1657,10 @@ export async function filesSearch(
       }
 
       const baseScore = row.score ?? 1.0; // FTS時はBM25スコア、ILIKE時は1.0
-      const boostedScore = applyFileTypeBoost(row.path, baseScore, boostProfile, weights);
+      const boostedScore =
+        boostProfile === "none"
+          ? baseScore
+          : applyFileTypeBoost(row.path, baseScore, profileConfig, weights);
 
       const result: FilesSearchResult = {
         path: row.path,
@@ -1414,122 +1679,299 @@ export async function filesSearch(
     .sort((a, b) => b.score - a.score); // スコアの高い順に再ソート
 }
 
-export async function snippetsGet(
-  context: ServerContext,
-  params: SnippetsGetParams
-): Promise<SnippetResult> {
-  const { db, repoId } = context;
-  if (!params.path) {
-    throw new Error(
-      "snippets_get requires a file path. Specify a tracked text file path to continue."
-    );
+// snippetsGet has been extracted to ./handlers/snippets-get.ts and re-exported above
+
+// ============================================================================
+// Issue #68: Path/Large File Penalty Helper Functions
+// ============================================================================
+
+/**
+ * 環境変数からペナルティ機能フラグを読み取る
+ */
+function readPenaltyFlags(): PenaltyFlags {
+  return {
+    pathPenalty: process.env.KIRI_PATH_PENALTY === "1",
+    largeFilePenalty: process.env.KIRI_LARGE_FILE_PENALTY === "1",
+  };
+}
+
+/**
+ * クエリ統計を計算（単語数と平均単語長）
+ */
+function computeQueryStats(goal: string): QueryStats {
+  const words = goal
+    .trim()
+    .split(/\s+/)
+    .filter((w) => w.length > 0);
+  const totalLength = words.reduce((sum, w) => sum + w.length, 0);
+  return {
+    wordCount: words.length,
+    avgWordLength: words.length > 0 ? totalLength / words.length : 0,
+  };
+}
+
+/**
+ * Path Miss Penaltyをcandidateに適用（レガシー: Binary penalty）
+ * 条件: wordCount >= 2 AND avgWordLength >= 4 AND pathMatchHits === 0
+ *
+ * @deprecated Use applyGraduatedPenalty() instead (ADR 002)
+ */
+function applyPathMissPenalty(candidate: CandidateInfo, queryStats: QueryStats): void {
+  if (queryStats.wordCount >= 2 && queryStats.avgWordLength >= 4 && candidate.pathMatchHits === 0) {
+    candidate.score += PATH_MISS_DELTA; // -0.5
+    recordPenaltyEvent(candidate, "path-miss", PATH_MISS_DELTA, {
+      wordCount: queryStats.wordCount,
+      avgWordLength: queryStats.avgWordLength,
+      pathMatchHits: candidate.pathMatchHits,
+    });
   }
+}
 
-  const rows = await db.all<FileWithBinaryRow>(
-    `
-      SELECT f.path, f.lang, f.ext, f.is_binary, b.content
-      FROM file f
-      JOIN blob b ON b.hash = f.blob_hash
-      WHERE f.repo_id = ? AND f.path = ?
-      LIMIT 1
-    `,
-    [repoId, params.path]
-  );
+/**
+ * 段階的ペナルティをcandidateに適用（Issue #68: Graduated Penalty）
+ * ADR 002: Graduated Penalty System
+ *
+ * @param candidate Candidate to apply penalty to
+ * @param queryStats Query statistics for eligibility check
+ * @param config Graduated penalty configuration
+ */
+function applyGraduatedPenalty(
+  candidate: CandidateInfo,
+  queryStats: QueryStats,
+  config: GraduatedPenaltyConfig
+): void {
+  const penalty = computeGraduatedPenalty(candidate.pathMatchHits, queryStats, config);
 
-  if (rows.length === 0) {
-    throw new Error(
-      "Requested snippet file was not indexed. Re-run the indexer or choose another path."
-    );
+  if (penalty !== 0) {
+    candidate.score += penalty;
+    recordPenaltyEvent(candidate, "path-miss", penalty, {
+      wordCount: queryStats.wordCount,
+      avgWordLength: queryStats.avgWordLength,
+      pathMatchHits: candidate.pathMatchHits,
+      tier:
+        candidate.pathMatchHits === 0
+          ? "tier0"
+          : candidate.pathMatchHits === 1
+            ? "tier1"
+            : candidate.pathMatchHits === 2
+              ? "tier2"
+              : "no-penalty",
+    });
   }
+}
 
-  const row = rows[0];
-  if (!row) {
-    throw new Error(
-      "Requested snippet file was not indexed. Re-run the indexer or choose another path."
-    );
+/**
+ * Large File Penaltyをcandidateに適用
+ * 条件: totalLines > 500 AND matchLine > 120
+ * TODO(Issue #68): Add "no symbol at match location" check after selectSnippet integration
+ */
+function applyLargeFilePenalty(candidate: CandidateInfo): void {
+  const { totalLines, matchLine } = candidate;
+  if (totalLines !== null && totalLines > 500 && matchLine !== null && matchLine > 120) {
+    candidate.score += LARGE_FILE_DELTA; // -0.8
+    recordPenaltyEvent(candidate, "large-file", LARGE_FILE_DELTA, {
+      totalLines,
+      matchLine,
+    });
   }
+}
 
-  if (row.is_binary) {
-    throw new Error(
-      "Binary snippets are not supported. Choose a text file to preview its content."
-    );
-  }
+/**
+ * ペナルティイベントを記録（テレメトリ用）
+ */
+function recordPenaltyEvent(
+  candidate: CandidateInfo,
+  kind: "path-miss" | "large-file",
+  delta: number,
+  details: Record<string, unknown>
+): void {
+  candidate.penalties.push({ kind, delta, details });
+  candidate.reasons.add(`penalty:${kind}`);
+}
 
-  if (row.content === null) {
-    throw new Error("Snippet content is unavailable. Re-run the indexer to refresh DuckDB state.");
-  }
+/**
+ * pathMatchHits分布を計算（Issue #68: Telemetry）
+ * LDE: 純粋関数として実装（副作用なし、イミュータブル）
+ */
+function computePathMatchDistribution(candidates: readonly CandidateInfo[]): PathMatchDistribution {
+  let zero = 0;
+  let one = 0;
+  let two = 0;
+  let three = 0;
+  let fourPlus = 0;
 
-  const lines = row.content.split(/\r?\n/);
-  const totalLines = lines.length;
-  const snippetRows = await db.all<SnippetRow>(
-    `
-      SELECT s.snippet_id, s.start_line, s.end_line, s.symbol_id, sym.name AS symbol_name, sym.kind AS symbol_kind
-      FROM snippet s
-      LEFT JOIN symbol sym
-        ON sym.repo_id = s.repo_id
-       AND sym.path = s.path
-       AND sym.symbol_id = s.symbol_id
-      WHERE s.repo_id = ? AND s.path = ?
-      ORDER BY s.start_line
-    `,
-    [repoId, params.path]
-  );
-
-  const requestedStart = params.start_line ?? 1;
-  const requestedEnd =
-    params.end_line ?? Math.min(totalLines, requestedStart + DEFAULT_SNIPPET_WINDOW - 1);
-
-  const useSymbolSnippets = snippetRows.length > 0 && params.end_line === undefined;
-
-  let snippetSelection: SnippetRow | null = null;
-  if (useSymbolSnippets) {
-    snippetSelection =
-      snippetRows.find(
-        (snippet) => requestedStart >= snippet.start_line && requestedStart <= snippet.end_line
-      ) ?? null;
-    if (!snippetSelection) {
-      const firstSnippet = snippetRows[0];
-      if (firstSnippet && requestedStart < firstSnippet.start_line) {
-        snippetSelection = firstSnippet;
-      } else {
-        snippetSelection = snippetRows[snippetRows.length - 1] ?? null;
-      }
-    }
-  }
-
-  let startLine: number;
-  let endLine: number;
-  let symbolName: string | null = null;
-  let symbolKind: string | null = null;
-
-  if (snippetSelection) {
-    startLine = snippetSelection.start_line;
-    endLine = snippetSelection.end_line;
-    symbolName = snippetSelection.symbol_name;
-    symbolKind = snippetSelection.symbol_kind;
-  } else {
-    startLine = Math.max(1, Math.min(totalLines, requestedStart));
-    endLine = Math.max(startLine, Math.min(totalLines, requestedEnd));
-  }
-
-  const isCompact = params.compact === true;
-  const addLineNumbers = params.includeLineNumbers === true && !isCompact;
-
-  let content: string | undefined;
-  if (!isCompact) {
-    const snippetContent = lines.slice(startLine - 1, endLine).join("\n");
-    content = addLineNumbers ? prependLineNumbers(snippetContent, startLine) : snippetContent;
+  for (const candidate of candidates) {
+    const hits = candidate.pathMatchHits;
+    if (hits === 0) zero++;
+    else if (hits === 1) one++;
+    else if (hits === 2) two++;
+    else if (hits === 3) three++;
+    else fourPlus++;
   }
 
   return {
-    path: row.path,
-    startLine,
-    endLine,
-    ...(content !== undefined && { content }),
-    totalLines,
-    symbolName,
-    symbolKind,
+    zero,
+    one,
+    two,
+    three,
+    fourPlus,
+    total: candidates.length,
   };
+}
+
+/**
+ * スコア統計を計算（Issue #68: Telemetry）
+ * LDE: 純粋関数として実装（副作用なし、イミュータブル）
+ */
+function computeScoreStats(candidates: readonly CandidateInfo[]): {
+  min: number;
+  max: number;
+  mean: number;
+  median: number;
+} {
+  if (candidates.length === 0) {
+    return { min: 0, max: 0, mean: 0, median: 0 };
+  }
+
+  const scores = candidates.map((c) => c.score).sort((a, b) => a - b);
+  const sum = scores.reduce((acc, s) => acc + s, 0);
+  const mean = sum / scores.length;
+  const median = scores[Math.floor(scores.length / 2)] ?? 0;
+
+  return {
+    min: scores[0] ?? 0,
+    max: scores[scores.length - 1] ?? 0,
+    mean,
+    median,
+  };
+}
+
+/**
+ * ペナルティ適用状況を計算（Issue #68: Telemetry）
+ * LDE: 純粋関数として実装（副作用なし、イミュータブル）
+ */
+function computePenaltyTelemetry(candidates: readonly CandidateInfo[]): PenaltyTelemetry {
+  let pathMissPenalties = 0;
+  let largeFilePenalties = 0;
+
+  for (const candidate of candidates) {
+    for (const penalty of candidate.penalties) {
+      if (penalty.kind === "path-miss") pathMissPenalties++;
+      if (penalty.kind === "large-file") largeFilePenalties++;
+    }
+  }
+
+  return {
+    pathMissPenalties,
+    largeFilePenalties,
+    totalCandidates: candidates.length,
+    pathMatchDistribution: computePathMatchDistribution(candidates),
+    scoreStats: computeScoreStats(candidates),
+  };
+}
+
+/**
+ * テレメトリーをファイル出力（Issue #68: Debug）
+ * LDE: 副作用を分離（I/O操作）
+ *
+ * JSON Lines形式で /tmp/kiri-penalty-telemetry.jsonl に追記
+ */
+function logPenaltyTelemetry(telemetry: PenaltyTelemetry, queryStats: QueryStats): void {
+  const dist = telemetry.pathMatchDistribution;
+  const scores = telemetry.scoreStats;
+
+  // JSON Lines形式でテレメトリーデータを記録
+  const telemetryRecord = {
+    timestamp: new Date().toISOString(),
+    query: {
+      wordCount: queryStats.wordCount,
+      avgWordLength: queryStats.avgWordLength,
+    },
+    totalCandidates: telemetry.totalCandidates,
+    pathMissPenalties: telemetry.pathMissPenalties,
+    largeFilePenalties: telemetry.largeFilePenalties,
+    pathMatchDistribution: {
+      zero: dist.zero,
+      one: dist.one,
+      two: dist.two,
+      three: dist.three,
+      fourPlus: dist.fourPlus,
+      total: dist.total,
+      percentages: {
+        zero: ((dist.zero / dist.total) * 100).toFixed(1),
+        one: ((dist.one / dist.total) * 100).toFixed(1),
+        two: ((dist.two / dist.total) * 100).toFixed(1),
+        three: ((dist.three / dist.total) * 100).toFixed(1),
+        fourPlus: ((dist.fourPlus / dist.total) * 100).toFixed(1),
+      },
+    },
+    scoreStats: {
+      min: scores.min.toFixed(2),
+      max: scores.max.toFixed(2),
+      mean: scores.mean.toFixed(2),
+      median: scores.median.toFixed(2),
+      // 最大ペナルティ(-0.8)との比率
+      penaltyRatio: ((0.8 / scores.mean) * 100).toFixed(1) + "%",
+    },
+  };
+
+  const telemetryFile = "/tmp/kiri-penalty-telemetry.jsonl";
+  fs.appendFileSync(telemetryFile, JSON.stringify(telemetryRecord) + "\n");
+}
+
+/**
+ * 環境変数から段階的ペナルティ設定を読み込む（Issue #68: Graduated Penalty）
+ * LDE: 純粋関数（I/O分離、テスト可能）
+ */
+function readGraduatedPenaltyConfig(): GraduatedPenaltyConfig {
+  return {
+    enabled: process.env.KIRI_GRADUATED_PENALTY === "1",
+    minWordCount: parseFloat(process.env.KIRI_PENALTY_MIN_WORD_COUNT || "2"),
+    minAvgWordLength: parseFloat(process.env.KIRI_PENALTY_MIN_AVG_WORD_LENGTH || "4.0"),
+    tier0Delta: parseFloat(process.env.KIRI_PENALTY_TIER_0 || "-0.8"),
+    tier1Delta: parseFloat(process.env.KIRI_PENALTY_TIER_1 || "-0.4"),
+    tier2Delta: parseFloat(process.env.KIRI_PENALTY_TIER_2 || "-0.2"),
+  };
+}
+
+/**
+ * 段階的ペナルティ値を計算（Issue #68: Graduated Penalty）
+ * LDE: 純粋関数（副作用なし、参照透明性）
+ *
+ * ADR 002: Graduated Penalty System
+ * - Tier 0 (pathMatchHits === 0): Strong penalty (no path evidence)
+ * - Tier 1 (pathMatchHits === 1): Medium penalty (weak path evidence)
+ * - Tier 2 (pathMatchHits === 2): Light penalty (moderate path evidence)
+ * - Tier 3+ (pathMatchHits >= 3): No penalty (strong path evidence)
+ *
+ * Invariants:
+ * - Result is always <= 0 (non-positive)
+ * - More path hits → less penalty (monotonicity)
+ * - Query must meet eligibility criteria
+ *
+ * @param pathMatchHits Number of path-based scoring matches
+ * @param queryStats Query word count and average word length
+ * @param config Graduated penalty configuration
+ * @returns Penalty delta (always <= 0)
+ */
+function computeGraduatedPenalty(
+  pathMatchHits: number,
+  queryStats: QueryStats,
+  config: GraduatedPenaltyConfig
+): number {
+  // Early return if query doesn't meet criteria
+  if (
+    queryStats.wordCount < config.minWordCount ||
+    queryStats.avgWordLength < config.minAvgWordLength
+  ) {
+    return 0;
+  }
+
+  // Graduated penalty tiers
+  if (pathMatchHits === 0) return config.tier0Delta;
+  if (pathMatchHits === 1) return config.tier1Delta;
+  if (pathMatchHits === 2) return config.tier2Delta;
+  return 0; // pathMatchHits >= 3: no penalty
 }
 
 export async function contextBundle(
@@ -1548,6 +1990,10 @@ export async function contextBundle(
 
   const limit = normalizeBundleLimit(params.limit);
   const artifacts = params.artifacts ?? {};
+  const artifactHints = normalizeArtifactHints(artifacts.hints);
+  const pathHintTargets = artifactHints.filter(
+    (hint) => hint.includes("/") && SAFE_PATH_PATTERN.test(hint)
+  );
   const includeTokensEstimate = params.includeTokensEstimate === true;
   const isCompact = params.compact === true;
 
@@ -1576,6 +2022,9 @@ export async function contextBundle(
   if (artifacts.editing_path) {
     keywordSources.push(artifacts.editing_path);
   }
+  if (artifactHints.length > 0) {
+    keywordSources.push(artifactHints.join(" "));
+  }
   const semanticSeed = keywordSources.join(" ");
   const queryEmbedding = generateEmbedding(semanticSeed)?.values ?? null;
 
@@ -1598,6 +2047,10 @@ export async function contextBundle(
   const stringMatchSeeds = new Set<string>();
   const fileCache = new Map<string, FileContentCacheEntry>();
 
+  // ✅ Cache boost profile config to avoid redundant lookups in hot path
+  const boostProfile = params.boost_profile ?? "default";
+  const profileConfig = getBoostProfile(boostProfile);
+
   // フレーズマッチング（高い重み: textMatch × 2）- 統合クエリでパフォーマンス改善
   if (extractedTerms.phrases.length > 0) {
     const phrasePlaceholders = extractedTerms.phrases
@@ -1619,8 +2072,6 @@ export async function contextBundle(
       `,
       [repoId, ...extractedTerms.phrases, MAX_MATCHES_PER_KEYWORD * extractedTerms.phrases.length]
     );
-
-    const boostProfile = params.boost_profile ?? "default";
 
     for (const row of rows) {
       if (row.content === null) {
@@ -1647,7 +2098,9 @@ export async function contextBundle(
       }
 
       // Apply boost profile once per file
-      applyBoostProfile(candidate, row, boostProfile, weights, extractedTerms);
+      if (boostProfile !== "none") {
+        applyBoostProfile(candidate, row, profileConfig, weights, extractedTerms);
+      }
 
       // Use first matched phrase for preview (guaranteed to exist due to length check above)
       const { line } = buildPreview(row.content, matchedPhrases[0]!);
@@ -1693,8 +2146,6 @@ export async function contextBundle(
       [repoId, ...extractedTerms.keywords, MAX_MATCHES_PER_KEYWORD * extractedTerms.keywords.length]
     );
 
-    const boostProfile = params.boost_profile ?? "default";
-
     for (const row of rows) {
       if (row.content === null) {
         continue;
@@ -1719,7 +2170,9 @@ export async function contextBundle(
       }
 
       // Apply boost profile once per file
-      applyBoostProfile(candidate, row, boostProfile, weights, extractedTerms);
+      if (boostProfile !== "none") {
+        applyBoostProfile(candidate, row, profileConfig, weights, extractedTerms);
+      }
 
       // Use first matched keyword for preview (guaranteed to exist due to length check above)
       const { line } = buildPreview(row.content, matchedKeywords[0]!);
@@ -1743,6 +2196,18 @@ export async function contextBundle(
     }
   }
 
+  if (pathHintTargets.length > 0) {
+    for (const hintPath of pathHintTargets) {
+      const candidate = ensureCandidate(candidates, hintPath);
+      const baseBoost = Math.max(weights.dependency, weights.textMatch * 0.5);
+      if (baseBoost > 0) {
+        candidate.score += baseBoost;
+      }
+      candidate.reasons.add(`artifact:hint:${hintPath}`);
+      candidate.matchLine ??= 1;
+    }
+  }
+
   if (artifacts.editing_path) {
     const editingCandidate = ensureCandidate(candidates, artifacts.editing_path);
     editingCandidate.score += weights.editingPath;
@@ -1751,8 +2216,6 @@ export async function contextBundle(
   }
 
   // SQL injection防御: ファイルパスの検証パターン
-  const SAFE_PATH_PATTERN = /^[a-zA-Z0-9_.\-/]+$/;
-
   const dependencySeeds = new Set<string>();
   for (const pathSeed of stringMatchSeeds) {
     if (!SAFE_PATH_PATTERN.test(pathSeed)) {
@@ -1767,10 +2230,14 @@ export async function contextBundle(
   if (artifacts.editing_path) {
     if (!SAFE_PATH_PATTERN.test(artifacts.editing_path)) {
       throw new Error(
-        `Invalid editing_path format. Path must contain only alphanumeric characters, underscores, dots, hyphens, and forward slashes.`
+        `Invalid editing_path format: ${artifacts.editing_path}. Use only A-Z, 0-9, _, ., -, / characters.`
       );
     }
     dependencySeeds.add(artifacts.editing_path);
+  }
+
+  for (const hintPath of pathHintTargets) {
+    dependencySeeds.add(hintPath);
   }
 
   if (dependencySeeds.size > 0) {
@@ -1786,7 +2253,9 @@ export async function contextBundle(
     // 防御的チェック: プレースホルダーが正しい形式であることを確認
     // 期待される形式: "?, ?, ..." (クエスチョンマーク、カンマ、スペースのみ)
     if (!/^(\?)(,\s*\?)*$/.test(placeholders)) {
-      throw new Error("Invalid placeholder generation detected. Operation aborted for safety.");
+      throw new Error(
+        "Invalid dependency placeholder sequence detected. Remove unsafe dependency seeds and retry the request."
+      );
     }
 
     const depRows = await db.all<DependencyRow>(
@@ -1878,6 +2347,41 @@ export async function contextBundle(
     if (candidate.scoreMultiplier !== 1.0 && candidate.score > 0) {
       candidate.score *= candidate.scoreMultiplier;
     }
+  }
+
+  // Issue #68: Apply Path-Based Penalties (after multipliers, before sorting)
+  const penaltyFlags = readPenaltyFlags();
+  const queryStats = computeQueryStats(goal); // Always compute for telemetry
+  const graduatedConfig = readGraduatedPenaltyConfig();
+
+  // ADR 002: Use graduated penalty system if enabled, otherwise use legacy binary penalty
+  if (graduatedConfig.enabled && penaltyFlags.pathPenalty) {
+    for (const candidate of materializedCandidates) {
+      applyGraduatedPenalty(candidate, queryStats, graduatedConfig);
+    }
+  } else if (penaltyFlags.pathPenalty) {
+    // Legacy mode: Binary penalty (pathMatchHits === 0 only)
+    for (const candidate of materializedCandidates) {
+      applyPathMissPenalty(candidate, queryStats);
+    }
+  }
+
+  // Issue #68: Apply Large File Penalty (after multipliers, before sorting)
+  if (penaltyFlags.largeFilePenalty) {
+    for (const candidate of materializedCandidates) {
+      applyLargeFilePenalty(candidate);
+    }
+  }
+
+  // Issue #68: Telemetry（デバッグ用、環境変数で制御）
+  // LDE: 純粋関数（計算）と副作用（I/O）を分離
+  const enableTelemetry = process.env.KIRI_PENALTY_TELEMETRY === "1";
+  if (enableTelemetry) {
+    console.error(
+      `[DEBUG] Telemetry enabled. Flags: pathPenalty=${penaltyFlags.pathPenalty}, largeFilePenalty=${penaltyFlags.largeFilePenalty}`
+    );
+    const telemetry = computePenaltyTelemetry(materializedCandidates);
+    logPenaltyTelemetry(telemetry, queryStats);
   }
 
   const sortedCandidates = materializedCandidates
@@ -2226,25 +2730,22 @@ export async function depsClosure(
   };
 }
 
-export async function resolveRepoId(db: DuckDBClient, repoRoot: string): Promise<number> {
-  try {
-    const rows = await db.all<{ id: number }>("SELECT id FROM repo WHERE root = ?", [repoRoot]);
-    if (rows.length === 0) {
-      throw new Error(
-        "Target repository is missing from DuckDB. Run the indexer before starting the server."
-      );
-    }
-    const row = rows[0];
-    if (!row) {
-      throw new Error("Failed to retrieve repository record. Database returned empty result.");
-    }
-    return row.id;
-  } catch (error) {
-    if (error instanceof Error && error.message.includes("Table with name repo")) {
-      throw new Error(
-        "Target repository is missing from DuckDB. Run the indexer before starting the server."
-      );
-    }
-    throw error;
-  }
+/**
+ * リポジトリのrootパスをデータベースIDに解決する。
+ *
+ * この関数は下位互換性のために保持されているが、内部的には新しいRepoResolverを使用する。
+ *
+ * @param db - DuckDBクライアント
+ * @param repoRoot - リポジトリのrootパス
+ * @param services - オプショナルなServerServices（指定がなければ新規作成される）
+ * @returns リポジトリID
+ * @throws Error リポジトリがインデックスされていない場合
+ */
+export async function resolveRepoId(
+  db: DuckDBClient,
+  repoRoot: string,
+  services?: ServerServices
+): Promise<number> {
+  const svc = services ?? createServerServices(db);
+  return await svc.repoResolver.resolveId(repoRoot);
 }

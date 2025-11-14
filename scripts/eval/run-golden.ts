@@ -77,6 +77,7 @@ interface GoldenQuery {
   tool?: string;
   intent: string;
   category: string;
+  hints?: string[];
   repo?: string;
   expected: {
     paths: string[];
@@ -743,8 +744,16 @@ async function executeQuery(
     boost_profile: boostProfile,
   };
 
+  const artifacts: { hints?: string[] } = {};
+  if (query.hints && query.hints.length > 0) {
+    artifacts.hints = query.hints;
+  }
+
   if (tool === "context_bundle") {
     params.goal = query.query;
+    if (artifacts.hints) {
+      params.artifacts = artifacts;
+    }
   } else if (tool === "files_search") {
     params.query = query.query;
   } else {

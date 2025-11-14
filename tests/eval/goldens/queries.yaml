@@ -1,6 +1,6 @@
 schemaVersion: "1.0.0"
-datasetVersion: "v2025-11-11"
-description: "Representative queries for KIRI search accuracy evaluation"
+datasetVersion: "v2025-11-14-expansion"
+description: "Representative queries for KIRI search accuracy evaluation (core + assay-kit hints)"
 
 # デフォルト実行パラメータ
 defaultParams:
@@ -330,3 +330,256 @@ queries:
     tags: ["audit", "logging", "ops"]
     rationale: "ログエクスポートの改修ではスクリプト・テスト・運用ドキュメントを一度にチェックしたい。"
     notes: "Path-only クエリで files_search の精度とフォールバック挙動を確認。"
+
+  # Assay-kit coverage (metadata hints を含むクエリ)
+  - id: assay-cli-main
+    query: "assay-kit cli main entrypoint command routing"
+    tool: "context_bundle"
+    intent: "CLI エントリーポイントとコマンド登録の経路を把握する"
+    category: "cli"
+    repo: "assay-kit"
+    hints:
+      - "runCli"
+      - "registerCommands"
+      - "external/assay-kit/src/cli/main.ts"
+    expected:
+      paths:
+        - "external/assay-kit/src/cli/main.ts"
+        - "external/assay-kit/src/cli/commands/types.ts"
+    tags: ["cli", "commands"]
+    rationale: "CLI 改修時にメイン処理とコマンド定義を同時に開けるかを検証。"
+    notes: "Hint 経由で CLI のブートストラップを優先表示できるかを確認。"
+
+  - id: assay-cli-compare
+    query: "compare command diff reporter"
+    tool: "context_bundle"
+    intent: "比較コマンドと差分レポーターの実装を辿る"
+    category: "cli"
+    repo: "assay-kit"
+    hints:
+      - "executeCompareCommand"
+      - "ComparisonReporter"
+      - "external/assay-kit/src/cli/commands/compare.ts"
+    expected:
+      paths:
+        - "external/assay-kit/src/cli/commands/compare.ts"
+        - "external/assay-kit/src/runner/comparison.ts"
+    tags: ["cli", "compare"]
+    rationale: "差分比較 UX を調整する際に CLI・runner を一気に参照したい。"
+    notes: "Hint が無いと CLI 以外が優先されやすいため重み付けを評価。"
+
+  - id: assay-baseline
+    query: "baseline loader filesystem snapshot"
+    tool: "context_bundle"
+    intent: "ファイルシステムベースラインの読込処理を把握する"
+    category: "baseline"
+    repo: "assay-kit"
+    hints:
+      - "FilesystemBaselineSource"
+      - "loadBaselineRun"
+      - "external/assay-kit/src/baseline/filesystem.ts"
+    expected:
+      paths:
+        - "external/assay-kit/src/baseline/filesystem.ts"
+        - "external/assay-kit/src/baseline/index.ts"
+    tags: ["baseline", "filesystem"]
+    rationale: "比較結果の保存形式を確認するクエリを追加し、抽象語でも着地点を保証。"
+    notes: "Hint の有無で runner 側ではなく baseline を返すかを評価。"
+
+  - id: assay-plugin-logger
+    query: "plugin lifecycle logging hooks"
+    tool: "context_bundle"
+    intent: "プラグインのライフサイクルログ処理を確認する"
+    category: "plugins"
+    repo: "assay-kit"
+    hints:
+      - "PluginLogger"
+      - "logPluginLifecycle"
+      - "external/assay-kit/src/plugins/logger.ts"
+    expected:
+      paths:
+        - "external/assay-kit/src/plugins/logger.ts"
+        - "external/assay-kit/src/plugins/registry.ts"
+    tags: ["plugins", "logging"]
+    rationale: "プラグイン登録とロガーをまたぐトレースが必要なケースを再現。"
+    notes: "Hint により logger.ts をリスト上位へ固定できるかを検証。"
+
+  - id: assay-plugin-deps
+    query: "plugin dependency resolver validation"
+    tool: "context_bundle"
+    intent: "プラグイン依存関係の解決・検証フローを読む"
+    category: "plugins"
+    repo: "assay-kit"
+    hints:
+      - "resolvePluginDependencies"
+      - "DependencyValidationError"
+      - "external/assay-kit/src/plugins/dependencies.ts"
+    expected:
+      paths:
+        - "external/assay-kit/src/plugins/dependencies.ts"
+        - "external/assay-kit/src/plugins/types.ts"
+    tags: ["plugins", "dependencies"]
+    rationale: "依存解決コードへ確実に辿れるかを評価し、型定義との同時表示も狙う。"
+    notes: "Hint により dependencies.ts の優先度を底上げ。"
+
+  - id: assay-runner-analysis
+    query: "statistical analyzer significance detection"
+    tool: "context_bundle"
+    intent: "統計アナライザーの有意性判定ロジックを追う"
+    category: "runner"
+    repo: "assay-kit"
+    hints:
+      - "StatisticalAnalyzer"
+      - "analyzeSignificance"
+      - "external/assay-kit/src/runner/statistical-analyzer.ts"
+    expected:
+      paths:
+        - "external/assay-kit/src/runner/statistical-analyzer.ts"
+        - "external/assay-kit/src/runner/comparison-types.ts"
+    tags: ["runner", "statistics"]
+    rationale: "A/B 検証の判定ロジックを明示的に引き当てたいケースを評価。"
+    notes: "Hint がある状態で比較エンジンを先頭に表示できるか。"
+
+  - id: assay-runner-summary
+    query: "comparison summary builder rows"
+    tool: "context_bundle"
+    intent: "比較結果サマリー生成処理を確認する"
+    category: "runner"
+    repo: "assay-kit"
+    hints:
+      - "buildComparisonSummary"
+      - "SummaryRow"
+      - "external/assay-kit/src/runner/summary.ts"
+    expected:
+      paths:
+        - "external/assay-kit/src/runner/summary.ts"
+        - "external/assay-kit/src/runner/index.ts"
+    tags: ["runner", "summary"]
+    rationale: "集計ビューの見直し時に summary 実装へ確実に導きたい。"
+    notes: "Hint により summary.ts を runner/index.ts より前に出せるか。"
+
+  - id: assay-metrics-latency
+    query: "latency metric percentile calculation"
+    tool: "context_bundle"
+    intent: "LAT 指標の算出処理をチェックする"
+    category: "metrics"
+    repo: "assay-kit"
+    hints:
+      - "LatencyMetric"
+      - "computeLatencyStats"
+      - "external/assay-kit/src/metrics/latency.ts"
+    expected:
+      paths:
+        - "external/assay-kit/src/metrics/latency.ts"
+        - "external/assay-kit/src/metrics/index.ts"
+    tags: ["metrics", "latency"]
+    rationale: "遅延メトリクス改善時に該当ファイルへ即到達するかを測定。"
+    notes: "Hint を渡して latency.ts をランキング上位へ固定。"
+
+  - id: assay-metrics-ranking
+    query: "ranking metrics ndcg precision"
+    tool: "context_bundle"
+    intent: "ランキング指標（NDCG 等）の実装を把握する"
+    category: "metrics"
+    repo: "assay-kit"
+    hints:
+      - "RankingMetric"
+      - "dcg"
+      - "external/assay-kit/src/metrics/ranking.ts"
+    expected:
+      paths:
+        - "external/assay-kit/src/metrics/ranking.ts"
+        - "external/assay-kit/src/metrics/combined.ts"
+    tags: ["metrics", "ranking"]
+    rationale: "NDCG 周辺のロジックを確実に返せるかを評価。"
+    notes: "Hint による ranking.ts のブースト効果を検証。"
+
+  - id: assay-utils-glob
+    query: "glob matcher utility double star"
+    tool: "context_bundle"
+    intent: "Glob ユーティリティの ** 対応ロジックを調べる"
+    category: "utils"
+    repo: "assay-kit"
+    hints:
+      - "matchGlob"
+      - "GlobPattern"
+      - "external/assay-kit/src/utils/glob.ts"
+    expected:
+      paths:
+        - "external/assay-kit/src/utils/glob.ts"
+        - "external/assay-kit/src/utils/index.ts"
+    tags: ["utils", "glob"]
+    rationale: "抽象語のみでも glob.ts を返せるかを確認。"
+    notes: "Hint でユーティリティ層を上位へ誘導。"
+
+  - id: assay-errors-timeout
+    query: "timeout error retry classification"
+    tool: "context_bundle"
+    intent: "タイムアウトエラー分類と再試行判定を読む"
+    category: "errors"
+    repo: "assay-kit"
+    hints:
+      - "TimeoutError"
+      - "retryable"
+      - "external/assay-kit/src/errors/timeout-error.ts"
+    expected:
+      paths:
+        - "external/assay-kit/src/errors/timeout-error.ts"
+        - "external/assay-kit/src/errors/index.ts"
+    tags: ["errors", "timeouts"]
+    rationale: "エラー分類改善時に該当ファイルへ直行したい。"
+    notes: "Hint により timeout-error.ts がトップに出るかを確認。"
+
+  - id: assay-types-query
+    query: "assay query metadata tags"
+    tool: "context_bundle"
+    intent: "クエリ型定義とメタデータ構造を参照する"
+    category: "types"
+    repo: "assay-kit"
+    hints:
+      - "AssayQuery"
+      - "QueryMetadata"
+      - "external/assay-kit/src/types/query.ts"
+    expected:
+      paths:
+        - "external/assay-kit/src/types/query.ts"
+        - "external/assay-kit/src/types/index.ts"
+    tags: ["types", "query"]
+    rationale: "型追加時に query.ts を即時に開けるよう評価。"
+    notes: "Hint で types/ 配下を優先させるケース。"
+
+  - id: assay-types-dataset
+    query: "dataset definition schema types"
+    tool: "context_bundle"
+    intent: "データセット定義の型を確認する"
+    category: "types"
+    repo: "assay-kit"
+    hints:
+      - "DatasetDefinition"
+      - "QueryResultRow"
+      - "external/assay-kit/src/types/dataset.ts"
+    expected:
+      paths:
+        - "external/assay-kit/src/types/dataset.ts"
+        - "external/assay-kit/src/types/index.ts"
+    tags: ["types", "dataset"]
+    rationale: "スキーマ追加時に対象ファイルへ誘導できるかを評価。"
+    notes: "Hint で dataset.ts を先行表示。"
+
+  - id: assay-reporting-json
+    query: "json reporter emit artifacts"
+    tool: "context_bundle"
+    intent: "JSON レポーターの出力処理を把握する"
+    category: "reporter"
+    repo: "assay-kit"
+    hints:
+      - "JsonReporter"
+      - "writeJsonReport"
+      - "external/assay-kit/src/reporting/json.ts"
+    expected:
+      paths:
+        - "external/assay-kit/src/reporting/json.ts"
+        - "external/assay-kit/src/reporting/index.ts"
+    tags: ["reporter", "json"]
+    rationale: "レポート出力周りの改善で JSON 実装へ素早くアクセスしたい。"
+    notes: "Hint のブーストを評価し、reporting/json.ts を確実に返させる。"

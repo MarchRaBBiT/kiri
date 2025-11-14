@@ -2,8 +2,8 @@
   "version": "0.9.10",
   "gitSha": "a612f1b",
   "date": "2025-11-11T00:00:00Z",
-  "datasetVersion": "v2025-11-11",
-  "description": "Initial baseline measurement for golden set evaluation",
+  "datasetVersion": "v2025-11-14-expansion",
+  "description": "Initial baseline measurement for golden set evaluation (core + assay-kit)",
   "thresholds": {
     "minP10": 0.7,
     "maxTTFU": 1000,

@@ -1,7 +1,8 @@
 /* global fetch */
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { join } from "node:path";
+import { once } from "node:events";
+import { join, isAbsolute } from "node:path";
 
 import type {
   SearchAdapter,
@@ -72,11 +73,12 @@ export class KiriSearchAdapter implements SearchAdapter<KiriQuery, Metrics> {
   private readonly port: number;
   private serverLogs = "";
   private readonly config: Required<KiriAdapterConfig>;
+  private cleanupHandlers: Array<[NodeJS.Signals | "exit", () => void]> = [];
 
   constructor(
     private readonly databasePath: string,
     private readonly repoRoot: string,
-    private readonly kiriServerCommand: string = "node_modules/.bin/tsx",
+    private readonly kiriServerCommand?: string,
     port: number = 19999,
     config: KiriAdapterConfig = {}
   ) {
@@ -91,9 +93,10 @@ export class KiriSearchAdapter implements SearchAdapter<KiriQuery, Metrics> {
   async warmup(dataset: Dataset<KiriQuery>): Promise<void> {
     console.log(`🚀 Starting KIRI server on port ${this.port}...`);
 
-    const cliPath = join(this.repoRoot, "node_modules/tsx/dist/cli.mjs");
+    this.registerCleanupHandlers();
+    const { command, args: launcherArgs } = this.buildServerLauncher();
     const args = [
-      cliPath,
+      ...launcherArgs,
       "src/server/main.ts",
       "--port",
       String(this.port),
@@ -103,7 +106,7 @@ export class KiriSearchAdapter implements SearchAdapter<KiriQuery, Metrics> {
       this.repoRoot,
     ];
 
-    this.serverProcess = spawn(process.execPath, args, {
+    this.serverProcess = spawn(command, args, {
       stdio: ["ignore", "pipe", "pipe"],
       cwd: this.repoRoot,
       env: process.env,
@@ -199,12 +202,34 @@ export class KiriSearchAdapter implements SearchAdapter<KiriQuery, Metrics> {
   async stop(reason?: string): Promise<void> {
     console.log(`🛑 Stopping KIRI server${reason ? `: ${reason}` : ""}...`);
 
-    if (this.serverProcess) {
-      this.serverProcess.kill("SIGTERM");
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      this.serverProcess = null;
+    const proc = this.serverProcess;
+    if (!proc) {
+      console.log("✅ KIRI server stopped");
+      return;
     }
 
+    this.serverProcess = null;
+    proc.kill("SIGTERM");
+
+    try {
+      await Promise.race([
+        once(proc, "exit"),
+        new Promise((resolve, reject) =>
+          setTimeout(() => reject(new Error("server-stop-timeout")), 5000)
+        ),
+      ]);
+    } catch {
+      proc.kill("SIGKILL");
+      try {
+        await once(proc, "exit");
+      } catch {
+        // ignore
+      }
+    } finally {
+      proc.removeAllListeners();
+    }
+
+    this.removeCleanupHandlers();
     console.log("✅ KIRI server stopped");
   }
 
@@ -238,6 +263,46 @@ export class KiriSearchAdapter implements SearchAdapter<KiriQuery, Metrics> {
     throw new Error(
       `KIRI server failed to start within ${maxAttempts} seconds.\nServer logs:\n${this.serverLogs}`
     );
+  }
+
+  private buildServerLauncher(): { command: string; args: string[] } {
+    if (this.kiriServerCommand) {
+      const command = this.resolveLauncherCommand(this.kiriServerCommand);
+      return { command, args: [] };
+    }
+    const cliPath = join(this.repoRoot, "node_modules/tsx/dist/cli.mjs");
+    return { command: process.execPath, args: [cliPath] };
+  }
+
+  private resolveLauncherCommand(command: string): string {
+    if (command.includes("/") || command.includes("\\")) {
+      if (isAbsolute(command)) {
+        return command;
+      }
+      return join(this.repoRoot, command);
+    }
+    return command;
+  }
+
+  private registerCleanupHandlers(): void {
+    if (this.cleanupHandlers.length > 0) {
+      return;
+    }
+    const events: Array<NodeJS.Signals | "exit"> = ["SIGINT", "SIGTERM", "SIGQUIT", "exit"];
+    for (const event of events) {
+      const handler = () => {
+        void this.stop("process-exit");
+      };
+      process.on(event, handler);
+      this.cleanupHandlers.push([event, handler]);
+    }
+  }
+
+  private removeCleanupHandlers(): void {
+    for (const [event, handler] of this.cleanupHandlers) {
+      process.off(event, handler);
+    }
+    this.cleanupHandlers = [];
   }
 
   protected async callKiri(

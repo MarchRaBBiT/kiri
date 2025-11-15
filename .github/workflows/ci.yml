@@ -8,11 +8,19 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      HAS_ASSAY_KIT_TOKEN: ${{ secrets.ASSAY_KIT_TOKEN != '' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Check assay-kit token availability
+        if: env.HAS_ASSAY_KIT_TOKEN != 'true'
+        run: |
+          echo "::warning::ASSAY_KIT_TOKEN is not configured. Skipping CI steps that require the private external/assay-kit submodule."
+
       - name: Configure submodule auth
+        if: env.HAS_ASSAY_KIT_TOKEN == 'true'
         env:
           TOKEN: ${{ secrets.ASSAY_KIT_TOKEN }}
         run: |
@@ -21,29 +29,37 @@ jobs:
           git config submodule.external/assay-kit.url https://x-access-token:${TOKEN}@github.com/CAPHTECH/assay-kit.git
 
       - name: Fetch assay-kit submodule
+        if: env.HAS_ASSAY_KIT_TOKEN == 'true'
         run: git submodule update --init --depth 1 external/assay-kit
 
       - name: Set up Node.js
+        if: env.HAS_ASSAY_KIT_TOKEN == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: 20
 
       - name: Enable corepack
+        if: env.HAS_ASSAY_KIT_TOKEN == 'true'
         run: corepack enable
 
       - name: Install dependencies
+        if: env.HAS_ASSAY_KIT_TOKEN == 'true'
         run: pnpm install --no-frozen-lockfile
 
       - name: Run lint
+        if: env.HAS_ASSAY_KIT_TOKEN == 'true'
         run: pnpm run lint
 
       - name: Run type check
+        if: env.HAS_ASSAY_KIT_TOKEN == 'true'
         run: pnpm exec tsc --noEmit
         continue-on-error: true
 
       - name: Run build
+        if: env.HAS_ASSAY_KIT_TOKEN == 'true'
         run: pnpm run build
         continue-on-error: true
 
       - name: Run tests
+        if: env.HAS_ASSAY_KIT_TOKEN == 'true'
         run: pnpm run test

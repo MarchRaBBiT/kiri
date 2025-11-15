@@ -119,9 +119,9 @@ describe("CLI Utilities", () => {
     beforeEach(() => {
       originalArgv = process.argv;
       processExitSpy = vi.spyOn(process, "exit").mockImplementation(((
-        code?: number | string | null | undefined
+        _code?: number | string | null | undefined
       ) => {
-        throw new Error(`process.exit called with code ${code ?? "unknown"}`);
+        return undefined as never;
       }) as (code?: number | string | null | undefined) => never);
       consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     });

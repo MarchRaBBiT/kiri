@@ -1,5 +1,6 @@
 #!/usr/bin/env tsx
 import process from "node:process";
+import { isAbsolute } from "node:path";
 
 import { BaselineService } from "../../external/assay-kit/src/baseline/service.ts";
 import type { PromotePayload } from "../../external/assay-kit/src/baseline/types.ts";
@@ -100,6 +101,9 @@ async function main(): Promise<void> {
   }
   const options = parseFlags(rest);
   const allowExternalPaths = process.env.KIRI_ALLOW_UNSAFE_PATHS === "1";
+  if (!allowExternalPaths && isAbsolute(rawRunPath)) {
+    throw new Error(`Absolute metrics path '${rawRunPath}' requires KIRI_ALLOW_UNSAFE_PATHS=1.`);
+  }
   const runPath = resolveSafePath(rawRunPath, { allowOutsideBase: allowExternalPaths });
   if (mode === "promote") {
     await promote(runPath, options);

@@ -72,8 +72,15 @@ const ALLOW_EXTERNAL_PATHS = process.env.KIRI_ALLOW_UNSAFE_PATHS === "1";
 const DATASET_INPUT =
   process.env.KIRI_DATASET_PATH ??
   "external/assay-kit/examples/kiri-integration/datasets/kiri-golden.yaml";
+
+if (!ALLOW_EXTERNAL_PATHS && isAbsolute(DATASET_INPUT)) {
+  throw new Error(
+    `Absolute dataset paths require KIRI_ALLOW_UNSAFE_PATHS=1 (received ${DATASET_INPUT})`
+  );
+}
+
 const DATASET_PATH = resolveSafePath(DATASET_INPUT, {
-  allowOutsideBase: ALLOW_EXTERNAL_PATHS || isAbsolute(DATASET_INPUT),
+  allowOutsideBase: ALLOW_EXTERNAL_PATHS,
 });
 const ASSAY_OUTPUT_DIR = join(process.cwd(), "var/assay/base");
 const REPO_ROOT = process.cwd();

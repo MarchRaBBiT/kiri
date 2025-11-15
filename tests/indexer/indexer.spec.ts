@@ -298,12 +298,16 @@ team: sre
       expect.arrayContaining(["observability", "dashboards"])
     );
 
-    const markdownRefs = await db.all<{ path: string; target: string; kind: string }>(
-      "SELECT path, target, kind FROM markdown_reference WHERE repo_id = ? ORDER BY path, target",
+    const markdownRefs = await db.all<{ srcPath: string; target: string; kind: string }>(
+      "SELECT src_path as srcPath, target, kind FROM markdown_link WHERE repo_id = ? ORDER BY src_path, target",
       [repoId]
     );
     expect(markdownRefs).toEqual([
-      expect.objectContaining({ path: "docs/runbook.md", target: "../src/api.md#handlers" }),
+      expect.objectContaining({
+        srcPath: "docs/runbook.md",
+        target: "../src/api.md#handlers",
+        kind: "relative",
+      }),
     ]);
   });
 });

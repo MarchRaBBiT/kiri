@@ -316,15 +316,25 @@ Options:
   }
 
   const allowUnsafe = process.env.KIRI_ALLOW_UNSAFE_PATHS === "1";
-  const allowDbOutside = allowUnsafe || isAbsolute(options.dbPath);
-  const allowRepoOutside = allowUnsafe || isAbsolute(options.repoPath);
-  const allowOutOutside = allowUnsafe || isAbsolute(options.outputPath);
-  options.dbPath = resolveSafePath(options.dbPath, { allowOutsideBase: allowDbOutside });
+  if (!allowUnsafe) {
+    const absoluteArg = [
+      [options.dbPath, "--db"],
+      [options.repoPath, "--repo"],
+      [options.outputPath, "--out"],
+    ].find(([value]) => isAbsolute(value));
+    if (absoluteArg) {
+      const [value, flag] = absoluteArg;
+      throw new Error(
+        `${flag} received absolute path '${value}'. Set KIRI_ALLOW_UNSAFE_PATHS=1 to allow external locations.`
+      );
+    }
+  }
+  options.dbPath = resolveSafePath(options.dbPath, { allowOutsideBase: allowUnsafe });
   options.repoPath = resolveSafePath(options.repoPath, {
-    allowOutsideBase: allowRepoOutside,
+    allowOutsideBase: allowUnsafe,
   });
   options.outputPath = resolveSafePath(options.outputPath, {
-    allowOutsideBase: allowOutOutside,
+    allowOutsideBase: allowUnsafe,
   });
 
   return options;
@@ -623,12 +633,15 @@ function resolveRepoTargets(
       if (!config?.repoPath || !config?.dbPath) {
         throw new Error(`Repository '${id}' must define repoPath and dbPath`);
       }
-      const repoAllow = allowUnsafe || isAbsolute(config.repoPath);
-      const dbAllow = allowUnsafe || isAbsolute(config.dbPath);
+      if (!allowUnsafe && (isAbsolute(config.repoPath) || isAbsolute(config.dbPath))) {
+        throw new Error(
+          `Repository '${id}' specifies absolute paths but KIRI_ALLOW_UNSAFE_PATHS is not enabled.`
+        );
+      }
       repoMap.set(id, {
         id,
-        repoPath: resolveSafePath(config.repoPath, { allowOutsideBase: repoAllow }),
-        dbPath: resolveSafePath(config.dbPath, { allowOutsideBase: dbAllow }),
+        repoPath: resolveSafePath(config.repoPath, { allowOutsideBase: allowUnsafe }),
+        dbPath: resolveSafePath(config.dbPath, { allowOutsideBase: allowUnsafe }),
       });
     }
   }

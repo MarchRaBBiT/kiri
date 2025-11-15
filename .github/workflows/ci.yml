@@ -14,7 +14,7 @@ jobs:
 
       - name: Configure submodule auth
         env:
-          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TOKEN: ${{ secrets.ASSAY_KIT_TOKEN }}
         run: |
           git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf git@github.com:
           git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf https://github.com/

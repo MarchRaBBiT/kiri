@@ -99,10 +99,16 @@ function validateServerConfig(config: ServerConfig): void {
   if (hints.semantic.threshold <= 0 || hints.semantic.threshold > 1) {
     throw new Error("Semantic hint threshold must be within (0, 1]");
   }
-  if (hints.perHintLimit < 1) {
-    throw new Error("Per-hint limit must be >= 1");
+  if (hints.perHintLimit < 0) {
+    throw new Error("Per-hint limit must be >= 0");
   }
-  if (hints.dbQueryLimit < 1 && hints.enabled) {
+  if (hints.enabled && hints.perHintLimit < 1) {
+    throw new Error("Per-hint limit must be >= 1 when hints are enabled");
+  }
+  if (hints.dbQueryLimit < 0) {
+    throw new Error("Hint DB query budget must be >= 0");
+  }
+  if (hints.enabled && hints.dbQueryLimit < 1) {
     throw new Error("Hint DB query budget must be >= 1 when hints are enabled");
   }
   if (hints.substring.limit < 0) {

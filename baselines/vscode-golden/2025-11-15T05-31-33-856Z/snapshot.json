@@ -1,0 +1,17 @@
+{
+  "metrics": {
+    "latencyMs": 2206.416667,
+    "precision": 0.15,
+    "timeToFirstUseful": 0,
+    "extras": {
+      "tokenSavingsRatio": 0.957083,
+      "hintCoverage": 0.2,
+      "avgTokensEstimate": 30195.416667,
+      "avgBaselineTokens": 501540.583333
+    }
+  },
+  "metadata": {
+    "source": "var/eval/latest.metrics.json",
+    "timestamp": "2025-11-15T05:31:33.474Z"
+  }
+}

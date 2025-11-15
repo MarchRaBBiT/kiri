@@ -8,8 +8,6 @@ import {
   MarkdownReporter,
   ConsoleReporter,
 } from "../../external/assay-kit/src/index.ts";
-import { PluginRegistry } from "../../external/assay-kit/src/plugins/registry.ts";
-import contextCoverageMetric from "./plugins/context-coverage-metric.js";
 import { createKiriAdapter } from "./kiri-variants.js";
 
 type EvalProfile = "current" | "release";
@@ -111,24 +109,6 @@ async function main(): Promise<void> {
   await consoleReporter.write(result);
 
   console.log(`\n📄 Results written to:\n  JSON: ${jsonPath}\n  Markdown: ${mdPath}\n`);
-
-  // Demonstrate plugin system registration (Phase 2.2)
-  const registry = new PluginRegistry();
-  await registry.register(
-    contextCoverageMetric as unknown as Parameters<typeof registry.register>[0],
-    {
-      config: { threshold: 0.8 },
-      timeout: 2000,
-    }
-  );
-  console.log(
-    "🔌 Loaded metric plugins:",
-    registry
-      .getAll("metric")
-      .map((plugin) => plugin.plugin.meta.name)
-      .join(", ")
-  );
-  await registry.disposeAll("evaluation-complete");
 
   process.exit(0);
 }

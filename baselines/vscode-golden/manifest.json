@@ -1,0 +1,13 @@
+{
+  "targetId": "vscode-golden",
+  "versions": [
+    {
+      "id": "2025-11-15T05-31-33-856Z",
+      "createdAt": "2025-11-15T05:31:33.856Z",
+      "status": "active",
+      "snapshotPath": "/Users/rizumita/Workspace/CAPHTECH.public/kiri/baselines/vscode-golden/2025-11-15T05-31-33-856Z/snapshot.json",
+      "notes": "VS Code golden baseline (2025-11-15)"
+    }
+  ],
+  "revision": "08603bee356b40ce07b711d9a676ed24b7a591c0606f2d1d385cb322923e75b4"
+}

@@ -1,8 +1,10 @@
 #!/usr/bin/env tsx
 import process from "node:process";
+
 import { BaselineService } from "../../external/assay-kit/src/baseline/service.ts";
-import { loadMetricsFromFile } from "../../external/assay-kit/src/baseline/utils.ts";
 import type { PromotePayload } from "../../external/assay-kit/src/baseline/types.ts";
+import { loadMetricsFromFile } from "../../external/assay-kit/src/baseline/utils.ts";
+import { resolveSafePath } from "../../src/shared/fs/safePath.ts";
 
 interface CliOptions {
   target: string;
@@ -88,7 +90,7 @@ async function compare(runPath: string, options: CliOptions): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const [mode, runPath = "var/eval/latest.metrics.json", ...rest] = process.argv.slice(2);
+  const [mode, rawRunPath = "var/eval/latest.metrics.json", ...rest] = process.argv.slice(2);
   if (!mode || (mode !== "promote" && mode !== "compare")) {
     console.error(
       "Usage: pnpm exec tsx scripts/assay/baseline.ts <promote|compare> [metrics.json] [--target=<id>] [--notes=<text>] [--version=<id>] [--fail-on-regression]"
@@ -97,6 +99,8 @@ async function main(): Promise<void> {
     return;
   }
   const options = parseFlags(rest);
+  const allowExternalPaths = process.env.KIRI_ALLOW_UNSAFE_PATHS === "1";
+  const runPath = resolveSafePath(rawRunPath, { allowOutsideBase: allowExternalPaths });
   if (mode === "promote") {
     await promote(runPath, options);
   } else {

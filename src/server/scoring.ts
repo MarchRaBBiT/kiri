@@ -73,6 +73,36 @@ function validateWeights(weights: unknown, profileName: string): ScoringWeights 
     }
   }
 
+  if (obj.docPenaltyMultiplier > 1) {
+    throw new Error(
+      `Profile '${profileName}' has docPenaltyMultiplier > 1 (${obj.docPenaltyMultiplier}). Penalties must be ≤ 1.`
+    );
+  }
+  if (obj.configPenaltyMultiplier > 1) {
+    throw new Error(
+      `Profile '${profileName}' has configPenaltyMultiplier > 1 (${obj.configPenaltyMultiplier}). Penalties must be ≤ 1.`
+    );
+  }
+  if (obj.implBoostMultiplier < 1) {
+    throw new Error(
+      `Profile '${profileName}' has implBoostMultiplier < 1 (${obj.implBoostMultiplier}). Boost multipliers must be ≥ 1.`
+    );
+  }
+
+  const totalWeight =
+    obj.textMatch +
+    obj.pathMatch +
+    obj.editingPath +
+    obj.dependency +
+    obj.proximity +
+    obj.structural;
+
+  if (totalWeight < 2 || totalWeight > 15) {
+    console.warn(
+      `Profile '${profileName}' has unusual aggregate weight ${totalWeight.toFixed(2)}. Review weight balance if this was unintentional.`
+    );
+  }
+
   return weights as ScoringWeights;
 }
 

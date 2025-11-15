@@ -20,50 +20,15 @@ import { join } from "node:path";
 import { parse as parseYAML } from "yaml";
 
 import { evaluateRetrieval, type RetrievalEvent } from "../../src/eval/metrics.js";
+import { resolveSafePath } from "../../src/shared/fs/safePath.ts";
 import { encode as encodeGPT } from "../../src/shared/tokenizer.js";
+import { matchesGlob } from "../../src/shared/utils/glob.ts";
+import { withRetry } from "../../src/shared/utils/retry.ts";
 
 const TOKEN_SAVINGS_TARGET = 0.4;
 const FORCE_COMPACT_MODE =
   process.env.KIRI_FORCE_COMPACT?.toLowerCase() !== "false" &&
   process.env.KIRI_FORCE_COMPACT !== "0";
-
-// ============================================================================
-// Glob Pattern Matching
-// ============================================================================
-
-/**
- * Simple glob matcher supporting ** and * wildcards
- * Examples:
- *   - "src/**\/*.ts" matches "src/handlers.ts", "src/server/handlers.ts", "src/a/b/c.ts"
- *   - "config/*.yml" matches "config/settings.yml" but not "config/sub/settings.yml"
- *   - "**\/test.ts" matches "test.ts", "src/test.ts", "src/sub/test.ts"
- */
-function matchesGlob(path: string, pattern: string): boolean {
-  // Normalize paths
-  const normalizedPath = path.replace(/^\.\//, "");
-  const normalizedPattern = pattern.replace(/^\.\//, "");
-
-  // Convert glob pattern to regex
-  // Escape special regex characters except * and /
-  let regexPattern = normalizedPattern
-    .replace(/[.+?^${}()|[\]\\]/g, "\\$&")
-    // Handle ** patterns (must be done before single * replacement)
-    .replace(/\*\*\//g, "DOUBLESTAR_SLASH") // **/ → zero or more dirs
-    .replace(/\/\*\*/g, "SLASH_DOUBLESTAR") // /** → optional path
-    .replace(/\*\*/g, "DOUBLESTAR") // ** at start/end
-    // Handle single * (matches filename segment)
-    .replace(/\*/g, "[^/]*")
-    // Convert placeholders to regex
-    .replace(/DOUBLESTAR_SLASH/g, "(?:.*/)?") // **/ allows zero dirs: a/**/b matches a/b
-    .replace(/SLASH_DOUBLESTAR/g, "(?:/.*)?") // /** optional suffix
-    .replace(/DOUBLESTAR/g, ".*"); // ** alone matches anything
-
-  // Ensure full match
-  regexPattern = `^${regexPattern}$`;
-
-  const regex = new RegExp(regexPattern);
-  return regex.test(normalizedPath);
-}
 
 // ============================================================================
 // Token & Hint Helpers
@@ -343,6 +308,13 @@ Options:
     }
   }
 
+  const allowExternalPaths = process.env.KIRI_ALLOW_UNSAFE_PATHS === "1";
+  options.dbPath = resolveSafePath(options.dbPath, { allowOutsideBase: allowExternalPaths });
+  options.repoPath = resolveSafePath(options.repoPath, { allowOutsideBase: allowExternalPaths });
+  options.outputPath = resolveSafePath(options.outputPath, {
+    allowOutsideBase: allowExternalPaths,
+  });
+
   return options;
 }
 
@@ -355,6 +327,7 @@ class McpServerManager {
   private readonly basePort = 19999;
   private assignedPort = this.basePort;
   private serverLogs = "";
+  private cleanupHandlers: Array<[NodeJS.Signals | "exit", () => void]> = [];
 
   private scoringConfigPath = join(process.cwd(), "config", "scoring-profiles.yml");
 
@@ -405,6 +378,8 @@ class McpServerManager {
       }
     );
 
+    this.registerCleanupHandlers();
+
     this.serverProc.stdout?.on("data", (data) => {
       this.serverLogs += data.toString();
       if (verbose) {
@@ -419,8 +394,17 @@ class McpServerManager {
       }
     });
 
-    // Wait for server to be ready
-    await this.waitForReady(verbose);
+    const readyPromise = this.waitForReady(verbose);
+    const errorPromise = once(this.serverProc, "error").then(([error]) => {
+      throw error instanceof Error ? error : new Error(String(error));
+    });
+
+    try {
+      await Promise.race([readyPromise, errorPromise]);
+    } catch (error) {
+      await this.stop();
+      throw error;
+    }
   }
 
   private async waitForReady(verbose: boolean): Promise<void> {
@@ -458,39 +442,76 @@ class McpServerManager {
     );
   }
 
-  async call(method: string, params: unknown, timeoutMs = 30000): Promise<unknown> {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
-    try {
-      const response = await fetch(`http://localhost:${this.assignedPort}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: Math.random(),
-          method,
-          params,
-        }),
-        signal: controller.signal,
-      });
-
-      const result = (await response.json()) as {
-        error?: { message: string };
-        result?: unknown;
+  private registerCleanupHandlers(): void {
+    this.removeCleanupHandlers();
+    const events: Array<NodeJS.Signals | "exit"> = ["SIGINT", "SIGTERM", "SIGQUIT", "exit"];
+    for (const event of events) {
+      const handler = () => {
+        void this.stop();
       };
-
-      if (result.error) {
-        throw new Error(result.error.message);
-      }
-
-      return result.result;
-    } finally {
-      clearTimeout(timeoutId);
+      process.on(event, handler);
+      this.cleanupHandlers.push([event, handler]);
     }
   }
 
+  private removeCleanupHandlers(): void {
+    for (const [event, handler] of this.cleanupHandlers) {
+      process.off(event, handler);
+    }
+    this.cleanupHandlers = [];
+  }
+
+  async call(method: string, params: unknown, timeoutMs = 30000): Promise<unknown> {
+    return await withRetry(
+      async () => {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          const response = await fetch(`http://localhost:${this.assignedPort}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              jsonrpc: "2.0",
+              id: Math.random(),
+              method,
+              params,
+            }),
+            signal: controller.signal,
+          });
+
+          const result = (await response.json()) as {
+            error?: { message: string };
+            result?: unknown;
+          };
+
+          if (result.error) {
+            throw new Error(result.error.message);
+          }
+
+          return result.result;
+        } finally {
+          clearTimeout(timeoutId);
+        }
+      },
+      {
+        maxAttempts: 3,
+        delayMs: 1000,
+        jitterMs: 300,
+        isRetriable: (error) => {
+          if (!(error instanceof Error)) {
+            return false;
+          }
+          if (error.name === "AbortError") {
+            return true;
+          }
+          return /ECONNREFUSED|ECONNRESET|fetch failed/i.test(error.message);
+        },
+      }
+    );
+  }
+
   async stop(): Promise<void> {
+    this.removeCleanupHandlers();
     if (!this.serverProc) {
       return;
     }
@@ -583,13 +604,18 @@ function resolveRepoTargets(
   options: BenchmarkOptions
 ): { repoMap: Map<string, RepoRuntimeConfig>; defaultRepoId: string } {
   const repoMap = new Map<string, RepoRuntimeConfig>();
+  const allowExternalPaths = process.env.KIRI_ALLOW_UNSAFE_PATHS === "1";
 
   if (goldenSet.repos) {
     for (const [id, config] of Object.entries(goldenSet.repos)) {
       if (!config?.repoPath || !config?.dbPath) {
         throw new Error(`Repository '${id}' must define repoPath and dbPath`);
       }
-      repoMap.set(id, { id, repoPath: config.repoPath, dbPath: config.dbPath });
+      repoMap.set(id, {
+        id,
+        repoPath: resolveSafePath(config.repoPath, { allowOutsideBase: allowExternalPaths }),
+        dbPath: resolveSafePath(config.dbPath, { allowOutsideBase: allowExternalPaths }),
+      });
     }
   }
 

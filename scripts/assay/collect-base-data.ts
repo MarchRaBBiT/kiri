@@ -1,10 +1,16 @@
 #!/usr/bin/env tsx
-import { spawn } from "node:child_process";
+/* global fetch */
+import { spawn, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
+
 import { parse as parseYAML } from "yaml";
+
+import { resolveSafePath } from "../../src/shared/fs/safePath.ts";
+import { matchesGlob } from "../../src/shared/utils/glob.ts";
+import { withRetry } from "../../src/shared/utils/retry.ts";
 
 interface DatasetQuery {
   id: string;
@@ -62,14 +68,48 @@ interface QueryResultSnapshot {
 
 const RELEASE_VERSION = process.env.KIRI_BASE_RELEASE ?? "0.10.0";
 const SERVER_PORT = Number(process.env.KIRI_BASE_PORT ?? "22899");
-const DATASET_PATH = join(
-  process.cwd(),
-  "external/assay-kit/examples/kiri-integration/datasets/kiri-golden.yaml"
+const ALLOW_EXTERNAL_PATHS = process.env.KIRI_ALLOW_UNSAFE_PATHS === "1";
+const DATASET_PATH = resolveSafePath(
+  process.env.KIRI_DATASET_PATH ??
+    "external/assay-kit/examples/kiri-integration/datasets/kiri-golden.yaml",
+  { allowOutsideBase: ALLOW_EXTERNAL_PATHS }
 );
 const ASSAY_OUTPUT_DIR = join(process.cwd(), "var/assay/base");
 const REPO_ROOT = process.cwd();
 const DB_SOURCE = join(process.cwd(), "var/index.duckdb");
 const DB_COPY = join(process.cwd(), `var/index-base-${RELEASE_VERSION}.duckdb`);
+
+type CleanupEvent = NodeJS.Signals | "exit";
+
+function registerCleanup(server: ChildProcess): Array<[CleanupEvent, () => void]> {
+  const cleanupHandlers: Array<[CleanupEvent, () => void]> = [];
+  const cleanup = () => stopServer(server);
+  const events: CleanupEvent[] = ["SIGINT", "SIGTERM", "SIGQUIT", "exit"];
+  for (const event of events) {
+    const handler = () => cleanup();
+    cleanupHandlers.push([event, handler]);
+    process.on(event, handler);
+  }
+  return cleanupHandlers;
+}
+
+function removeCleanup(handlers: Array<[CleanupEvent, () => void]>): void {
+  for (const [event, handler] of handlers) {
+    process.off(event, handler);
+  }
+}
+
+function stopServer(server: ChildProcess | null, signal: NodeJS.Signals = "SIGTERM"): void {
+  if (!server || server.killed) {
+    return;
+  }
+  server.kill(signal);
+  setTimeout(() => {
+    if (!server.killed) {
+      server.kill("SIGKILL");
+    }
+  }, 5000);
+}
 
 function ensureDirectories(): void {
   mkdirSync(dirname(DB_COPY), { recursive: true });
@@ -112,37 +152,45 @@ async function callKiri(
   method: string,
   params: Record<string, unknown>,
   timeoutMs: number
-): Promise<any> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(`http://localhost:${port}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: randomUUID(), method, params }),
-      signal: controller.signal,
-    });
-    const payload = (await response.json()) as { result?: unknown; error?: { message: string } };
-    if (payload.error) {
-      throw new Error(payload.error.message);
+): Promise<unknown> {
+  return await withRetry(
+    async () => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const response = await fetch(`http://localhost:${port}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ jsonrpc: "2.0", id: randomUUID(), method, params }),
+          signal: controller.signal,
+        });
+        const payload = (await response.json()) as {
+          result?: unknown;
+          error?: { message: string };
+        };
+        if (payload.error) {
+          throw new Error(payload.error.message);
+        }
+        return payload.result;
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+    {
+      maxAttempts: 3,
+      delayMs: 1000,
+      jitterMs: 500,
+      isRetriable: (error) => {
+        if (!(error instanceof Error)) {
+          return false;
+        }
+        if (error.name === "AbortError") {
+          return true;
+        }
+        return /ECONNREFUSED|ECONNRESET|fetch failed/i.test(error.message);
+      },
     }
-    return payload.result;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-function matchesGlob(path: string, pattern: string): boolean {
-  const normalizedPath = path.replace(/^\.\//, "");
-  const normalizedPattern = pattern.replace(/^\.\//, "");
-  let regexPattern = normalizedPattern
-    .replace(/[.+?^${}()|[\]\\]/g, "\\$&")
-    .replace(/\*\*\//g, "(?:.*/)?")
-    .replace(/\/\*\*/g, "(?:/.*)?")
-    .replace(/\*\*/g, ".*")
-    .replace(/\*/g, "[^/]*");
-  regexPattern = `^${regexPattern}$`;
-  return new RegExp(regexPattern).test(normalizedPath);
+  );
 }
 
 function computeMetrics(
@@ -168,14 +216,21 @@ function computeMetrics(
   return { precision, recall };
 }
 
-function extractPaths(result: any, tool: string): string[] {
+function extractPaths(result: unknown, tool: string): string[] {
   if (tool === "files_search" && Array.isArray(result)) {
-    return result.map((item) => item.path).filter((p): p is string => typeof p === "string");
+    return result
+      .map((item) =>
+        typeof item === "object" && item !== null ? (item as { path?: string }).path : null
+      )
+      .filter((p): p is string => typeof p === "string");
   }
-  if (result && typeof result === "object" && Array.isArray((result as any).context)) {
-    return (result as any).context
-      .map((item: { path?: string }) => item?.path)
-      .filter((p: unknown): p is string => typeof p === "string");
+  if (
+    result &&
+    typeof result === "object" &&
+    Array.isArray((result as { context?: unknown }).context)
+  ) {
+    const context = (result as { context?: Array<{ path?: string }> }).context ?? [];
+    return context.map((item) => item?.path).filter((p): p is string => typeof p === "string");
   }
   return [];
 }
@@ -215,6 +270,7 @@ async function main(): Promise<void> {
 
   server.stdout?.on("data", (data) => process.stdout.write(`[server] ${data}`));
   server.stderr?.on("data", (data) => process.stderr.write(`[server] ${data}`));
+  const cleanupHandlers = registerCleanup(server);
 
   try {
     await waitForServer(SERVER_PORT);
@@ -330,7 +386,8 @@ async function main(): Promise<void> {
     console.log(`📄 Saved Markdown: ${mdPath}`);
   } finally {
     console.log("\n🛑 Stopping release server...");
-    server.kill("SIGTERM");
+    stopServer(server);
+    removeCleanup(cleanupHandlers);
   }
 }
 

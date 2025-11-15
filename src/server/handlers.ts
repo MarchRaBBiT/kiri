@@ -7,6 +7,14 @@ import { generateEmbedding, structuralSimilarity } from "../shared/embedding.js"
 import { encode as encodeGPT, tokenizeText } from "../shared/tokenizer.js";
 
 import { expandAbbreviations } from "./abbreviations.js";
+import {
+  type BoostProfileName,
+  type BoostProfileConfig,
+  getBoostProfile,
+} from "./boost-profiles.js";
+import { loadServerConfig } from "./config.js";
+import { FtsStatusCache, ServerContext } from "./context.js";
+import { coerceProfileName, loadScoringProfile, type ScoringWeights } from "./scoring.js";
 import { createServerServices, ServerServices } from "./services/index.js";
 
 // Re-export extracted handlers for backward compatibility
@@ -15,13 +23,6 @@ export {
   type SnippetsGetParams,
   type SnippetResult,
 } from "./handlers/snippets-get.js";
-import {
-  type BoostProfileName,
-  type BoostProfileConfig,
-  getBoostProfile,
-} from "./boost-profiles.js";
-import { FtsStatusCache, ServerContext } from "./context.js";
-import { coerceProfileName, loadScoringProfile, type ScoringWeights } from "./scoring.js";
 
 // Configuration file patterns (v0.8.0+: consolidated to avoid duplication)
 // Comprehensive list covering multiple languages and tools
@@ -426,44 +427,25 @@ const MAX_MATCHES_PER_KEYWORD = 40;
 const MAX_DEPENDENCY_SEEDS = 8;
 const MAX_DEPENDENCY_SEEDS_QUERY_LIMIT = 100; // SQL injection防御用の上限
 const NEARBY_LIMIT = 6;
-const SUPPRESS_NON_CODE_ENABLED = envFlagEnabled(process.env.KIRI_SUPPRESS_NON_CODE, true);
-const FINAL_RESULT_SUPPRESSION_ENABLED = envFlagEnabled(
-  process.env.KIRI_SUPPRESS_FINAL_RESULTS,
-  true
-);
-const CLAMP_SNIPPETS_ENABLED = envFlagEnabled(process.env.KIRI_CLAMP_SNIPPETS, true);
-const FALLBACK_SNIPPET_WINDOW = Math.max(8, parseEnvNumber(process.env.KIRI_SNIPPET_WINDOW, 16));
+const serverConfig = loadServerConfig();
+const SUPPRESS_NON_CODE_ENABLED = serverConfig.features.suppressNonCode;
+const FINAL_RESULT_SUPPRESSION_ENABLED = serverConfig.features.suppressFinalResults;
+const CLAMP_SNIPPETS_ENABLED = serverConfig.features.clampSnippets;
+const FALLBACK_SNIPPET_WINDOW = serverConfig.features.snippetWindow;
 const MAX_RERANK_LIMIT = 50;
 const MAX_ARTIFACT_HINTS = 8;
 const SAFE_PATH_PATTERN = /^[a-zA-Z0-9_.\-/]+$/;
-const HINT_PRIORITY_TEXT_MULTIPLIER = parseFloat(process.env.KIRI_HINT_TEXT_MULTIPLIER ?? "6");
-const HINT_PRIORITY_PATH_MULTIPLIER = parseFloat(process.env.KIRI_HINT_PATH_MULTIPLIER ?? "2");
-const HINT_PRIORITY_BASE_BONUS = parseFloat(process.env.KIRI_HINT_BASE_BONUS ?? "5");
-const HINT_DIR_FEATURE_ENABLED = envFlagEnabled(process.env.KIRI_HINT_ENABLE_DIR, false);
-const HINT_DEP_FEATURE_ENABLED = envFlagEnabled(process.env.KIRI_HINT_ENABLE_DEP, false);
-const HINT_SEM_FEATURE_ENABLED = envFlagEnabled(process.env.KIRI_HINT_ENABLE_SEM, false);
-const HINT_SUBSTRING_FEATURE_ENABLED = envFlagEnabled(process.env.KIRI_HINT_ENABLE_SUBSTRING, true);
+const HINT_PRIORITY_TEXT_MULTIPLIER = serverConfig.hints.priority.textMultiplier;
+const HINT_PRIORITY_PATH_MULTIPLIER = serverConfig.hints.priority.pathMultiplier;
+const HINT_PRIORITY_BASE_BONUS = serverConfig.hints.priority.baseBonus;
 
-const HINT_DIR_LIMIT = HINT_DIR_FEATURE_ENABLED
-  ? Math.max(0, parseInt(process.env.KIRI_HINT_NEAR_LIMIT_DIR ?? "2", 10))
-  : 0;
-const HINT_DIR_MAX_FILES = Math.max(1, parseInt(process.env.KIRI_HINT_NEAR_MAX_FILES ?? "10", 10));
-const HINT_DEP_OUT_LIMIT = HINT_DEP_FEATURE_ENABLED
-  ? Math.max(0, parseInt(process.env.KIRI_HINT_DEP_OUT_LIMIT ?? "1", 10))
-  : 0;
-const HINT_DEP_IN_LIMIT = HINT_DEP_FEATURE_ENABLED
-  ? Math.max(0, parseInt(process.env.KIRI_HINT_DEP_IN_LIMIT ?? "1", 10))
-  : 0;
-const HINT_SEM_LIMIT = HINT_SEM_FEATURE_ENABLED
-  ? Math.max(0, parseInt(process.env.KIRI_HINT_SEM_LIMIT ?? "2", 10))
-  : 0;
-const HINT_SEM_DIR_CANDIDATE_LIMIT = Math.max(
-  1,
-  parseInt(process.env.KIRI_HINT_SEM_DIR_CANDIDATES ?? "20", 10)
-);
-const HINT_SEM_THRESHOLD = parseFloat(process.env.KIRI_HINT_SEM_THRESHOLD ?? "0.65");
-const HINT_EXPANSION_ENABLED =
-  HINT_DIR_FEATURE_ENABLED || HINT_DEP_FEATURE_ENABLED || HINT_SEM_FEATURE_ENABLED;
+const HINT_DIR_LIMIT = serverConfig.hints.directory.limit;
+const HINT_DIR_MAX_FILES = serverConfig.hints.directory.maxFiles;
+const HINT_DEP_OUT_LIMIT = serverConfig.hints.dependency.outLimit;
+const HINT_DEP_IN_LIMIT = serverConfig.hints.dependency.inLimit;
+const HINT_SEM_LIMIT = serverConfig.hints.semantic.limit;
+const HINT_SEM_DIR_CANDIDATE_LIMIT = serverConfig.hints.semantic.dirCandidateLimit;
+const HINT_SEM_THRESHOLD = serverConfig.hints.semantic.threshold;
 
 const SUPPRESSED_PATH_PREFIXES = [".github/", ".git/", "ThirdPartyNotices", "node_modules/"];
 const SUPPRESSED_FILE_NAMES = ["thirdpartynotices.txt", "thirdpartynotices.md", "cgmanifest.json"];
@@ -480,39 +462,14 @@ function isSuppressedPath(path: string): boolean {
   const lowerPrefixMatches = SUPPRESSED_PATH_PREFIXES.map((prefix) => prefix.toLowerCase());
   return lowerPrefixMatches.some((prefix) => lower.includes(prefix));
 }
-const HINT_PER_HINT_LIMIT = HINT_EXPANSION_ENABLED
-  ? Math.max(1, parseInt(process.env.KIRI_HINT_PER_HINT_LIMIT ?? "6", 10))
-  : 0;
-const HINT_DB_QUERY_BUDGET = HINT_EXPANSION_ENABLED
-  ? Math.max(1, parseInt(process.env.KIRI_HINT_DB_QUERY_LIMIT ?? "12", 10))
-  : 0;
-const HINT_SUBSTRING_LIMIT = HINT_SUBSTRING_FEATURE_ENABLED
-  ? Math.max(0, parseInt(process.env.KIRI_HINT_SUBSTRING_LIMIT ?? "3", 10))
-  : 0;
-const HINT_SUBSTRING_BOOST = parseFloat(process.env.KIRI_HINT_SUBSTRING_BOOST ?? "3");
-
-function envFlagEnabled(value: string | undefined, defaultEnabled: boolean): boolean {
-  if (value === undefined) {
-    return defaultEnabled;
-  }
-  const normalized = value.trim().toLowerCase();
-  return normalized !== "0" && normalized !== "false" && normalized !== "off";
-}
-
-function parseEnvNumber(value: string | undefined, fallback: number): number {
-  if (value === undefined) {
-    return fallback;
-  }
-  const parsed = Number.parseInt(value, 10);
-  if (Number.isFinite(parsed) && parsed > 0) {
-    return parsed;
-  }
-  return fallback;
-}
+const HINT_PER_HINT_LIMIT = serverConfig.hints.perHintLimit;
+const HINT_DB_QUERY_BUDGET = serverConfig.hints.dbQueryLimit;
+const HINT_SUBSTRING_LIMIT = serverConfig.hints.substring.limit;
+const HINT_SUBSTRING_BOOST = serverConfig.hints.substring.boost;
 
 // Issue #68: Path/Large File Penalty configuration (環境変数で上書き可能)
-const PATH_MISS_DELTA = parseFloat(process.env.KIRI_PATH_MISS_DELTA || "-0.5");
-const LARGE_FILE_DELTA = parseFloat(process.env.KIRI_LARGE_FILE_DELTA || "-0.8");
+const PATH_MISS_DELTA = serverConfig.penalties.pathMissDelta;
+const LARGE_FILE_DELTA = serverConfig.penalties.largeFileDelta;
 const MAX_WHY_TAGS = 10;
 
 // 項目3: whyタグの優先度マップ（低い数値ほど高優先度）

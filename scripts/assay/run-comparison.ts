@@ -27,7 +27,7 @@ interface CLIOptions {
 function parseArgs(): CLIOptions {
   const args = process.argv.slice(2);
   const options: CLIOptions = {
-    dataset: "external/assay-kit/examples/kiri-integration/datasets/kiri-ab.yaml",
+    dataset: "datasets/kiri-ab.yaml",
     variantA: "default",
     variantB: "balanced",
     concurrency: 2,
@@ -45,15 +45,21 @@ function parseArgs(): CLIOptions {
     const value = args[i + 1];
     switch (flag) {
       case "--dataset":
-        options.dataset = value ?? options.dataset;
+        if (typeof value === "string" && value.length > 0) {
+          options.dataset = value;
+        }
         i += 1;
         break;
       case "--variant-a":
-        options.variantA = value ?? options.variantA;
+        if (typeof value === "string" && value.length > 0) {
+          options.variantA = value;
+        }
         i += 1;
         break;
       case "--variant-b":
-        options.variantB = value ?? options.variantB;
+        if (typeof value === "string" && value.length > 0) {
+          options.variantB = value;
+        }
         i += 1;
         break;
       case "--concurrency":
@@ -65,7 +71,9 @@ function parseArgs(): CLIOptions {
         i += 1;
         break;
       case "--stats":
-        options.statsMethod = (value as CLIOptions["statsMethod"]) ?? options.statsMethod;
+        if (typeof value === "string" && value.length > 0) {
+          options.statsMethod = value as CLIOptions["statsMethod"];
+        }
         i += 1;
         break;
       case "--alpha":
@@ -73,15 +81,21 @@ function parseArgs(): CLIOptions {
         i += 1;
         break;
       case "--correction":
-        options.correction = (value as CLIOptions["correction"]) ?? options.correction;
+        if (typeof value === "string" && value.length > 0) {
+          options.correction = value as CLIOptions["correction"];
+        }
         i += 1;
         break;
       case "--db-left":
-        options.dbLeft = value ?? options.dbLeft;
+        if (typeof value === "string" && value.length > 0) {
+          options.dbLeft = value;
+        }
         i += 1;
         break;
       case "--db-right":
-        options.dbRight = value ?? options.dbRight;
+        if (typeof value === "string" && value.length > 0) {
+          options.dbRight = value;
+        }
         i += 1;
         break;
       case "--help":
@@ -98,7 +112,7 @@ function parseArgs(): CLIOptions {
 
 function printHelp(): void {
   console.log(
-    `\n🔬 Assay ComparisonRunner (KIRI Integration)\n\nUsage:\n  pnpm run assay:compare -- [options]\n\nOptions:\n  --dataset <path>          Dataset path (default: external/.../kiri-ab.yaml)\n  --variant-a <name>        Variant name for adapter A (default: default)\n  --variant-b <name>        Variant name for adapter B (default: balanced)\n  --concurrency <n>         Runner concurrency (default: 2)\n  --degradation <ratio>     Degradation threshold (default: 0.3)\n  --stats <method>          Statistical test (auto|paired-t|independent-t|mann-whitney-u)\n  --alpha <value>           Significance level (default: 0.05)\n  --correction <method>    Multiple comparison correction (none|bonferroni|holm, default: holm)\n  --help                    Show this message\n\nAvailable variants: ${getAvailableVariants().join(", ")}\n`
+    `\n🔬 Assay ComparisonRunner (KIRI Integration)\n\nUsage:\n  pnpm run assay:compare -- [options]\n\nOptions:\n  --dataset <path>          Dataset path (default: datasets/kiri-ab.yaml)\n  --variant-a <name>        Variant name for adapter A (default: default)\n  --variant-b <name>        Variant name for adapter B (default: balanced)\n  --concurrency <n>         Runner concurrency (default: 2)\n  --degradation <ratio>     Degradation threshold (default: 0.3)\n  --stats <method>          Statistical test (auto|paired-t|independent-t|mann-whitney-u)\n  --alpha <value>           Significance level (default: 0.05)\n  --correction <method>    Multiple comparison correction (none|bonferroni|holm, default: holm)\n  --help                    Show this message\n\nAvailable variants: ${getAvailableVariants().join(", ")}\n`
   );
 }
 
@@ -128,6 +142,9 @@ async function main(): Promise<void> {
       ? dbLeftPath
       : prepareVariantDbCopy(dbLeftPath, options.variantB));
 
+  const statsMethodNormalized: "auto" | "paired-t" | "independent-t" | "mann-whitney" =
+    options.statsMethod === "mann-whitney-u" ? "mann-whitney" : options.statsMethod;
+
   console.log("🔬 KIRI ComparisonRunner (Phase 2.1)");
   console.log(`  Dataset: ${datasetPath}`);
   console.log(`  Variant A: ${options.variantA} (db: ${dbLeftPath})`);
@@ -152,7 +169,7 @@ async function main(): Promise<void> {
     degradationThreshold: options.degradationThreshold,
     statisticalAnalysis: {
       enabled: true,
-      method: options.statsMethod,
+      method: statsMethodNormalized,
       alpha: options.statsAlpha,
       correction: options.correction,
       metrics: [],
@@ -174,7 +191,7 @@ async function main(): Promise<void> {
     resultsDir,
     `comparison-${options.variantA}-vs-${options.variantB}-${timestamp}.json`
   );
-  const jsonReporter = new JsonReporter(jsonPath);
+  const jsonReporter = new JsonReporter({ outputPath: jsonPath });
   await jsonReporter.write(result);
 
   console.log(`\n📄 Comparison result saved to ${jsonPath}`);

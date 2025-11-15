@@ -1,7 +1,8 @@
 /* global fetch */
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { join } from "node:path";
+import { once } from "node:events";
+import { join, isAbsolute } from "node:path";
 
 import type {
   SearchAdapter,
@@ -12,22 +13,72 @@ import type {
 } from "../../external/assay-kit/src/index.ts";
 import { precisionAtK, recallAtK } from "../../external/assay-kit/src/index.ts";
 
+const MAX_QUERY_HINTS = 8;
+
 export interface KiriAdapterConfig {
   limit?: number;
   compact?: boolean;
   boostProfile?: string;
 }
 
-export class KiriSearchAdapter implements SearchAdapter<Query, Metrics> {
+interface KiriQueryMetadata extends Record<string, unknown> {
+  hints?: string[];
+  expected?: string[];
+}
+
+type KiriQuery = Query<Record<string, unknown>, KiriQueryMetadata>;
+
+interface ContextBundleArtifactsPayload {
+  hints: string[];
+}
+
+function normalizeQueryHints(hints?: unknown): string[] {
+  if (!Array.isArray(hints)) {
+    return [];
+  }
+
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+
+  for (const hint of hints) {
+    if (typeof hint !== "string") {
+      continue;
+    }
+    const trimmed = hint.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+    normalized.push(trimmed);
+    seen.add(trimmed);
+    if (normalized.length >= MAX_QUERY_HINTS) {
+      break;
+    }
+  }
+
+  return normalized;
+}
+
+function buildArtifactsFromMetadata(
+  metadata?: KiriQueryMetadata
+): ContextBundleArtifactsPayload | undefined {
+  const hints = normalizeQueryHints(metadata?.hints);
+  if (hints.length === 0) {
+    return undefined;
+  }
+  return { hints };
+}
+
+export class KiriSearchAdapter implements SearchAdapter<KiriQuery, Metrics> {
   private serverProcess: ChildProcess | null = null;
   private readonly port: number;
   private serverLogs = "";
   private readonly config: Required<KiriAdapterConfig>;
+  private cleanupHandlers: Array<[NodeJS.Signals | "exit", () => void]> = [];
 
   constructor(
     private readonly databasePath: string,
     private readonly repoRoot: string,
-    private readonly kiriServerCommand: string = "node_modules/.bin/tsx",
+    private readonly kiriServerCommand?: string,
     port: number = 19999,
     config: KiriAdapterConfig = {}
   ) {
@@ -39,12 +90,13 @@ export class KiriSearchAdapter implements SearchAdapter<Query, Metrics> {
     };
   }
 
-  async warmup(dataset: Dataset<Query>): Promise<void> {
+  async warmup(dataset: Dataset<KiriQuery>): Promise<void> {
     console.log(`🚀 Starting KIRI server on port ${this.port}...`);
 
-    const cliPath = join(this.repoRoot, "node_modules/tsx/dist/cli.mjs");
+    this.registerCleanupHandlers();
+    const { command, args: launcherArgs } = this.buildServerLauncher();
     const args = [
-      cliPath,
+      ...launcherArgs,
       "src/server/main.ts",
       "--port",
       String(this.port),
@@ -54,7 +106,7 @@ export class KiriSearchAdapter implements SearchAdapter<Query, Metrics> {
       this.repoRoot,
     ];
 
-    this.serverProcess = spawn(process.execPath, args, {
+    this.serverProcess = spawn(command, args, {
       stdio: ["ignore", "pipe", "pipe"],
       cwd: this.repoRoot,
       env: process.env,
@@ -91,7 +143,7 @@ export class KiriSearchAdapter implements SearchAdapter<Query, Metrics> {
     }
   }
 
-  async execute(query: Query, ctx: SearchAdapterContext): Promise<Metrics> {
+  async execute(query: KiriQuery, ctx: SearchAdapterContext): Promise<Metrics> {
     const startTime = Date.now();
 
     if (ctx.signal.aborted) {
@@ -107,6 +159,11 @@ export class KiriSearchAdapter implements SearchAdapter<Query, Metrics> {
 
       if (this.config.boostProfile && this.config.boostProfile !== "default") {
         kiriParams.boost_profile = this.config.boostProfile;
+      }
+
+      const artifacts = buildArtifactsFromMetadata(query.metadata);
+      if (artifacts) {
+        kiriParams.artifacts = artifacts;
       }
 
       const result = await this.callKiri(
@@ -145,12 +202,34 @@ export class KiriSearchAdapter implements SearchAdapter<Query, Metrics> {
   async stop(reason?: string): Promise<void> {
     console.log(`🛑 Stopping KIRI server${reason ? `: ${reason}` : ""}...`);
 
-    if (this.serverProcess) {
-      this.serverProcess.kill("SIGTERM");
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      this.serverProcess = null;
+    const proc = this.serverProcess;
+    if (!proc) {
+      console.log("✅ KIRI server stopped");
+      return;
     }
 
+    this.serverProcess = null;
+    proc.kill("SIGTERM");
+
+    try {
+      await Promise.race([
+        once(proc, "exit"),
+        new Promise((resolve, reject) =>
+          setTimeout(() => reject(new Error("server-stop-timeout")), 5000)
+        ),
+      ]);
+    } catch {
+      proc.kill("SIGKILL");
+      try {
+        await once(proc, "exit");
+      } catch {
+        // ignore
+      }
+    } finally {
+      proc.removeAllListeners();
+    }
+
+    this.removeCleanupHandlers();
     console.log("✅ KIRI server stopped");
   }
 
@@ -186,7 +265,47 @@ export class KiriSearchAdapter implements SearchAdapter<Query, Metrics> {
     );
   }
 
-  private async callKiri(
+  private buildServerLauncher(): { command: string; args: string[] } {
+    if (this.kiriServerCommand) {
+      const command = this.resolveLauncherCommand(this.kiriServerCommand);
+      return { command, args: [] };
+    }
+    const cliPath = join(this.repoRoot, "node_modules/tsx/dist/cli.mjs");
+    return { command: process.execPath, args: [cliPath] };
+  }
+
+  private resolveLauncherCommand(command: string): string {
+    if (command.includes("/") || command.includes("\\")) {
+      if (isAbsolute(command)) {
+        return command;
+      }
+      return join(this.repoRoot, command);
+    }
+    return command;
+  }
+
+  private registerCleanupHandlers(): void {
+    if (this.cleanupHandlers.length > 0) {
+      return;
+    }
+    const events: Array<NodeJS.Signals | "exit"> = ["SIGINT", "SIGTERM", "SIGQUIT", "exit"];
+    for (const event of events) {
+      const handler = () => {
+        void this.stop("process-exit");
+      };
+      process.on(event, handler);
+      this.cleanupHandlers.push([event, handler]);
+    }
+  }
+
+  private removeCleanupHandlers(): void {
+    for (const [event, handler] of this.cleanupHandlers) {
+      process.off(event, handler);
+    }
+    this.cleanupHandlers = [];
+  }
+
+  protected async callKiri(
     method: string,
     params: Record<string, unknown>,
     timeoutMs: number,
@@ -244,7 +363,7 @@ export class KiriSearchAdapter implements SearchAdapter<Query, Metrics> {
     return [];
   }
 
-  private getExpectedPaths(query: Query): string[] {
+  private getExpectedPaths(query: KiriQuery): string[] {
     const expected = query.metadata?.expected;
     if (Array.isArray(expected)) {
       return expected as string[];

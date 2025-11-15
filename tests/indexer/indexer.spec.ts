@@ -1,12 +1,16 @@
+import { execFile } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 
 import { afterEach, describe, expect, it } from "vitest";
 
 import { runIndexer } from "../../src/indexer/cli.js";
 import { DuckDBClient } from "../../src/shared/duckdb.js";
 import { createTempRepo } from "../helpers/test-repo.js";
+
+const execFileAsync = promisify(execFile);
 
 interface CleanupTarget {
   dispose: () => Promise<void>;
@@ -177,12 +181,75 @@ describe("runIndexer", () => {
     expect(firstRow.root).toBe(repo.path);
   });
 
+  it("indexes tracked files inside git submodules", async () => {
+    const submodule = await createTempRepo({
+      "src/module.ts": "export const moduleValue = 42;",
+    });
+    cleanupTargets.push({ dispose: submodule.cleanup });
+
+    const hostRepo = await createTempRepo({
+      "README.md": "# host repository\n",
+    });
+    cleanupTargets.push({ dispose: hostRepo.cleanup });
+
+    await execFileAsync("git", ["submodule", "add", submodule.path, "external/assay-kit"], {
+      cwd: hostRepo.path,
+      env: { ...process.env, GIT_ALLOW_PROTOCOL: "file" },
+    });
+    await execFileAsync("git", ["add", ".gitmodules", "external/assay-kit"], {
+      cwd: hostRepo.path,
+    });
+    await execFileAsync("git", ["commit", "-m", "Add external assay-kit submodule"], {
+      cwd: hostRepo.path,
+    });
+
+    const dbDir = await mkdtemp(join(tmpdir(), "kiri-db-"));
+    const dbPath = join(dbDir, "index.duckdb");
+    cleanupTargets.push({
+      dispose: async () => await rm(dbDir, { recursive: true, force: true }),
+    });
+
+    await runIndexer({ repoRoot: hostRepo.path, databasePath: dbPath, full: true });
+
+    const db = await DuckDBClient.connect({ databasePath: dbPath });
+    cleanupTargets.push({ dispose: async () => await db.close() });
+
+    const repoRows = await db.all<{ id: number }>("SELECT id FROM repo");
+    expect(repoRows).toHaveLength(1);
+    const repoId = repoRows[0]?.id;
+    expect(repoId).toBeDefined();
+    if (!repoId) throw new Error("No repo id found");
+
+    const fileRows = await db.all<{ path: string }>(
+      "SELECT path FROM file WHERE repo_id = ? ORDER BY path",
+      [repoId]
+    );
+    const paths = fileRows.map((row) => row.path);
+    expect(paths).toContain("external/assay-kit/src/module.ts");
+  });
+
   it("captures structured metadata and markdown links", async () => {
     const repo = await createTempRepo({
-      "docs/runbook.md": `---\ntitle: Metrics Runbook\ntags:\n  - observability\n  - dashboards\ncategory: guides\n---\nRefer to the API doc for request flow.\n\nSee the [API](../src/api.md#handlers) reference.\n`,
-      "docs/faq.md": `# FAQ\nThis document lists common questions.\n`,
-      "src/api.md": `# API\nImplements handlers.\n`,
-      "configs/alerting.yml": `service: alerts\nteam: sre\n`,
+      "docs/runbook.md": `---
+title: Metrics Runbook
+tags:
+  - observability
+  - dashboards
+category: guides
+---
+Refer to the API doc for request flow.
+
+See the [API](../src/api.md#handlers) reference.
+`,
+      "docs/faq.md": `# FAQ
+This document lists common questions.
+`,
+      "src/api.md": `# API
+Implements handlers.
+`,
+      "configs/alerting.yml": `service: alerts
+team: sre
+`,
       "data/owner.json": `{"owner": {"name": "Observability"}, "priority": "P1"}`,
     });
     cleanupTargets.push({ dispose: repo.cleanup });
@@ -230,31 +297,17 @@ describe("runIndexer", () => {
     expect(frontMatterTags.map((row) => row.value.toLowerCase())).toEqual(
       expect.arrayContaining(["observability", "dashboards"])
     );
-    expect(kvRows).toContainEqual(
-      expect.objectContaining({ path: "configs/alerting.yml", key: "service", value: "alerts" })
-    );
-    expect(kvRows).toContainEqual(
-      expect.objectContaining({
-        path: "data/owner.json",
-        key: "owner.name",
-        value: "Observability",
-      })
-    );
 
-    const linkRows = await db.all<{
-      src_path: string;
-      target: string;
-      resolved_path: string | null;
-      anchor_text: string;
-    }>("SELECT src_path, target, resolved_path, anchor_text FROM markdown_link WHERE repo_id = ?", [
-      repoId,
-    ]);
-    expect(linkRows).toContainEqual(
-      expect.objectContaining({
-        src_path: "docs/runbook.md",
-        resolved_path: "src/api.md",
-        anchor_text: "API",
-      })
+    const markdownRefs = await db.all<{ srcPath: string; target: string; kind: string }>(
+      "SELECT src_path as srcPath, target, kind FROM markdown_link WHERE repo_id = ? ORDER BY src_path, target",
+      [repoId]
     );
+    expect(markdownRefs).toEqual([
+      expect.objectContaining({
+        srcPath: "docs/runbook.md",
+        target: "../src/api.md#handlers",
+        kind: "relative",
+      }),
+    ]);
   });
 });

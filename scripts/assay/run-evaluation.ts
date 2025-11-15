@@ -1,6 +1,7 @@
 #!/usr/bin/env tsx
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
+
 import {
   loadDataset,
   Runner,
@@ -8,7 +9,10 @@ import {
   MarkdownReporter,
   ConsoleReporter,
 } from "../../external/assay-kit/src/index.ts";
+import { PluginRegistry } from "../../external/assay-kit/src/plugins/registry.ts";
+
 import { createKiriAdapter } from "./kiri-variants.js";
+import contextCoverageMetric from "./plugins/context-coverage-metric.js";
 
 type EvalProfile = "current" | "release";
 
@@ -109,6 +113,18 @@ async function main(): Promise<void> {
   await consoleReporter.write(result);
 
   console.log(`\n📄 Results written to:\n  JSON: ${jsonPath}\n  Markdown: ${mdPath}\n`);
+
+  const registry = new PluginRegistry();
+  await registry.register(contextCoverageMetric, {
+    config: { threshold: 0.8 },
+    timeout: 2000,
+  });
+  const loadedMetrics = registry
+    .getAll("metric")
+    .map((plugin) => plugin.plugin.meta.name)
+    .join(", ");
+  console.log(`🔌 Loaded metric plugins: ${loadedMetrics || "(none)"}`);
+  await registry.disposeAll("evaluation-complete");
 
   process.exit(0);
 }

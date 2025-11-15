@@ -87,16 +87,59 @@ async function main(): Promise<void> {
   const dataset = await loadDataset(datasetPath);
   console.log(`  Loaded ${dataset.queries.length} queries from ${dataset.name}`);
 
-  const adapter = createKiriAdapter("default", databasePath, repoRoot);
-  const runner = new Runner({
-    adapter,
-    warmupRuns: 1,
-    concurrency: 3,
-    maxRetries: 2,
-  });
+  const registry = new PluginRegistry();
+  let enhancedResult: Awaited<ReturnType<Runner["evaluate"]>>;
+  let pluginMetricsSummary: Record<string, unknown> | null = null;
+  try {
+    await registry.register(contextCoverageMetric, {
+      config: { threshold: 0.8 },
+      timeout: 2000,
+    });
 
-  console.log("🚀 Running Assay evaluation (Phase 2 baseline)...\n");
-  const result = await runner.evaluate(dataset);
+    const adapter = createKiriAdapter("default", databasePath, repoRoot);
+    const runner = new Runner({
+      adapter,
+      warmupRuns: 1,
+      concurrency: 3,
+      maxRetries: 2,
+    });
+
+    console.log("🚀 Running Assay evaluation (Phase 2 baseline)...\n");
+    const result = await runner.evaluate(dataset);
+
+    const pluginMetrics: Record<string, unknown> = {};
+    for (const handle of registry.getAll("metric")) {
+      const capabilities = handle.capabilities;
+      if (!capabilities?.calculate) {
+        continue;
+      }
+      try {
+        const values = await capabilities.calculate();
+        if (values && Object.keys(values).length > 0) {
+          pluginMetrics[handle.plugin.meta.name] = values;
+        }
+      } catch (error) {
+        console.warn(
+          `⚠️  Metric plugin '${handle.plugin.meta.name}' failed: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+    }
+
+    if (Object.keys(pluginMetrics).length > 0) {
+      pluginMetricsSummary = pluginMetrics;
+      enhancedResult = {
+        ...result,
+        metadata: {
+          ...(result.metadata ?? {}),
+          pluginMetrics,
+        },
+      };
+    } else {
+      enhancedResult = result;
+    }
+  } finally {
+    await registry.disposeAll("evaluation-complete");
+  }
 
   const timestamp = new Date().toISOString().split("T")[0];
   const baseName = `eval-${profile}-${timestamp}`;
@@ -104,27 +147,24 @@ async function main(): Promise<void> {
   const mdPath = join(resultsDir, `${baseName}.md`);
 
   const jsonReporter = new JsonReporter({ outputPath: jsonPath });
-  await jsonReporter.write(result);
+  await jsonReporter.write(enhancedResult);
 
   const mdReporter = new MarkdownReporter({ outputPath: mdPath });
-  await mdReporter.write(result);
+  await mdReporter.write(enhancedResult);
 
   const consoleReporter = new ConsoleReporter({ verbosity: "normal" });
-  await consoleReporter.write(result);
+  await consoleReporter.write(enhancedResult);
 
   console.log(`\n📄 Results written to:\n  JSON: ${jsonPath}\n  Markdown: ${mdPath}\n`);
 
-  const registry = new PluginRegistry();
-  await registry.register(contextCoverageMetric, {
-    config: { threshold: 0.8 },
-    timeout: 2000,
-  });
-  const loadedMetrics = registry
-    .getAll("metric")
-    .map((plugin) => plugin.plugin.meta.name)
-    .join(", ");
-  console.log(`🔌 Loaded metric plugins: ${loadedMetrics || "(none)"}`);
-  await registry.disposeAll("evaluation-complete");
+  if (pluginMetricsSummary) {
+    console.log("🔌 Plugin metrics summary:");
+    for (const [name, values] of Object.entries(pluginMetricsSummary)) {
+      console.log(`  • ${name}:`, values);
+    }
+  } else {
+    console.log("🔌 Loaded metric plugins: (none)");
+  }
 
   process.exit(0);
 }

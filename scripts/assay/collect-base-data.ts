@@ -3,7 +3,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { join, dirname, isAbsolute } from "node:path";
 import { performance } from "node:perf_hooks";
 
 import { parse as parseYAML } from "yaml";
@@ -69,11 +69,12 @@ interface QueryResultSnapshot {
 const RELEASE_VERSION = process.env.KIRI_BASE_RELEASE ?? "0.10.0";
 const SERVER_PORT = Number(process.env.KIRI_BASE_PORT ?? "22899");
 const ALLOW_EXTERNAL_PATHS = process.env.KIRI_ALLOW_UNSAFE_PATHS === "1";
-const DATASET_PATH = resolveSafePath(
+const DATASET_INPUT =
   process.env.KIRI_DATASET_PATH ??
-    "external/assay-kit/examples/kiri-integration/datasets/kiri-golden.yaml",
-  { allowOutsideBase: ALLOW_EXTERNAL_PATHS }
-);
+  "external/assay-kit/examples/kiri-integration/datasets/kiri-golden.yaml";
+const DATASET_PATH = resolveSafePath(DATASET_INPUT, {
+  allowOutsideBase: ALLOW_EXTERNAL_PATHS || isAbsolute(DATASET_INPUT),
+});
 const ASSAY_OUTPUT_DIR = join(process.cwd(), "var/assay/base");
 const REPO_ROOT = process.cwd();
 const DB_SOURCE = join(process.cwd(), "var/index.duckdb");

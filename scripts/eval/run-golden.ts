@@ -15,7 +15,7 @@
 import { spawn, type ChildProcess, execSync } from "node:child_process";
 import { once } from "node:events";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { join, isAbsolute } from "node:path";
 
 import { parse as parseYAML } from "yaml";
 
@@ -51,6 +51,8 @@ function estimateTokensFromText(content: string): number {
   }
 }
 
+const tokenBaselineCache = new Map<string, number>();
+
 function computeNaiveTokenBaseline(paths: string[], repoRoot: string): number | null {
   if (paths.length === 0) {
     return null;
@@ -68,8 +70,13 @@ function computeNaiveTokenBaseline(paths: string[], repoRoot: string): number | 
       return null;
     }
     try {
-      const content = readFileSync(absPath, "utf8");
-      total += estimateTokensFromText(content);
+      let cached = tokenBaselineCache.get(absPath);
+      if (cached === undefined) {
+        const content = readFileSync(absPath, "utf8");
+        cached = estimateTokensFromText(content);
+        tokenBaselineCache.set(absPath, cached);
+      }
+      total += cached;
     } catch (error) {
       console.warn(`⚠️  Failed to read ${absPath} for token baseline`, error);
       return null;
@@ -308,11 +315,16 @@ Options:
     }
   }
 
-  const allowExternalPaths = process.env.KIRI_ALLOW_UNSAFE_PATHS === "1";
-  options.dbPath = resolveSafePath(options.dbPath, { allowOutsideBase: allowExternalPaths });
-  options.repoPath = resolveSafePath(options.repoPath, { allowOutsideBase: allowExternalPaths });
+  const allowUnsafe = process.env.KIRI_ALLOW_UNSAFE_PATHS === "1";
+  const allowDbOutside = allowUnsafe || isAbsolute(options.dbPath);
+  const allowRepoOutside = allowUnsafe || isAbsolute(options.repoPath);
+  const allowOutOutside = allowUnsafe || isAbsolute(options.outputPath);
+  options.dbPath = resolveSafePath(options.dbPath, { allowOutsideBase: allowDbOutside });
+  options.repoPath = resolveSafePath(options.repoPath, {
+    allowOutsideBase: allowRepoOutside,
+  });
   options.outputPath = resolveSafePath(options.outputPath, {
-    allowOutsideBase: allowExternalPaths,
+    allowOutsideBase: allowOutOutside,
   });
 
   return options;
@@ -604,17 +616,19 @@ function resolveRepoTargets(
   options: BenchmarkOptions
 ): { repoMap: Map<string, RepoRuntimeConfig>; defaultRepoId: string } {
   const repoMap = new Map<string, RepoRuntimeConfig>();
-  const allowExternalPaths = process.env.KIRI_ALLOW_UNSAFE_PATHS === "1";
+  const allowUnsafe = process.env.KIRI_ALLOW_UNSAFE_PATHS === "1";
 
   if (goldenSet.repos) {
     for (const [id, config] of Object.entries(goldenSet.repos)) {
       if (!config?.repoPath || !config?.dbPath) {
         throw new Error(`Repository '${id}' must define repoPath and dbPath`);
       }
+      const repoAllow = allowUnsafe || isAbsolute(config.repoPath);
+      const dbAllow = allowUnsafe || isAbsolute(config.dbPath);
       repoMap.set(id, {
         id,
-        repoPath: resolveSafePath(config.repoPath, { allowOutsideBase: allowExternalPaths }),
-        dbPath: resolveSafePath(config.dbPath, { allowOutsideBase: allowExternalPaths }),
+        repoPath: resolveSafePath(config.repoPath, { allowOutsideBase: repoAllow }),
+        dbPath: resolveSafePath(config.dbPath, { allowOutsideBase: dbAllow }),
       });
     }
   }

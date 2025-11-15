@@ -427,7 +427,7 @@ function createHintExpansionConfig(weights: ScoringWeights): HintExpansionConfig
     semLimit: Math.max(0, HINT_SEM_LIMIT),
     semDirCandidateLimit: Math.max(1, HINT_SEM_DIR_CANDIDATE_LIMIT),
     semThreshold: Number.isFinite(HINT_SEM_THRESHOLD) ? HINT_SEM_THRESHOLD : 0.65,
-    perHintLimit: Math.max(1, HINT_PER_HINT_LIMIT),
+    perHintLimit: Math.max(0, HINT_PER_HINT_LIMIT),
     dbQueryBudget: Math.max(0, HINT_DB_QUERY_BUDGET),
     dirBoost: computeHintPriorityBoost(weights) * 0.35,
     depBoost: weights.dependency * 0.8,
@@ -1108,7 +1108,7 @@ interface ExpandSingleHintParams extends ExpandHintParams {
 
 async function expandHintCandidatesForHints(params: ExpandHintParams): Promise<void> {
   const { hintPaths, config } = params;
-  if (hintPaths.length === 0 || config.perHintLimit <= 0) {
+  if (hintPaths.length === 0 || config.perHintLimit <= 0 || config.dbQueryBudget <= 0) {
     return;
   }
 

@@ -59,7 +59,7 @@ function parseEnvNumber(value: string | undefined, fallback: number): number {
     return fallback;
   }
   const parsed = Number.parseInt(value, 10);
-  if (Number.isFinite(parsed) && parsed > 0) {
+  if (Number.isFinite(parsed) && parsed >= 0) {
     return parsed;
   }
   return fallback;

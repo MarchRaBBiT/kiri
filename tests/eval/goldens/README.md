@@ -108,23 +108,31 @@ repos:
   assay-kit:
     repoPath: "external/assay-kit"
     dbPath: "external/assay-kit/.kiri/index.duckdb"
+  kiri-docs:
+    repoPath: "."
+    dbPath: "var/index.duckdb" # ドキュメント解析（front matter / link graph）検証用
+  kiri-docs-plain:
+    repoPath: "tmp/docs-plain"
+    dbPath: "tmp/docs-plain/.kiri/index.duckdb" # docs から front matter を除去した比較用コーパス
 ```
 
 #### queries[i]
 
-| Field               | Type     | Required | Description                                      |
-| ------------------- | -------- | -------- | ------------------------------------------------ |
-| `id`                | string   | ✅       | Unique ID (format: `{category}-{nnn}`)           |
-| `query`             | string   | ✅       | Search query (5-100 chars recommended)           |
-| `tool`              | string   | ❌       | Override default tool                            |
-| `intent`            | string   | ✅       | 開発意図（自由記述）                             |
-| `category`          | string   | ✅       | カテゴリ (bugfix/feature/refactor/infra/docs)    |
-| `repo`              | string   | ❌       | `repos` セクションで定義したリポジトリエイリアス |
-| `expected.paths`    | string[] | ✅       | 期待される完全一致パス（rank 1-3）               |
-| `expected.patterns` | string[] | ❌       | 許容されるglobパターン                           |
-| `params`            | object   | ❌       | クエリ固有のパラメータ                           |
-| `tags`              | string[] | ✅       | タグリスト                                       |
-| `notes`             | string   | ❌       | 備考・補足説明                                   |
+| Field                  | Type     | Required | Description                                                                                                |
+| ---------------------- | -------- | -------- | ---------------------------------------------------------------------------------------------------------- |
+| `id`                   | string   | ✅       | Unique ID (format: `{category}-{nnn}`)                                                                     |
+| `query`                | string   | ✅       | Search query (5-100 chars recommended)                                                                     |
+| `tool`                 | string   | ❌       | Override default tool                                                                                      |
+| `intent`               | string   | ✅       | 開発意図（自由記述）                                                                                       |
+| `category`             | string   | ✅       | カテゴリ (bugfix/feature/refactor/infra/docs)                                                              |
+| `repo`                 | string   | ❌       | `repos` セクションで定義したリポジトリエイリアス                                                           |
+| `expected.paths`       | string[] | ✅       | 期待される完全一致パス（rank 1-3）                                                                         |
+| `expected.patterns`    | string[] | ❌       | 許容されるglobパターン                                                                                     |
+| `params`               | object   | ❌       | クエリ固有のパラメータ                                                                                     |
+| `tags`                 | string[] | ✅       | タグリスト                                                                                                 |
+| `notes`                | string   | ❌       | 備考・補足説明                                                                                             |
+| `requiresMetadata`     | boolean  | ❌       | ✅ にすると、`why` タグに `metadata:filter` または `boost:metadata` が含まれない限りクエリを失敗扱いにする |
+| `requiresInboundLinks` | boolean  | ❌       | ✅ にすると、`why` タグに `boost:links`（Markdown link ブースト）が出現しない場合に失敗扱いにする          |
 
 ---
 
@@ -199,6 +207,21 @@ repos:
 
 - `boost_profile: "docs"` または `"balanced"` 使用推奨
 - docs/ ディレクトリが優先される
+- front matter (`title`, `category`, `tags`) と Markdown link グラフ（`boost:links`）を使ったスコアリングが `why` タグで説明される
+- `requiresMetadata` / `requiresInboundLinks` を併用して解析パイプラインの回帰を検出する
+
+### docs-plain (5 queries)
+
+**目的:** front matter を無効化した際の検索精度比較
+**クエリ例:**
+
+- `docs` カテゴリと同一のクエリを plain コーパスに適用
+
+**期待動作:**
+
+- `repo: kiri-docs-plain` を指定（`scripts/docs/make-plain.ts` で生成）
+- `requiresMetadata` や `requiresInboundLinks` は元クエリと同じ値を保持し、差分を測定
+- ベンチ結果の `docs` vs `docs-plain` の P@10/Metadata Pass Rate の乖離をレポートする
 
 ---
 
@@ -338,6 +361,8 @@ After:  "database connection pool timeout"
 # 追加したクエリが意図通り動作するか確認
 pnpm run eval:golden --verbose
 ```
+
+> **Docs 検証の注意:** `requiresMetadata`/`requiresInboundLinks` を設定したクエリは、`why` タグで該当シグナル（`metadata:filter`/`boost:metadata`/`boost:links`）が確認できない場合に `error` として扱われ、P@10 に関係なく失敗カウントされます。metadata/link テーブルを削除した状態では必ず失敗するため、DuckDB スキーマが最新になっていることを先に確認してください。
 
 ### 6. 結果の検証
 

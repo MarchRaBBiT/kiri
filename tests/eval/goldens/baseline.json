@@ -2,11 +2,13 @@
   "version": "0.9.10",
   "gitSha": "a612f1b",
   "date": "2025-11-11T00:00:00Z",
-  "datasetVersion": "v2025-11-14-expansion",
-  "description": "Initial baseline measurement for golden set evaluation (core + assay-kit)",
+  "datasetVersion": "v2025-11-docs-plain",
+  "description": "Initial baseline measurement for golden set evaluation (core + docs metadata/link checks)",
   "thresholds": {
     "minP10": 0.7,
     "maxTTFU": 1000,
+    "minMetadataPassRate": 1,
+    "minInboundPassRate": 1,
     "description": "Target metrics from docs/overview.md: P@10 ≥ 0.7, TTFU ≤ 1.0s"
   },
   "overall": {
@@ -14,33 +16,59 @@
     "avgTTFU": null,
     "totalQueries": 0,
     "successfulQueries": 0,
-    "failedQueries": 0
+    "failedQueries": 0,
+    "avgTokensEstimate": null,
+    "avgBaselineTokens": null,
+    "avgTokenSavingsRatio": null,
+    "avgHintCoverage": null,
+    "metadataPassRate": null,
+    "inboundPassRate": null
   },
   "byCategory": {
     "bugfix": {
       "precisionAtK": null,
       "avgTTFU": null,
-      "count": 0
+      "count": 0,
+      "avgTokenSavingsRatio": null,
+      "avgHintCoverage": null,
+      "metadataPassRate": null,
+      "inboundPassRate": null
     },
     "feature": {
       "precisionAtK": null,
       "avgTTFU": null,
-      "count": 0
+      "count": 0,
+      "avgTokenSavingsRatio": null,
+      "avgHintCoverage": null,
+      "metadataPassRate": null,
+      "inboundPassRate": null
     },
     "refactor": {
       "precisionAtK": null,
       "avgTTFU": null,
-      "count": 0
+      "count": 0,
+      "avgTokenSavingsRatio": null,
+      "avgHintCoverage": null,
+      "metadataPassRate": null,
+      "inboundPassRate": null
     },
     "infra": {
       "precisionAtK": null,
       "avgTTFU": null,
-      "count": 0
+      "count": 0,
+      "avgTokenSavingsRatio": null,
+      "avgHintCoverage": null,
+      "metadataPassRate": null,
+      "inboundPassRate": null
     },
     "docs": {
       "precisionAtK": null,
       "avgTTFU": null,
-      "count": 0
+      "count": 0,
+      "avgTokenSavingsRatio": null,
+      "avgHintCoverage": null,
+      "metadataPassRate": null,
+      "inboundPassRate": null
     }
   },
   "notes": "This is a template. Run 'pnpm run eval:golden' to populate with actual measurements."

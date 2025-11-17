@@ -1,4 +1,17 @@
+---
+title: "テストと評価"
+category: "testing"
+tags:
+  - testing
+  - evaluation
+  - docs
+  - golden-set
+service: "kiri"
+---
+
 # テストと評価
+
+> 関連: [検索とランキング](./search-ranking.md#検索とランキング) / [運用 Runbook](./runbook.md#運用-runbook)
 
 ## テスト戦略
 
@@ -133,6 +146,21 @@ scripts/eval/
 - private リポジトリを扱う場合は Git submodule などで `external/<name>` 配下に配置し、`kiri index --repo external/<name> --db external/<name>/.kiri/index.duckdb` のように事前インデックスを作成します。
 - 各クエリは `repo: <alias>` を指定するだけで該当レポジトリを対象に検索できます（省略時は `defaultRepo` を使用）。
 - `pnpm run eval:golden` はクエリの `repo` を検知してMCPサーバーを自動的に再起動するため、手動で `--repo` を付け替える必要はありません。
+
+### ドキュメント front matter 無効化ベンチ
+
+ドキュメント検索における front matter 依存度を比較するため、`scripts/docs/make-plain.ts` で front matter を除去したコーパスを生成します。
+
+```bash
+# plain corpus を生成し、インデックスも作成
+pnpm exec tsx scripts/docs/make-plain.ts --index
+
+# 生成物
+#   tmp/docs-plain/                … front matter 無しの Markdown
+#   tmp/docs-plain/.kiri/index.duckdb
+```
+
+`tests/eval/goldens/queries.yaml` の `kiri-docs-plain` エイリアスは上記 `tmp/docs-plain/` を参照しており、`pnpm run eval:golden` だけで「front matter あり/なし」両カテゴリのP@10やMetadata Pass Rateを計測できます。front matter 除去ロジックは YAML ブロックのみを削除し、本体コンテンツや Markdown リンクは変更されません。
 
 ### Assay Kit 連携（Phase 2 機能）
 

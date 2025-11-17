@@ -177,6 +177,7 @@ interface MetadataFilter {
   key: string;
   values: string[];
   source?: MetadataSourceTag;
+  strict?: boolean;
 }
 
 interface MetadataEntry {
@@ -185,7 +186,10 @@ interface MetadataEntry {
   source: MetadataSourceTag;
 }
 
-const METADATA_ALIAS_MAP = new Map<string, { key: string; source?: MetadataSourceTag }>([
+const METADATA_ALIAS_MAP = new Map<
+  string,
+  { key: string; source?: MetadataSourceTag; strict?: boolean }
+>([
   ["tag", { key: "tags" }],
   ["tags", { key: "tags" }],
   ["category", { key: "category" }],
@@ -193,9 +197,14 @@ const METADATA_ALIAS_MAP = new Map<string, { key: string; source?: MetadataSourc
   ["service", { key: "service" }],
 ]);
 
-const METADATA_KEY_PREFIXES: Array<{ prefix: string; source?: MetadataSourceTag }> = [
+const METADATA_KEY_PREFIXES: Array<{
+  prefix: string;
+  source?: MetadataSourceTag;
+  strict?: boolean;
+}> = [
   { prefix: "meta." },
-  { prefix: "metadata." },
+  { prefix: "metadata.", strict: true },
+  { prefix: "docmeta.", strict: true },
   { prefix: "frontmatter.", source: "front_matter" },
   { prefix: "fm.", source: "front_matter" },
   { prefix: "yaml.", source: "yaml" },
@@ -204,6 +213,7 @@ const METADATA_KEY_PREFIXES: Array<{ prefix: string; source?: MetadataSourceTag 
 
 const METADATA_MATCH_WEIGHT = 0.15;
 const METADATA_FILTER_MATCH_WEIGHT = 0.1;
+const METADATA_HINT_BONUS = 0.25;
 const INBOUND_LINK_WEIGHT = 0.2;
 
 let metadataTablesMissing = false;
@@ -518,17 +528,18 @@ const WHY_TAG_PRIORITY: Record<string, number> = {
   artifact: 1, // User-provided hints (editing_path, failing_tests, hints)
   phrase: 2, // Multi-word literal matches (strongest signal)
   text: 3, // Single keyword matches
-  "path-phrase": 4, // Path contains multi-word phrase
-  structural: 5, // Semantic similarity
-  "path-segment": 6, // Path component matches
-  "path-keyword": 7, // Path keyword match
-  dep: 8, // Dependency relationship
-  near: 9, // Proximity to editing file
-  boost: 10, // File type boost
-  recent: 11, // Recently changed
-  symbol: 12, // Symbol match
-  penalty: 13, // Penalty explanations (keep for transparency)
-  keyword: 14, // Generic keyword (deprecated, kept for compatibility)
+  metadata: 4, // Front matter / metadata filters & boosts
+  "path-phrase": 5, // Path contains multi-word phrase
+  structural: 6, // Semantic similarity
+  "path-segment": 7, // Path component matches
+  "path-keyword": 8, // Path keyword match
+  dep: 9, // Dependency relationship
+  near: 10, // Proximity to editing file
+  boost: 11, // File type boost
+  recent: 12, // Recently changed
+  symbol: 13, // Symbol match
+  penalty: 14, // Penalty explanations (keep for transparency)
+  keyword: 15, // Generic keyword (deprecated, kept for compatibility)
 };
 
 // Reserve at least one slot for important structural tags
@@ -536,6 +547,7 @@ const RESERVED_WHY_SLOTS: Record<string, number> = {
   dep: 1, // Dependency relationships are critical
   symbol: 1, // Symbol boundaries help understand context
   near: 1, // Proximity explains file selection
+  metadata: 1, // Preserve metadata reasons when filters/boosts are active
 };
 
 /**
@@ -575,6 +587,9 @@ function selectWhyTags(reasons: Set<string>): string[] {
   }
 
   const selected = new Set<string>();
+  if (reasons.has("boost:links")) {
+    selected.add("boost:links");
+  }
   const byCategory = new Map<string, string[]>();
 
   for (const reason of reasons) {
@@ -1462,8 +1477,13 @@ function isTestLikePath(filePath: string): boolean {
   );
 }
 
-function parseEmbedding(vectorJson: string | null, vectorDims: number | null): number[] | null {
-  if (!vectorJson || !vectorDims || vectorDims <= 0) {
+function parseEmbedding(
+  vectorJson: string | null,
+  vectorDims: number | bigint | null
+): number[] | null {
+  const dims =
+    vectorDims === null ? null : typeof vectorDims === "bigint" ? Number(vectorDims) : vectorDims;
+  if (!vectorJson || !dims || dims <= 0) {
     return null;
   }
   try {
@@ -1472,7 +1492,7 @@ function parseEmbedding(vectorJson: string | null, vectorDims: number | null): n
       return null;
     }
     const values: number[] = [];
-    for (let i = 0; i < parsed.length && i < vectorDims; i += 1) {
+    for (let i = 0; i < parsed.length && i < dims; i += 1) {
       const raw = parsed[i];
       const num = typeof raw === "number" ? raw : Number(raw);
       if (!Number.isFinite(num)) {
@@ -1480,7 +1500,7 @@ function parseEmbedding(vectorJson: string | null, vectorDims: number | null): n
       }
       values.push(num);
     }
-    return values.length === vectorDims ? values : null;
+    return values.length === dims ? values : null;
   } catch {
     return null;
   }
@@ -1643,7 +1663,7 @@ function splitQueryWords(query: string): string[] {
 
 function normalizeMetadataFilterKey(
   rawKey: string
-): { key: string; source?: MetadataSourceTag } | null {
+): { key: string; source?: MetadataSourceTag; strict?: boolean } | null {
   if (!rawKey) {
     return null;
   }
@@ -1658,7 +1678,7 @@ function normalizeMetadataFilterKey(
       if (!remainder) {
         return null;
       }
-      return { key: remainder, source: entry.source };
+      return { key: remainder, source: entry.source, strict: entry.strict };
     }
   }
   return null;
@@ -1698,7 +1718,12 @@ function normalizeMetadataFiltersParam(input: unknown): MetadataFilter[] {
     if (values.length === 0) {
       continue;
     }
-    filters.push({ key: normalizedKey.key, values, source: normalizedKey.source });
+    filters.push({
+      key: normalizedKey.key,
+      values,
+      source: normalizedKey.source,
+      strict: normalizedKey.strict,
+    });
   }
   return filters;
 }
@@ -1707,7 +1732,7 @@ function mergeMetadataFilters(filters: MetadataFilter[]): MetadataFilter[] {
   const merged = new Map<string, MetadataFilter>();
   for (const filter of filters) {
     if (filter.values.length === 0) continue;
-    const mapKey = `${filter.source ?? "*"}::${filter.key}`;
+    const mapKey = `${filter.source ?? "*"}::${filter.key}::${filter.strict ? "strict" : "hint"}`;
     const existing = merged.get(mapKey);
     if (existing) {
       const existingSet = new Set(existing.values.map((val) => val.toLowerCase()));
@@ -1718,7 +1743,12 @@ function mergeMetadataFilters(filters: MetadataFilter[]): MetadataFilter[] {
         }
       }
     } else {
-      merged.set(mapKey, { key: filter.key, source: filter.source, values: [...filter.values] });
+      merged.set(mapKey, {
+        key: filter.key,
+        source: filter.source,
+        strict: filter.strict,
+        values: [...filter.values],
+      });
     }
   }
   return Array.from(merged.values());
@@ -1754,7 +1784,12 @@ function parseInlineMetadataFilters(query: string): {
     matches.push({
       start: match.index,
       end: pattern.lastIndex,
-      filter: { key: normalizedKey.key, source: normalizedKey.source, values: [value] },
+      filter: {
+        key: normalizedKey.key,
+        source: normalizedKey.source,
+        strict: normalizedKey.strict,
+        values: [value],
+      },
     });
   }
 
@@ -1990,9 +2025,14 @@ async function loadInboundLinkCounts(
     WHERE repo_id = ? AND resolved_path IS NOT NULL AND resolved_path IN (${placeholders})
     GROUP BY resolved_path
   `;
-  const rows = await safeLinkQuery<{ path: string; inbound: number }>(db, sql, [repoId, ...paths]);
+  const rows = await safeLinkQuery<{ path: string; inbound: number | bigint }>(db, sql, [
+    repoId,
+    ...paths,
+  ]);
   for (const row of rows) {
-    counts.set(row.path, row.inbound);
+    const inboundValue =
+      typeof row.inbound === "bigint" ? Number(row.inbound) : Number(row.inbound ?? 0);
+    counts.set(row.path, inboundValue);
   }
   return counts;
 }
@@ -2022,10 +2062,14 @@ function computeMetadataBoost(
 }
 
 function computeInboundLinkBoost(count: number | undefined): number {
-  if (!count || count <= 0) {
+  let numericCount = count;
+  if (typeof (numericCount as unknown) === "bigint") {
+    numericCount = Number(numericCount);
+  }
+  if (!numericCount || numericCount <= 0) {
     return 0;
   }
-  return Math.min(Math.log1p(count) * INBOUND_LINK_WEIGHT, 1.0);
+  return Math.min(Math.log1p(numericCount) * INBOUND_LINK_WEIGHT, 1.0);
 }
 
 function candidateMatchesMetadataFilters(
@@ -2538,13 +2582,34 @@ export async function filesSearch(
   const inlineMetadata = parseInlineMetadataFilters(rawQuery);
   const paramFilters = normalizeMetadataFiltersParam(params.metadata_filters);
   const metadataFilters = mergeMetadataFilters([...inlineMetadata.filters, ...paramFilters]);
-  if (metadataFilters.length > 0) {
-    console.warn("metadataFilters", metadataFilters);
+  const strictMetadataFilters = metadataFilters.filter((filter) => filter.strict);
+  const hintMetadataFilters = metadataFilters.filter((filter) => !filter.strict);
+  const hasStrictMetadataFilters = strictMetadataFilters.length > 0;
+  const hasHintMetadataFilters = hintMetadataFilters.length > 0;
+  const hasAnyMetadataFilters = metadataFilters.length > 0;
+  let cleanedQuery = inlineMetadata.cleanedQuery;
+  let hasTextQuery = cleanedQuery.length > 0;
+  if (!hasTextQuery && hasHintMetadataFilters) {
+    cleanedQuery = hintMetadataFilters
+      .flatMap((filter) => filter.values)
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0)
+      .join(" ");
+    cleanedQuery = cleanedQuery.trim();
+    hasTextQuery = cleanedQuery.length > 0;
   }
-  const cleanedQuery = inlineMetadata.cleanedQuery;
-  const hasTextQuery = cleanedQuery.length > 0;
 
-  if (!hasTextQuery && metadataFilters.length === 0) {
+  const metadataValueSeed = metadataFilters
+    .flatMap((filter) => filter.values)
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0)
+    .join(" ");
+  if (metadataValueSeed.length > 0) {
+    cleanedQuery = `${cleanedQuery} ${metadataValueSeed}`.trim();
+    hasTextQuery = cleanedQuery.length > 0;
+  }
+
+  if (!hasTextQuery && !hasAnyMetadataFilters) {
     throw new Error(
       "files_search requires a query or metadata_filters. Provide keywords or structured filters to continue."
     );
@@ -2553,7 +2618,7 @@ export async function filesSearch(
   const limit = normalizeLimit(params.limit);
   const ftsStatus = await getFreshFtsStatus(context);
   const hasFTS = ftsStatus.ready;
-  const metadataClauses = buildMetadataFilterConditions(metadataFilters);
+  const metadataClauses = buildMetadataFilterConditions(strictMetadataFilters);
   const candidateRows: FileRow[] = [];
 
   if (hasTextQuery) {
@@ -2644,7 +2709,7 @@ export async function filesSearch(
     candidateRows.push(...textRows);
   }
 
-  if (!hasTextQuery && metadataFilters.length > 0) {
+  if (!hasTextQuery && hasAnyMetadataFilters) {
     const metadataOnlyRows = await fetchMetadataOnlyCandidates(
       db,
       repoId,
@@ -2702,7 +2767,8 @@ export async function filesSearch(
   );
 
   const boostProfile: BoostProfileName =
-    params.boost_profile ?? (metadataFilters.length > 0 ? "docs" : "default");
+    params.boost_profile ??
+    (hasHintMetadataFilters ? "balanced" : hasStrictMetadataFilters ? "docs" : "default");
   const profileConfig = getBoostProfile(boostProfile);
   const weights = loadScoringProfile(null);
   const options = parseOutputOptions(params);
@@ -3049,7 +3115,7 @@ function computeGraduatedPenalty(
   return 0; // pathMatchHits >= 3: no penalty
 }
 
-export async function contextBundle(
+async function contextBundleImpl(
   context: ServerContext,
   params: ContextBundleParams
 ): Promise<ContextBundleResult> {
@@ -3062,10 +3128,30 @@ export async function contextBundle(
       "context_bundle requires a non-empty goal. Describe your objective to receive context."
     );
   }
+  if (process.env.KIRI_TRACE_METADATA === "1") {
+    console.info(`[metadata-trace-env] goal=${rawGoal}`);
+  }
   const inlineMetadata = parseInlineMetadataFilters(rawGoal);
   const paramFilters = normalizeMetadataFiltersParam(params.metadata_filters);
   const metadataFilters = mergeMetadataFilters([...inlineMetadata.filters, ...paramFilters]);
+  const strictMetadataFilters = metadataFilters.filter((filter) => filter.strict);
+  const hintMetadataFilters = metadataFilters.filter((filter) => !filter.strict);
+  const hasStrictMetadataFilters = strictMetadataFilters.length > 0;
+  const hasHintMetadataFilters = hintMetadataFilters.length > 0;
+  const hasAnyMetadataFilters = metadataFilters.length > 0;
   const goal = inlineMetadata.cleanedQuery.length > 0 ? inlineMetadata.cleanedQuery : rawGoal;
+  if (process.env.KIRI_TRACE_METADATA === "1") {
+    console.info(
+      "[metadata-trace]",
+      JSON.stringify({
+        rawGoal,
+        cleanedGoal: goal,
+        inlineFilters: inlineMetadata.filters,
+        paramFilters,
+        mergedFilters: metadataFilters,
+      })
+    );
+  }
 
   const limit = normalizeBundleLimit(params.limit);
   const artifacts = params.artifacts ?? {};
@@ -3104,7 +3190,7 @@ export async function contextBundle(
   if (artifactHints.length > 0) {
     keywordSources.push(artifactHints.join(" "));
   }
-  if (metadataFilters.length > 0) {
+  if (hasAnyMetadataFilters) {
     const filterSeed = metadataFilters
       .map((filter) => `${filter.source ?? "meta"}:${filter.key}=${filter.values.join(",")}`)
       .join(" ");
@@ -3134,7 +3220,8 @@ export async function contextBundle(
 
   // ✅ Cache boost profile config to avoid redundant lookups in hot path
   const boostProfile: BoostProfileName =
-    params.boost_profile ?? (metadataFilters.length > 0 ? "docs" : "default");
+    params.boost_profile ??
+    (hasHintMetadataFilters ? "balanced" : hasStrictMetadataFilters ? "docs" : "default");
   const profileConfig = getBoostProfile(boostProfile);
 
   // フレーズマッチング（高い重み: textMatch × 2）- 統合クエリでパフォーマンス改善
@@ -3443,13 +3530,13 @@ export async function contextBundle(
     return result;
   };
 
-  const hydrateMetadataFallback = async (): Promise<CandidateInfo[]> => {
-    if (metadataFilters.length === 0) {
-      return [];
+  const addMetadataFallbackCandidates = async (): Promise<void> => {
+    if (!hasAnyMetadataFilters) {
+      return;
     }
     const metadataRows = await fetchMetadataOnlyCandidates(db, repoId, metadataFilters, limit * 2);
     if (metadataRows.length === 0) {
-      return [];
+      return;
     }
     for (const row of metadataRows) {
       const candidate = ensureCandidate(candidates, row.path);
@@ -3468,15 +3555,18 @@ export async function contextBundle(
       candidate.ext ??= row.ext;
       candidate.matchLine ??= 1;
       candidate.score = Math.max(candidate.score, 1 + metadataFilters.length * 0.2);
-      candidate.reasons.add("metadata:filter");
     }
-    return materializeCandidates();
   };
+
+  if (hasAnyMetadataFilters) {
+    await addMetadataFallbackCandidates();
+  }
 
   let materializedCandidates = await materializeCandidates();
 
-  if (materializedCandidates.length === 0) {
-    materializedCandidates = await hydrateMetadataFallback();
+  if (materializedCandidates.length === 0 && hasAnyMetadataFilters) {
+    await addMetadataFallbackCandidates();
+    materializedCandidates = await materializeCandidates();
   }
 
   if (materializedCandidates.length === 0) {
@@ -3497,7 +3587,7 @@ export async function contextBundle(
   );
 
   let metadataEntriesMap: Map<string, MetadataEntry[]> | undefined;
-  if (metadataFilters.length > 0 || metadataKeywordSet.size > 0 || filterValueSet.size > 0) {
+  if (hasAnyMetadataFilters || metadataKeywordSet.size > 0 || filterValueSet.size > 0) {
     metadataEntriesMap = await loadMetadataForPaths(
       db,
       repoId,
@@ -3505,7 +3595,7 @@ export async function contextBundle(
     );
   }
 
-  if (metadataFilters.length > 0) {
+  if (hasStrictMetadataFilters) {
     metadataEntriesMap ??= new Map();
     for (let i = materializedCandidates.length - 1; i >= 0; i--) {
       const candidate = materializedCandidates[i];
@@ -3513,13 +3603,20 @@ export async function contextBundle(
         continue; // Skip undefined entries
       }
       const entries = metadataEntriesMap.get(candidate.path);
-      if (!candidateMatchesMetadataFilters(entries, metadataFilters)) {
+      const matchesFilters = candidateMatchesMetadataFilters(entries, strictMetadataFilters);
+      if (!matchesFilters) {
         materializedCandidates.splice(i, 1);
+        continue;
+      }
+      candidate.reasons.add("metadata:filter");
+      if (process.env.KIRI_TRACE_METADATA === "1") {
+        console.info(`[metadata-trace-match] path=${candidate.path}`);
       }
     }
 
-    if (materializedCandidates.length === 0) {
-      materializedCandidates = await hydrateMetadataFallback();
+    if (materializedCandidates.length === 0 && hasAnyMetadataFilters) {
+      await addMetadataFallbackCandidates();
+      materializedCandidates = await materializeCandidates();
     }
 
     if (materializedCandidates.length === 0) {
@@ -3529,6 +3626,18 @@ export async function contextBundle(
         ...(includeTokensEstimate && { tokens_estimate: 0 }),
         ...(warnings.length > 0 && { warnings }),
       };
+    }
+  }
+
+  if (hasHintMetadataFilters) {
+    metadataEntriesMap ??= new Map();
+    for (const candidate of materializedCandidates) {
+      const entries = metadataEntriesMap.get(candidate.path);
+      const matchesHints = candidateMatchesMetadataFilters(entries, hintMetadataFilters);
+      if (matchesHints) {
+        candidate.score += METADATA_HINT_BONUS;
+        candidate.reasons.add("metadata:hint");
+      }
     }
   }
 
@@ -4000,4 +4109,16 @@ export async function resolveRepoId(
 ): Promise<number> {
   const svc = services ?? createServerServices(db);
   return await svc.repoResolver.resolveId(repoRoot);
+}
+
+export async function contextBundle(
+  context: ServerContext,
+  params: ContextBundleParams
+): Promise<ContextBundleResult> {
+  try {
+    return await contextBundleImpl(context, params);
+  } catch (error) {
+    console.error("context_bundle error:", error);
+    throw error;
+  }
 }

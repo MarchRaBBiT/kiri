@@ -1,4 +1,16 @@
+---
+title: "セキュリティとコンプライアンス"
+category: "security"
+tags:
+  - security
+  - compliance
+  - docs
+service: "kiri"
+---
+
 # セキュリティとコンプライアンス
+
+> 関連: [運用 Runbook](./runbook.md#運用-runbook) / [運用と可観測性](./operations.md#運用と可観測性)
 
 ## 基本方針
 

@@ -1,4 +1,16 @@
+---
+title: "運用と可観測性"
+category: "operations"
+tags:
+  - operations
+  - observability
+  - docs
+service: "kiri"
+---
+
 # 運用と可観測性
+
+> 関連: [KIRI 概要](./overview.md#kiri-概要) / [運用 Runbook](./runbook.md#運用-runbook) / [セキュリティとコンプライアンス](./security.md#セキュリティとコンプライアンス)
 
 ## SLO とメトリクス
 

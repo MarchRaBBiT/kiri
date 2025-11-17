@@ -1,4 +1,17 @@
+---
+title: "検索とランキング"
+category: "search"
+tags:
+  - ranking
+  - docs
+  - metadata
+  - inbound-links
+service: "kiri"
+---
+
 # 検索とランキング
+
+> 関連: [KIRI 概要](./overview.md#kiri-概要) / [運用 Runbook](./runbook.md#運用-runbook) / [テストと評価](./testing.md#テストと評価)
 
 ## 方針
 

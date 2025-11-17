@@ -72,9 +72,9 @@ Add a new row to the "Results Summary" table below with:
 
 ## Results Summary
 
-| Date       | Version | Git SHA | Dataset             | P@10  | Avg TFFU | Notes                                                                                                        |
-| ---------- | ------- | ------- | ------------------- | ----- | -------- | ------------------------------------------------------------------------------------------------------------ |
-| 2025-11-17 | 0.10.0  | 77d4dbb | v2025-11-docs-plain | 0.286 | 1ms      | Baseline run including docs vs docs-plain comparison (plain corpus intentionally fails metadata/link checks) |
+| Date       | Version | Git SHA | Dataset             | P@10  | Avg TFFU | Notes                                                                                      |
+| ---------- | ------- | ------- | ------------------- | ----- | -------- | ------------------------------------------------------------------------------------------ |
+| 2025-11-17 | 0.10.0  | 9e59843 | v2025-11-docs-plain | 0.286 | 1ms      | Baseline after metadata hint/docmeta split; docs pass=100%, docs-plain intentionally fails |
 
 **Legend:**
 

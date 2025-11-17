@@ -1,6 +1,6 @@
 # KIRI Golden Set Evaluation - 2025-11-17
 
-**Version**: 0.10.0 (77d4dbb)
+**Version**: 0.10.0 (9e59843)
 **Dataset**: v2025-11-docs-plain
 **K**: 10
 

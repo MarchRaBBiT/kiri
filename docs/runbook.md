@@ -1,4 +1,17 @@
+---
+title: "運用 Runbook"
+category: "operations"
+tags:
+  - operations
+  - observability
+  - degrade
+  - docs
+service: "kiri"
+---
+
 # 運用 Runbook
+
+> 関連: [KIRI 概要](./overview.md#kiri-概要) / [検索とランキング](./search-ranking.md#検索とランキング) / [セキュリティガイド](./security.md#セキュリティとコンプライアンス)
 
 ## Degrade 発生時の復旧手順
 

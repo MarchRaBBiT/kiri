@@ -132,6 +132,13 @@ export async function startServer(options: ServerOptions): Promise<Server> {
           res.statusCode = 204;
           res.end();
         }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const responseId =
+          typeof payload.id === "string" || typeof payload.id === "number" ? payload.id : 0;
+        res.statusCode = 500;
+        res.end(JSON.stringify(errorResponse(responseId, message)));
+        console.error("RPC handler error:", error);
       } finally {
         const elapsed = performance.now() - start;
         runtime.metrics.recordRequest(elapsed);

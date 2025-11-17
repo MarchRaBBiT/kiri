@@ -21,6 +21,7 @@ KIRI’s document search relies on structured metadata and Markdown signals. Thi
 - Treat `tags` as the canonical list of keywords. Anything you expect in `tag:<keyword>` queries must live here.
 - Keep tags lowercase and singular (`observability`, `runbook`, `security`, …) to maximize matching.
 - Explain deprecated or renamed features by adding both old and new tags while the transition is in flight.
+- Custom keys are supported as well. Use the `meta.<key>:<value>` or `frontmatter.<key>:<value>` syntax when filtering from MCP tools. Example: `meta.id:runbook-001` will match a doc with `id: runbook-001` in its front matter even though `id` is not part of the built-in alias list (`tag/category/title/service`).
 
 Front matter drives:
 
@@ -30,6 +31,25 @@ Front matter drives:
 | Title         | `text:` + `phrase:` matches         | Precise phrase hits       |
 
 If front matter is omitted, P@10 and metadata pass rate collapse to zero (see docs-plain benchmark).
+
+## Metadata aliases & filters
+
+| Shortcut                    | Equivalent key                            | Typical usage                                                 |
+| --------------------------- | ----------------------------------------- | ------------------------------------------------------------- |
+| `tag:<value>`               | `meta.tags:<value>`                       | Canonical keywords such as `tag:degrade`, `tag:observability` |
+| `category:<value>`          | `meta.category:<value>`                   | High-level doc grouping (e.g., `category:operations`)         |
+| `title:"..."`               | `meta.title:"..."`                        | Exact title phrase matches                                    |
+| `service:<value>`           | `meta.service:<value>`                    | Service-scoped runbooks (`service:kiri`)                      |
+| `meta.<key>:<value>`        | `document_metadata_kv.key=<key>`          | Arbitrary keys like `meta.id:runbook-001`, `meta.owner:sre`   |
+| `docmeta.<key>:<value>`     | `document_metadata_kv.key=<key>` (strict) | Force doc-only filtering (e.g., `docmeta.id:runbook-001`)     |
+| `frontmatter.<key>:<value>` | Same as `meta.<key>`                      | Alternative prefix when emphasizing front matter origin       |
+
+Notes:
+
+- `metadata.<key>:<value>` is also accepted and behaves like `meta.<key>`.
+- `meta.*` / `tag:` / `category:` act as **hints**: docs get top billing but related code remains eligible. Use `docmeta.*` or `metadata.*` when you truly want docs-only filtering (e.g., compliance exports).
+- Non-string values are coerced to strings before comparison; keep IDs lowercase to avoid case mismatches.
+- Full alias list lives in `src/server/handlers.ts` (`METADATA_ALIAS_MAP`). Update this section whenever aliases change.
 
 ## 2. Link Related Content
 
@@ -52,14 +72,18 @@ If front matter is omitted, P@10 and metadata pass rate collapse to zero (see do
 ## 5. Validate with Benchmarks
 
 1. Regenerate the plain corpus and index:
+
    ```bash
    pnpm exec tsx scripts/docs/make-plain.ts --index
    pnpm exec tsx src/client/cli.ts security verify --db tmp/docs-plain/.kiri/index.duckdb --write-lock
    ```
+
 2. Compare front matter impact:
+
    ```bash
    pnpm run eval:golden --categories docs,docs-plain --out var/eval/docs-compare
    ```
+
 3. Inspect `var/eval/docs-compare/latest.md` → `Category Δ Metrics`. Large negative deltas mean metadata/link signals are missing or misconfigured.
 
 ## 6. When Adding New Docs

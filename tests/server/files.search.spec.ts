@@ -185,20 +185,54 @@ describe("files_search", () => {
 
     const filtered = await filesSearch(context, {
       query: "dashboards",
-      metadata_filters: { tags: "observability" },
+      metadata_filters: { "docmeta.tags": "observability" },
     });
     expect(filtered.map((item) => item.path)).toEqual(["docs/runbook.md"]);
 
     const inline = await filesSearch(context, {
-      query: "tag:payments dashboards",
+      query: "docmeta.tags:payments dashboards",
     });
     expect(inline.map((item) => item.path)).toEqual(["docs/faq.md"]);
 
     const metadataOnly = await filesSearch(context, {
       query: "",
-      metadata_filters: { tags: "observability" },
+      metadata_filters: { "docmeta.tags": "observability" },
     });
     expect(metadataOnly.map((item) => item.path)).toEqual(["docs/runbook.md"]);
+  });
+
+  it("surfaces docs and code for meta.* hints and restricts docmeta.* filters", async () => {
+    const repo = await createTempRepo({
+      "docs/runbook.md":
+        "---\nid: runbook-002\ntitle: Deployment Runbook\n---\nFollow the steps for runbook-002.\n",
+      "src/deploy/runbook.ts": `export const RUNBOOK_ID = "runbook-002";\n`,
+    });
+    cleanupTargets.push({ dispose: repo.cleanup });
+
+    const dbDir = await mkdtemp(join(tmpdir(), "kiri-files-meta-mode-"));
+    const dbPath = join(dbDir, "index.duckdb");
+    cleanupTargets.push({ dispose: async () => await rm(dbDir, { recursive: true, force: true }) });
+
+    await runIndexer({ repoRoot: repo.path, databasePath: dbPath, full: true });
+
+    const db = await DuckDBClient.connect({ databasePath: dbPath });
+    cleanupTargets.push({ dispose: async () => await db.close() });
+
+    const repoId = await resolveRepoId(db, repo.path);
+    const context: ServerContext = {
+      db,
+      repoId,
+      services: createServerServices(db),
+      warningManager: new WarningManager(),
+    };
+
+    const hintResults = await filesSearch(context, { query: "meta.id:runbook-002" });
+    const hintPaths = hintResults.map((item) => item.path);
+    expect(hintPaths).toContain("docs/runbook.md");
+    expect(hintPaths).toContain("src/deploy/runbook.ts");
+
+    const strictResults = await filesSearch(context, { query: "docmeta.id:runbook-002" });
+    expect(strictResults.map((item) => item.path)).toEqual(["docs/runbook.md"]);
   });
 
   it("returns matches when keywords exist only in metadata", async () => {

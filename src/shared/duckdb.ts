@@ -30,6 +30,29 @@ function assertNoUndefined(sql: string, params: QueryParams): void {
   }
 }
 
+function coerceBigInts<T>(value: T): T {
+  if (typeof value === "bigint") {
+    const asNumber = Number(value);
+    if (!Number.isSafeInteger(asNumber)) {
+      throw new Error(
+        `DuckDB returned bigint ${value.toString()} which exceeds Number.MAX_SAFE_INTEGER. Reduce dataset size or use smaller aggregates.`
+      );
+    }
+    return asNumber as unknown as T;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => coerceBigInts(item)) as unknown as T;
+  }
+  if (value && typeof value === "object") {
+    const result: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+      result[key] = coerceBigInts(entry);
+    }
+    return result as unknown as T;
+  }
+  return value;
+}
+
 /**
  * Check if a directory is inside a Git repository by walking up the directory tree
  * looking for a .git directory.
@@ -139,7 +162,7 @@ export class DuckDBClient {
           reject(err);
           return;
         }
-        resolve(rows);
+        resolve(rows.map((row) => coerceBigInts(row)));
       };
       if (Array.isArray(params)) {
         if (params.length > 0) {

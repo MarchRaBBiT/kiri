@@ -401,6 +401,164 @@ function normalizeArtifactHints(hints?: string[]): string[] {
   return normalized;
 }
 
+interface ArtifactHintBuckets {
+  pathHints: string[];
+  substringHints: string[];
+}
+
+function bucketArtifactHints(hints: string[]): ArtifactHintBuckets {
+  const buckets: ArtifactHintBuckets = {
+    pathHints: [],
+    substringHints: [],
+  };
+  for (const hint of hints) {
+    if (hint.includes("/") && SAFE_PATH_PATTERN.test(hint)) {
+      buckets.pathHints.push(hint);
+      continue;
+    }
+    const normalized = hint.trim().toLowerCase();
+    if (normalized.length >= 3) {
+      buckets.substringHints.push(normalized);
+    }
+  }
+  return buckets;
+}
+
+type HintOrigin = "artifact" | "dictionary";
+
+interface ResolvedPathHint {
+  path: string;
+  sourceHint: string;
+  origin: HintOrigin;
+}
+
+interface HintSeedMeta {
+  sourceHint: string;
+  origin: HintOrigin;
+}
+
+type HintExpansionKind = "path" | "dictionary" | "directory" | "dependency" | "substring";
+
+function isMissingTableError(error: unknown, table: string): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return /Table with name/i.test(error.message) && error.message.includes(table);
+}
+
+async function logHintExpansionEntry(
+  db: DuckDBClient,
+  entry: {
+    repoId: number;
+    hintValue: string;
+    kind: HintExpansionKind;
+    targetPath?: string;
+    payload?: Record<string, unknown>;
+  }
+): Promise<void> {
+  if (!HINT_LOG_ENABLED) {
+    return;
+  }
+  if (hintLogTableMissing) {
+    return;
+  }
+  try {
+    await db.run(
+      `
+        INSERT INTO hint_expansion (repo_id, hint_value, expansion_kind, target_path, payload)
+        VALUES (?, ?, ?, ?, ?)
+      `,
+      [
+        entry.repoId,
+        entry.hintValue,
+        entry.kind,
+        entry.targetPath ?? null,
+        entry.payload ? JSON.stringify(entry.payload) : null,
+      ]
+    );
+  } catch (error) {
+    if (isMissingTableError(error, "hint_expansion")) {
+      hintLogTableMissing = true;
+      console.warn(
+        "hint_expansion table is missing in the active database. Enable the latest schema and rerun the indexer to capture hint logs."
+      );
+      return;
+    }
+    throw error;
+  }
+}
+
+async function fetchDictionaryPathHints(
+  db: DuckDBClient,
+  repoId: number,
+  hints: string[],
+  perHintLimit: number
+): Promise<ResolvedPathHint[]> {
+  if (!HINT_DICTIONARY_ENABLED || perHintLimit <= 0 || hints.length === 0) {
+    return [];
+  }
+  if (hintDictionaryTableMissing) {
+    return [];
+  }
+  const uniqueHints = Array.from(new Set(hints));
+  const targets: ResolvedPathHint[] = [];
+  for (const hint of uniqueHints) {
+    let rows: { target_path: string }[] = [];
+    try {
+      rows = await db.all<{ target_path: string }>(
+        `
+          SELECT target_path
+          FROM hint_dictionary
+          WHERE repo_id = ?
+            AND hint_value = ?
+          ORDER BY freq DESC, target_path
+          LIMIT ?
+        `,
+        [repoId, hint, perHintLimit]
+      );
+    } catch (error) {
+      if (isMissingTableError(error, "hint_dictionary")) {
+        hintDictionaryTableMissing = true;
+        console.warn(
+          "hint_dictionary table is missing in the active database. Run scripts/diag/build-hint-dictionary.ts after upgrading the schema."
+        );
+        return [];
+      }
+      throw error;
+    }
+    for (const row of rows) {
+      if (!row.target_path || !SAFE_PATH_PATTERN.test(row.target_path)) {
+        continue;
+      }
+      targets.push({ path: row.target_path, sourceHint: hint, origin: "dictionary" });
+    }
+  }
+  return targets;
+}
+
+function createHintSeedMeta(targets: ResolvedPathHint[]): {
+  list: ResolvedPathHint[];
+  meta: Map<string, HintSeedMeta>;
+} {
+  const meta = new Map<string, HintSeedMeta>();
+  const deduped: ResolvedPathHint[] = [];
+  for (const target of targets) {
+    if (meta.has(target.path)) {
+      continue;
+    }
+    meta.set(target.path, { sourceHint: target.sourceHint, origin: target.origin });
+    deduped.push(target);
+  }
+  return { list: deduped, meta };
+}
+
+function getHintSeedMeta(
+  seedMeta: Map<string, HintSeedMeta> | undefined,
+  path: string
+): HintSeedMeta | undefined {
+  return seedMeta?.get(path);
+}
+
 function computeHintPriorityBoost(weights: ScoringWeights): number {
   const textComponent = weights.textMatch * HINT_PRIORITY_TEXT_MULTIPLIER;
   const pathComponent = weights.pathMatch * HINT_PRIORITY_PATH_MULTIPLIER;
@@ -516,6 +674,14 @@ const HINT_PER_HINT_LIMIT = serverConfig.hints.perHintLimit;
 const HINT_DB_QUERY_BUDGET = serverConfig.hints.dbQueryLimit;
 const HINT_SUBSTRING_LIMIT = serverConfig.hints.substring.limit;
 const HINT_SUBSTRING_BOOST = serverConfig.hints.substring.boost;
+const HINT_LOG_ENABLED = process.env.KIRI_HINT_LOG === "1";
+const HINT_DICTIONARY_ENABLED = process.env.KIRI_HINT_DICTIONARY !== "0";
+const HINT_DICTIONARY_LIMIT = Math.max(
+  0,
+  Number.parseInt(process.env.KIRI_HINT_DICTIONARY_LIMIT ?? "2", 10)
+);
+let hintLogTableMissing = false;
+let hintDictionaryTableMissing = false;
 
 // Issue #68: Path/Large File Penalty configuration (環境変数で上書き可能)
 const PATH_MISS_DELTA = serverConfig.penalties.pathMissDelta;
@@ -526,9 +692,11 @@ const MAX_WHY_TAGS = 10;
 // All actual tag prefixes used in the codebase
 const WHY_TAG_PRIORITY: Record<string, number> = {
   artifact: 1, // User-provided hints (editing_path, failing_tests, hints)
+  dictionary: 1, // Dictionary-provided hints
   phrase: 2, // Multi-word literal matches (strongest signal)
   text: 3, // Single keyword matches
   metadata: 4, // Front matter / metadata filters & boosts
+  substring: 4, // Substring hint expansion
   "path-phrase": 5, // Path contains multi-word phrase
   structural: 6, // Semantic similarity
   "path-segment": 7, // Path component matches
@@ -1114,6 +1282,7 @@ interface ExpandHintParams {
   fileCache: Map<string, FileContentCacheEntry>;
   weights: ScoringWeights;
   config: HintExpansionConfig;
+  hintSeedMeta?: Map<string, HintSeedMeta>;
 }
 
 interface ExpandSingleHintParams extends ExpandHintParams {
@@ -1195,6 +1364,52 @@ function applyHintReasonBoost(
   return true;
 }
 
+interface PathHintPromotionArgs {
+  db: DuckDBClient;
+  repoId: number;
+  hintTargets: ResolvedPathHint[];
+  candidates: Map<string, CandidateInfo>;
+  fileCache: Map<string, FileContentCacheEntry>;
+  weights: ScoringWeights;
+  hintSeedMeta: Map<string, HintSeedMeta>;
+}
+
+async function applyPathHintPromotions(args: PathHintPromotionArgs): Promise<void> {
+  const { hintTargets } = args;
+  if (hintTargets.length === 0) {
+    return;
+  }
+  const hintBoost = computeHintPriorityBoost(args.weights);
+  for (const target of hintTargets) {
+    const candidate = ensureCandidate(args.candidates, target.path);
+    const reasonPrefix = target.origin === "dictionary" ? "dictionary:hint" : "artifact:hint";
+    candidate.score += hintBoost;
+    candidate.reasons.add(`${reasonPrefix}:${target.path}`);
+    candidate.pathMatchHits = Math.max(candidate.pathMatchHits, 3);
+    candidate.matchLine ??= 1;
+    await logHintExpansionEntry(args.db, {
+      repoId: args.repoId,
+      hintValue: target.sourceHint,
+      kind: target.origin === "dictionary" ? "dictionary" : "path",
+      targetPath: target.path,
+      payload: {
+        origin: target.origin,
+        source_hint: target.sourceHint,
+      },
+    });
+  }
+  await expandHintCandidatesForHints({
+    db: args.db,
+    repoId: args.repoId,
+    hintPaths: hintTargets.map((target) => target.path),
+    candidates: args.candidates,
+    fileCache: args.fileCache,
+    weights: args.weights,
+    config: createHintExpansionConfig(args.weights),
+    hintSeedMeta: args.hintSeedMeta,
+  });
+}
+
 async function addHintSubstringMatches(
   db: DuckDBClient,
   repoId: number,
@@ -1224,8 +1439,15 @@ async function addHintSubstringMatches(
     );
     for (const row of rows) {
       const candidate = ensureCandidate(candidates, row.path);
-      const reason = `artifact:hint_sub:${hint}:${row.path}`;
-      applyHintReasonBoost(candidate, reason, boost);
+      const reason = `substring:hint:${hint}`;
+      if (applyHintReasonBoost(candidate, reason, boost)) {
+        await logHintExpansionEntry(db, {
+          repoId,
+          hintValue: hint,
+          kind: "substring",
+          targetPath: row.path,
+        });
+      }
     }
   }
 }
@@ -1273,6 +1495,16 @@ async function addHintDirectoryNeighbors(
     const reason = `artifact:hint_dir:${args.hintPath}:${row.path}`;
     if (applyHintReasonBoost(candidate, reason, args.config.dirBoost, row.lang, row.ext)) {
       added += 1;
+      const seedMeta = getHintSeedMeta(args.hintSeedMeta, args.hintPath);
+      await logHintExpansionEntry(args.db, {
+        repoId: args.repoId,
+        hintValue: seedMeta?.sourceHint ?? args.hintPath,
+        kind: "directory",
+        targetPath: row.path,
+        payload: {
+          origin: seedMeta?.origin ?? "artifact",
+        },
+      });
       if (added >= limit) {
         break;
       }
@@ -1333,7 +1565,7 @@ async function addHintDependencyDirection(
       `,
       [args.repoId, args.hintPath, fetchLimit]
     );
-    return applyDependencyRows(
+    return await applyDependencyRows(
       args,
       rows.map((row) => row.dst),
       limit,
@@ -1352,7 +1584,7 @@ async function addHintDependencyDirection(
     `,
     [args.repoId, args.hintPath, fetchLimit]
   );
-  return applyDependencyRows(
+  return await applyDependencyRows(
     args,
     rows.map((row) => row.src_path),
     limit,
@@ -1360,12 +1592,12 @@ async function addHintDependencyDirection(
   );
 }
 
-function applyDependencyRows(
+async function applyDependencyRows(
   args: ExpandSingleHintParams,
   paths: string[],
   limit: number,
   direction: "out" | "in"
-): number {
+): Promise<number> {
   if (paths.length === 0) {
     return 0;
   }
@@ -1380,6 +1612,17 @@ function applyDependencyRows(
     const reason = `artifact:hint_dep_${direction}:${args.hintPath}:${dependencyPath}`;
     if (applyHintReasonBoost(candidate, reason, args.config.depBoost)) {
       added += 1;
+      const seedMeta = getHintSeedMeta(args.hintSeedMeta, args.hintPath);
+      await logHintExpansionEntry(args.db, {
+        repoId: args.repoId,
+        hintValue: seedMeta?.sourceHint ?? args.hintPath,
+        kind: "dependency",
+        targetPath: dependencyPath,
+        payload: {
+          origin: seedMeta?.origin ?? "artifact",
+          direction,
+        },
+      });
       if (added >= limit) {
         break;
       }
@@ -1678,7 +1921,11 @@ function normalizeMetadataFilterKey(
       if (!remainder) {
         return null;
       }
-      return { key: remainder, source: entry.source, strict: entry.strict };
+      return {
+        key: remainder,
+        source: entry.source,
+        ...(entry.strict !== undefined && { strict: entry.strict }),
+      };
     }
   }
   return null;
@@ -1718,12 +1965,15 @@ function normalizeMetadataFiltersParam(input: unknown): MetadataFilter[] {
     if (values.length === 0) {
       continue;
     }
-    filters.push({
+    const filter: MetadataFilter = {
       key: normalizedKey.key,
       values,
       source: normalizedKey.source,
-      strict: normalizedKey.strict,
-    });
+    };
+    if (normalizedKey.strict !== undefined) {
+      filter.strict = normalizedKey.strict;
+    }
+    filters.push(filter);
   }
   return filters;
 }
@@ -1743,12 +1993,15 @@ function mergeMetadataFilters(filters: MetadataFilter[]): MetadataFilter[] {
         }
       }
     } else {
-      merged.set(mapKey, {
+      const entry: MetadataFilter = {
         key: filter.key,
         source: filter.source,
-        strict: filter.strict,
         values: [...filter.values],
-      });
+      };
+      if (filter.strict !== undefined) {
+        entry.strict = filter.strict;
+      }
+      merged.set(mapKey, entry);
     }
   }
   return Array.from(merged.values());
@@ -1781,15 +2034,18 @@ function parseInlineMetadataFilters(query: string): {
     if (!value) {
       continue;
     }
+    const filter: MetadataFilter = {
+      key: normalizedKey.key,
+      source: normalizedKey.source,
+      values: [value],
+    };
+    if (normalizedKey.strict !== undefined) {
+      filter.strict = normalizedKey.strict;
+    }
     matches.push({
       start: match.index,
       end: pattern.lastIndex,
-      filter: {
-        key: normalizedKey.key,
-        source: normalizedKey.source,
-        strict: normalizedKey.strict,
-        values: [value],
-      },
+      filter,
     });
   }
 
@@ -3156,9 +3412,9 @@ async function contextBundleImpl(
   const limit = normalizeBundleLimit(params.limit);
   const artifacts = params.artifacts ?? {};
   const artifactHints = normalizeArtifactHints(artifacts.hints);
-  const pathHintTargets = artifactHints.filter(
-    (hint) => hint.includes("/") && SAFE_PATH_PATTERN.test(hint)
-  );
+  const hintBuckets = bucketArtifactHints(artifactHints);
+  const artifactPathHints = hintBuckets.pathHints;
+  const substringHints = hintBuckets.substringHints;
   const includeTokensEstimate = params.includeTokensEstimate === true;
   const isCompact = params.compact === true;
 
@@ -3369,29 +3625,34 @@ async function contextBundleImpl(
     }
   }
 
-  if (pathHintTargets.length > 0) {
-    const hintBoost = computeHintPriorityBoost(weights);
-    for (const hintPath of pathHintTargets) {
-      const candidate = ensureCandidate(candidates, hintPath);
-      candidate.score += hintBoost;
-      candidate.reasons.add(`artifact:hint:${hintPath}`);
-      candidate.pathMatchHits = Math.max(candidate.pathMatchHits, 3); // Avoid graduated penalties
-      candidate.matchLine ??= 1;
-    }
-    await expandHintCandidatesForHints({
+  const artifactPathTargets: ResolvedPathHint[] = artifactPathHints.map((hintPath) => ({
+    path: hintPath,
+    sourceHint: hintPath,
+    origin: "artifact",
+  }));
+  const dictionaryPathTargets = await fetchDictionaryPathHints(
+    db,
+    repoId,
+    substringHints,
+    HINT_DICTIONARY_LIMIT
+  );
+  const { list: resolvedPathHintTargets, meta: hintSeedMeta } = createHintSeedMeta([
+    ...artifactPathTargets,
+    ...dictionaryPathTargets,
+  ]);
+
+  if (resolvedPathHintTargets.length > 0) {
+    await applyPathHintPromotions({
       db,
       repoId,
-      hintPaths: pathHintTargets,
+      hintTargets: resolvedPathHintTargets,
       candidates,
       fileCache,
       weights,
-      config: createHintExpansionConfig(weights),
+      hintSeedMeta,
     });
   }
 
-  const substringHints = artifactHints
-    .filter((hint) => !hint.includes("/") && hint.length >= 3)
-    .map((hint) => hint.toLowerCase());
   if (substringHints.length > 0) {
     await addHintSubstringMatches(
       db,
@@ -3431,8 +3692,8 @@ async function contextBundleImpl(
     dependencySeeds.add(artifacts.editing_path);
   }
 
-  for (const hintPath of pathHintTargets) {
-    dependencySeeds.add(hintPath);
+  for (const target of resolvedPathHintTargets) {
+    dependencySeeds.add(target.path);
   }
 
   if (dependencySeeds.size > 0) {
@@ -3711,7 +3972,7 @@ async function contextBundleImpl(
     logPenaltyTelemetry(telemetry, queryStats);
   }
 
-  const hintPathSet = new Set(pathHintTargets);
+  const hintPathSet = new Set(resolvedPathHintTargets.map((target) => target.path));
   const rankedCandidates = materializedCandidates
     .filter((candidate) => candidate.score > 0 || hintPathSet.has(candidate.path))
     .sort((a, b) => {
@@ -3721,7 +3982,11 @@ async function contextBundleImpl(
       return b.score - a.score;
     });
 
-  const prioritizedCandidates = prioritizeHintCandidates(rankedCandidates, pathHintTargets, limit);
+  const prioritizedCandidates = prioritizeHintCandidates(
+    rankedCandidates,
+    resolvedPathHintTargets.map((target) => target.path),
+    limit
+  );
   if (prioritizedCandidates.length === 0) {
     const warnings = [...context.warningManager.responseWarnings];
     return {

@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Re-architected `context_bundle` のアーティファクトヒント処理をフェーズ化し、path/directory/dependency/substring それぞれに why タグを残すようにした。`KIRI_HINT_LOG=1` 時のみ `hint_expansion` に展開ログを保存し、`dictionary:hint:*` で辞書経由の昇格を可視化。
+- `hint_expansion` と `hint_dictionary` テーブル、ならびに `scripts/diag/dump-hints.ts` / `scripts/diag/build-hint-dictionary.ts` / `scripts/diag/cleanup-hints.ts` を追加。辞書の再生成と TTL 削除がワンコマンドで行える。
+- `scripts/eval/run-golden.ts` に R@5 集計、`--min-r5`/`--max-startup-ms` オプション、Markdown 出力への起動時間と R@5 の記録を追加。docs カテゴリだけを落とし穴なしでゲートできるようになった。
+
 ## [0.10.0] - 2025-11-13
 
 ### Added

@@ -162,6 +162,38 @@ export async function ensureBaseSchema(db: DuckDBClient): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_markdown_link_target
       ON markdown_link(repo_id, resolved_path)
   `);
+
+  await db.run(`
+    CREATE TABLE IF NOT EXISTS hint_expansion (
+      repo_id INTEGER,
+      hint_value TEXT,
+      expansion_kind TEXT,
+      target_path TEXT,
+      payload JSON,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  await db.run(`
+    CREATE INDEX IF NOT EXISTS idx_hint_expansion_repo
+      ON hint_expansion(repo_id, created_at)
+  `);
+
+  await db.run(`
+    CREATE TABLE IF NOT EXISTS hint_dictionary (
+      repo_id INTEGER,
+      hint_value TEXT,
+      target_path TEXT,
+      freq INTEGER DEFAULT 1,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (repo_id, hint_value, target_path)
+    )
+  `);
+
+  await db.run(`
+    CREATE INDEX IF NOT EXISTS idx_hint_dictionary_repo_hint
+      ON hint_dictionary(repo_id, hint_value)
+  `);
 }
 
 /**

@@ -222,18 +222,75 @@ describe("context_bundle", () => {
     const hintBundle = await contextBundle(context, {
       goal: "meta.id:runbook-001",
       limit: 5,
+      artifacts: {
+        hints: ["src/handlers/runbook.ts", "runbook"],
+      },
     });
     const hintPaths = hintBundle.context.map((item) => item.path);
     expect(hintPaths).toContain("docs/runbook.md");
     expect(hintPaths).toContain("src/handlers/runbook.ts");
     const docEntry = hintBundle.context.find((item) => item.path === "docs/runbook.md");
     expect(docEntry?.why).toContain("metadata:hint");
+    const codeEntry = hintBundle.context.find((item) => item.path === "src/handlers/runbook.ts");
+    expect(codeEntry).toBeDefined();
+    expect(codeEntry?.why).toContain("artifact:hint:src/handlers/runbook.ts");
+    expect(codeEntry?.why).toContain("substring:hint:runbook");
 
     const strictBundle = await contextBundle(context, {
       goal: "docmeta.id:runbook-001",
       limit: 5,
+      artifacts: {
+        hints: ["src/handlers/runbook.ts", "runbook"],
+      },
     });
     expect(strictBundle.context.map((item) => item.path)).toEqual(["docs/runbook.md"]);
+  });
+
+  it("promotes dictionary entries when only substring hints are available", async () => {
+    const repo = await createTempRepo({
+      "src/stats/mann.ts": `export function mannWhitneyUTest(a: number[], b: number[]): number {
+  return a.length - b.length;
+}
+`,
+    });
+    cleanupTargets.push({ dispose: repo.cleanup });
+
+    const dbDir = await mkdtemp(join(tmpdir(), "kiri-context-dictionary-"));
+    const dbPath = join(dbDir, "index.duckdb");
+    cleanupTargets.push({ dispose: async () => await rm(dbDir, { recursive: true, force: true }) });
+
+    await runIndexer({ repoRoot: repo.path, databasePath: dbPath, full: true });
+
+    const db = await DuckDBClient.connect({ databasePath: dbPath });
+    cleanupTargets.push({ dispose: async () => await db.close() });
+
+    const repoId = await resolveRepoId(db, repo.path);
+    await db.run(
+      `
+        INSERT INTO hint_dictionary (repo_id, hint_value, target_path, freq)
+        VALUES (?, ?, ?, ?)
+      `,
+      [repoId, "mann", "src/stats/mann.ts", 5]
+    );
+
+    const context: ServerContext = {
+      db,
+      repoId,
+      services: createServerServices(db),
+      warningManager: new WarningManager(),
+    };
+
+    const bundle = await contextBundle(context, {
+      goal: "mann stats test",
+      limit: 3,
+      artifacts: {
+        hints: ["mann"],
+      },
+    });
+
+    const entry = bundle.context.find((item) => item.path === "src/stats/mann.ts");
+    expect(entry).toBeDefined();
+    expect(entry?.why).toContain("dictionary:hint:src/stats/mann.ts");
   });
 
   it("skips tokens_estimate calculation unless requested", async () => {

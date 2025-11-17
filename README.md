@@ -55,6 +55,10 @@ Choose one of the following methods:
 npm install -g kiri-mcp-server
 ```
 
+## 📚 Documentation
+
+- [Authoring Docs for KIRI Search](docs/documentation-best-practices.md) – best practices for writing metadata-rich, link-aware documentation so that `context_bundle` and the docs vs. docs-plain benchmark maintain high precision.
+
 > **Note**: This installs the `kiri` command globally. You can verify with `kiri --version`.
 
 **Option B: Use npx (No Permanent Installation)**

@@ -1,0 +1,78 @@
+---
+title: "Authoring Docs for KIRI Search"
+category: "docs"
+tags:
+  - docs
+  - metadata
+  - best-practices
+  - plain-corpus
+service: "kiri"
+---
+
+# Authoring Docs for KIRI Search
+
+> Related: [Testing & Evaluation](./testing.md) / [Search & Ranking](./search-ranking.md)
+
+KIRI’s document search relies on structured metadata and Markdown signals. This guide captures the practices that keep docs discoverable and prevent regressions such as those highlighted in the `docs` vs `docs-plain` benchmark (see `tests/eval/results/2025-11-17-docs-plain.md`).
+
+## 1. Use Complete Front Matter
+
+- **Always include** `title`, `category`, `tags`, and `service`.
+- Treat `tags` as the canonical list of keywords. Anything you expect in `tag:<keyword>` queries must live here.
+- Keep tags lowercase and singular (`observability`, `runbook`, `security`, …) to maximize matching.
+- Explain deprecated or renamed features by adding both old and new tags while the transition is in flight.
+
+Front matter drives:
+
+| Signal        | Why tag                             | Purpose                   |
+| ------------- | ----------------------------------- | ------------------------- |
+| Tags/Category | `metadata:filter`, `boost:metadata` | Structured filter/ranking |
+| Title         | `text:` + `phrase:` matches         | Precise phrase hits       |
+
+If front matter is omitted, P@10 and metadata pass rate collapse to zero (see docs-plain benchmark).
+
+## 2. Link Related Content
+
+- Cross-link runbooks, designs, and READMEs. Incoming links are converted into `markdown_link` entries and surfaced as `boost:links`.
+- Prefer relative paths (`[Runbook](./runbook.md#incident-response)`) so links survive repo moves.
+- Add “Related” sections at the top of each doc for quick traversal.
+
+## 3. Reinforce Keywords in the Body
+
+- Mirror front matter tags in headings and paragraphs; simple `text:` matches act as the fallback when metadata is missing.
+- Use descriptive H2/H3 headings (`## Observability SLO Workflow`) instead of stylistic phrases.
+- Include code or config snippets when they contain canonical names (e.g., environment variables) so fallback string search can still succeed.
+
+## 4. Choose Stable Paths
+
+- Place docs under `docs/<domain>/<topic>.md` or similar predictable layouts.
+- Avoid generic file names (`guide.md`, `notes.md`); file paths appear in `path-keyword:` reasons and help ranking.
+- For multi-language docs, keep the English canonical path and store translations beside it (`runbook.ja.md`) so links stay stable.
+
+## 5. Validate with Benchmarks
+
+1. Regenerate the plain corpus and index:
+   ```bash
+   pnpm exec tsx scripts/docs/make-plain.ts --index
+   pnpm exec tsx src/client/cli.ts security verify --db tmp/docs-plain/.kiri/index.duckdb --write-lock
+   ```
+2. Compare front matter impact:
+   ```bash
+   pnpm run eval:golden --categories docs,docs-plain --out var/eval/docs-compare
+   ```
+3. Inspect `var/eval/docs-compare/latest.md` → `Category Δ Metrics`. Large negative deltas mean metadata/link signals are missing or misconfigured.
+
+## 6. When Adding New Docs
+
+1. Copy an existing doc as a template to keep the front matter format.
+2. Fill out the fields before writing content.
+3. Run the docs-only benchmark to ensure your doc is discoverable.
+4. Update `tests/eval/goldens/queries.yaml` if the doc represents a new canonical runbook or workflow.
+
+## 7. Troubleshooting Checklist
+
+- **Metadata pass failure**: check for malformed YAML (e.g., tabs, missing delimiters).
+- **Inbound pass failure**: ensure other docs actually link to yours; one-way links do not generate inbound counts.
+- **`pnpm run eval:golden` fails on plain corpus**: regenerate `tmp/docs-plain` and rerun the security lock command.
+
+Following these practices keeps KIRI’s context tools reliable and makes regressions easy to detect. Remember: every doc without front matter reduces overall P@10, so treat metadata as part of the contract, not an optional header.

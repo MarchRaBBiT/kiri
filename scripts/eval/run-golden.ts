@@ -106,6 +106,47 @@ function computeAverage(values: Array<number | null | undefined>): number | null
   return total / valid.length;
 }
 
+function computeCategoryComparisons(
+  byCategory: BenchmarkResult["byCategory"]
+): CategoryComparison[] {
+  const comparisons: CategoryComparison[] = [];
+  const categoryNames = Object.keys(byCategory);
+  for (const variant of categoryNames) {
+    if (!variant.endsWith("-plain")) {
+      continue;
+    }
+    const baseline = variant.replace(/-plain$/, "");
+    if (!byCategory[baseline]) {
+      continue;
+    }
+    const baseStats = byCategory[baseline]!;
+    const variantStats = byCategory[variant]!;
+    const diff = (
+      variantValue: number | null | undefined,
+      baselineValue: number | null | undefined
+    ): number | null => {
+      if (variantValue == null || baselineValue == null) {
+        return null;
+      }
+      return variantValue - baselineValue;
+    };
+    comparisons.push({
+      baseline,
+      variant,
+      deltaPrecisionAtK: diff(variantStats.precisionAtK, baseStats.precisionAtK),
+      deltaMetadataPassRate: diff(
+        variantStats.metadataPassRate ?? null,
+        baseStats.metadataPassRate ?? null
+      ),
+      deltaInboundPassRate: diff(
+        variantStats.inboundPassRate ?? null,
+        baseStats.inboundPassRate ?? null
+      ),
+    });
+  }
+  return comparisons;
+}
+
 // ============================================================================
 // CI Guard
 // ============================================================================
@@ -139,6 +180,8 @@ interface GoldenQuery {
   };
   tags: string[];
   notes?: string;
+  requiresMetadata?: boolean;
+  requiresInboundLinks?: boolean;
 }
 
 interface RepoDefinition {
@@ -181,6 +224,11 @@ interface QueryResult {
   tokensBaseline: number | null;
   tokenSavingsRatio: number | null;
   hintCoverage: number | null;
+  metadataRequired?: boolean;
+  inboundRequired?: boolean;
+  metadataSatisfied?: boolean | null;
+  inboundSatisfied?: boolean | null;
+  whyByPath?: Record<string, string[]>;
 }
 
 interface BenchmarkResult {
@@ -199,6 +247,8 @@ interface BenchmarkResult {
     avgBaselineTokens: number | null;
     avgTokenSavingsRatio: number | null;
     avgHintCoverage: number | null;
+    metadataPassRate: number | null;
+    inboundPassRate: number | null;
   };
   byCategory: Record<
     string,
@@ -208,9 +258,20 @@ interface BenchmarkResult {
       count: number;
       avgTokenSavingsRatio: number | null;
       avgHintCoverage: number | null;
+      metadataPassRate: number | null;
+      inboundPassRate: number | null;
     }
   >;
   queries: QueryResult[];
+  comparisons?: CategoryComparison[];
+}
+
+interface CategoryComparison {
+  baseline: string;
+  variant: string;
+  deltaPrecisionAtK: number | null;
+  deltaMetadataPassRate: number | null;
+  deltaInboundPassRate: number | null;
 }
 
 interface BaselineData {
@@ -221,6 +282,8 @@ interface BaselineData {
   thresholds: {
     minP10: number;
     maxTTFU: number;
+    minMetadataPassRate?: number;
+    minInboundPassRate?: number;
   };
   overall: {
     precisionAtK: number | null;
@@ -238,6 +301,7 @@ interface BenchmarkOptions {
   maxRetries: number;
   repoOverride: boolean;
   dbOverride: boolean;
+  categoryFilter: Set<string>;
 }
 
 interface ContextBundleItemResponse {
@@ -269,6 +333,7 @@ function parseArgs(): BenchmarkOptions {
     maxRetries: 2,
     repoOverride: false,
     dbOverride: false,
+    categoryFilter: new Set(),
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -297,6 +362,15 @@ function parseArgs(): BenchmarkOptions {
       case "--max-retries":
         options.maxRetries = parseInt(args[++i] ?? "2", 10);
         break;
+      case "--categories": {
+        const raw = args[++i] ?? "";
+        const categories = raw
+          .split(",")
+          .map((value) => value.trim())
+          .filter((value) => value.length > 0);
+        options.categoryFilter = new Set(categories);
+        break;
+      }
       case "--help":
         console.log(`
 Usage: tsx scripts/eval/run-golden.ts [options]
@@ -309,6 +383,7 @@ Options:
   --verbose              Enable verbose logging
   --warmup <number>      Warmup runs (default: 2)
   --max-retries <number> Max retries per query (default: 2)
+  --categories <list>    Comma-separated category filter (e.g. docs,docs-plain)
   --help                 Show this help message
 `);
         process.exit(0);
@@ -348,6 +423,7 @@ class McpServerManager {
   private serverProc: ChildProcess | null = null;
   private readonly basePort = 19999;
   private assignedPort = this.basePort;
+  private portShift = 0;
   private serverLogs = "";
   private cleanupHandlers: Array<[NodeJS.Signals | "exit", () => void]> = [];
 
@@ -364,7 +440,9 @@ class McpServerManager {
       );
     }
 
-    this.assignedPort = await findAvailablePort(this.basePort);
+    const preferredPort = this.basePort + this.portShift;
+    this.portShift = (this.portShift + 1) % 1000;
+    this.assignedPort = await findAvailablePort(preferredPort);
     const lockPath = `${dbPath}.lock`;
     if (existsSync(lockPath)) {
       const message = `⚠️  Removing stale DuckDB lock file: ${lockPath}`;
@@ -702,12 +780,25 @@ async function main(): Promise<void> {
   const options = parseArgs();
   const goldenSet = loadGoldenSet();
   const baseline = loadBaseline();
+  const queries =
+    options.categoryFilter.size > 0
+      ? goldenSet.queries.filter((query) => options.categoryFilter.has(query.category))
+      : goldenSet.queries;
+
+  if (queries.length === 0) {
+    throw new Error("No queries match the selected category filter.");
+  }
 
   console.log("\n🎯 KIRI Golden Set Benchmark");
   console.log("============================");
   console.log(`Dataset: ${goldenSet.datasetVersion}`);
   console.log(`Schema: ${goldenSet.schemaVersion}`);
-  console.log(`Queries: ${goldenSet.queries.length}`);
+  const filteredLabel =
+    options.categoryFilter.size > 0 ? ` (filtered from ${goldenSet.queries.length})` : "";
+  console.log(`Queries: ${queries.length}${filteredLabel}`);
+  if (options.categoryFilter.size > 0) {
+    console.log(`Categories: ${[...options.categoryFilter].join(", ")}`);
+  }
   console.log(`K: ${options.k}`);
   console.log(`Warmup: ${options.warmupRuns} runs`);
   console.log("");
@@ -744,8 +835,8 @@ async function main(): Promise<void> {
 
   try {
     // Warmup phase (use first query's repo to prime caches)
-    if (options.warmupRuns > 0 && goldenSet.queries.length > 0) {
-      const warmupRepoId = resolveQueryRepo(goldenSet.queries[0]);
+    if (options.warmupRuns > 0 && queries.length > 0) {
+      const warmupRepoId = resolveQueryRepo(queries[0]);
       await ensureServerForRepo(warmupRepoId);
       const warmupRepoPath = repoMap.get(warmupRepoId)?.repoPath;
       if (!warmupRepoPath) {
@@ -753,7 +844,7 @@ async function main(): Promise<void> {
       }
       console.log(`🔥 Warming up with ${options.warmupRuns} runs...`);
       for (let i = 0; i < options.warmupRuns; i++) {
-        const warmupQuery = goldenSet.queries[0]!;
+        const warmupQuery = queries[0]!;
         await executeQuery(
           server,
           warmupQuery,
@@ -770,7 +861,7 @@ async function main(): Promise<void> {
     console.log("📊 Running benchmark...\n");
     const queryResults: QueryResult[] = [];
 
-    for (const query of goldenSet.queries) {
+    for (const query of queries) {
       const repoId = resolveQueryRepo(query);
       await ensureServerForRepo(repoId);
       const repoPath = repoMap.get(repoId)?.repoPath;
@@ -828,7 +919,7 @@ async function main(): Promise<void> {
         : 0;
 
     // By-category metrics (include failures as P@K=0)
-    const categories = [...new Set(goldenSet.queries.map((q) => q.category))];
+    const categories = [...new Set(queries.map((q) => q.category))];
     const byCategory: Record<
       string,
       {
@@ -837,6 +928,8 @@ async function main(): Promise<void> {
         count: number;
         avgTokenSavingsRatio: number | null;
         avgHintCoverage: number | null;
+        metadataPassRate: number | null;
+        inboundPassRate: number | null;
       }
     > = {};
 
@@ -853,6 +946,9 @@ async function main(): Promise<void> {
         const catTokenSavings = computeAverage(catResults.map((r) => r.tokenSavingsRatio));
         const catHintCoverage = computeAverage(catResults.map((r) => r.hintCoverage));
 
+        const catMetadataChecks = catResults.filter((r) => r.metadataRequired);
+        const catInboundChecks = catResults.filter((r) => r.inboundRequired);
+
         byCategory[category] = {
           precisionAtK:
             catResults.reduce((sum, r) => sum + (r.precisionAtK ?? 0), 0) / catResults.length,
@@ -865,6 +961,15 @@ async function main(): Promise<void> {
           count: catResults.length,
           avgTokenSavingsRatio: catTokenSavings,
           avgHintCoverage: catHintCoverage,
+          metadataPassRate:
+            catMetadataChecks.length > 0
+              ? catMetadataChecks.filter((r) => r.metadataSatisfied).length /
+                catMetadataChecks.length
+              : null,
+          inboundPassRate:
+            catInboundChecks.length > 0
+              ? catInboundChecks.filter((r) => r.inboundSatisfied).length / catInboundChecks.length
+              : null,
         };
       }
     }
@@ -875,6 +980,16 @@ async function main(): Promise<void> {
     );
     const avgTokenSavingsRatio = computeAverage(queryResults.map((r) => r.tokenSavingsRatio));
     const avgHintCoverage = computeAverage(queryResults.map((r) => r.hintCoverage));
+    const metadataChecks = queryResults.filter((r) => r.metadataRequired);
+    const inboundChecks = queryResults.filter((r) => r.inboundRequired);
+    const metadataPassRate =
+      metadataChecks.length > 0
+        ? metadataChecks.filter((r) => r.metadataSatisfied).length / metadataChecks.length
+        : null;
+    const inboundPassRate =
+      inboundChecks.length > 0
+        ? inboundChecks.filter((r) => r.inboundSatisfied).length / inboundChecks.length
+        : null;
 
     // Get version info
     const packageJson = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8")) as {
@@ -887,6 +1002,8 @@ async function main(): Promise<void> {
     } catch {
       // Git not available or not a git repository
     }
+
+    const comparisons = computeCategoryComparisons(byCategory);
 
     const benchmarkResult: BenchmarkResult = {
       timestamp: new Date().toISOString(),
@@ -904,9 +1021,12 @@ async function main(): Promise<void> {
         avgBaselineTokens,
         avgTokenSavingsRatio,
         avgHintCoverage,
+        metadataPassRate,
+        inboundPassRate,
       },
       byCategory,
       queries: queryResults,
+      ...(comparisons.length > 0 && { comparisons }),
     };
 
     // Write output files
@@ -933,6 +1053,18 @@ async function main(): Promise<void> {
     }
     if (avgHintCoverage !== null) {
       console.log(`          Hint Coverage = ${(avgHintCoverage * 100).toFixed(1)}%`);
+    }
+    if (metadataPassRate !== null) {
+      const threshold = baseline.thresholds.minMetadataPassRate ?? 1;
+      console.log(
+        `          Metadata Pass = ${(metadataPassRate * 100).toFixed(1)}% ${compareThreshold(metadataPassRate, threshold, true)}`
+      );
+    }
+    if (inboundPassRate !== null) {
+      const threshold = baseline.thresholds.minInboundPassRate ?? 1;
+      console.log(
+        `          Inbound Link Pass = ${(inboundPassRate * 100).toFixed(1)}% ${compareThreshold(inboundPassRate, threshold, true)}`
+      );
     }
     console.log(`Queries:  ${successfulResults.length} successful, ${failedResults.length} failed`);
     console.log("=".repeat(60));
@@ -1063,6 +1195,10 @@ async function executeQuery(
     throw new Error(`Unknown tool: ${tool}`);
   }
 
+  if (process.env.KIRI_TRACE_QUERY === query.id) {
+    console.log(`[trace] params for ${query.id}:`, JSON.stringify(params));
+  }
+
   const startTime = process.hrtime.bigint();
   const rawResult = await server.call(tool, params, timeoutMs);
   const durationMs = Number((process.hrtime.bigint() - startTime) / 1000000n);
@@ -1091,6 +1227,17 @@ async function executeQuery(
       ? (rawResult as ContextBundleResponsePayload)
       : null;
   const contextItems = contextPayload?.context ?? [];
+  const whyByPath: Record<string, string[]> = {};
+  if (isContextBundleTool) {
+    for (const item of contextItems) {
+      if (!item.path) continue;
+      if (Array.isArray(item.why) && item.why.length > 0) {
+        whyByPath[item.path] = item.why;
+      } else {
+        whyByPath[item.path] = [];
+      }
+    }
+  }
   const tokensEstimate =
     contextPayload && typeof contextPayload.tokens_estimate === "number"
       ? contextPayload.tokens_estimate
@@ -1105,6 +1252,8 @@ async function executeQuery(
   const retrieved = resultItems
     .map((item) => item.path)
     .filter((path): path is string => typeof path === "string");
+  const metadataRequired = Boolean(query.requiresMetadata);
+  const inboundRequired = Boolean(query.requiresInboundLinks);
 
   let tokensBaseline: number | null = null;
   let tokenSavingsRatio: number | null = null;
@@ -1132,6 +1281,10 @@ async function executeQuery(
       tokensBaseline,
       tokenSavingsRatio,
       hintCoverage,
+      metadataRequired,
+      inboundRequired,
+      metadataSatisfied: metadataRequired ? false : null,
+      inboundSatisfied: inboundRequired ? false : null,
     };
   }
 
@@ -1156,11 +1309,38 @@ async function executeQuery(
 
   const metrics = evaluateRetrieval({ items: events, relevant: relevantSet, k });
 
+  const metadataSatisfied =
+    metadataRequired === false
+      ? null
+      : isContextBundleTool
+        ? retrieved.some((path) => {
+            const tags = whyByPath[path] ?? [];
+            return tags.includes("metadata:filter") || tags.includes("boost:metadata");
+          })
+        : false;
+  const inboundSatisfied =
+    inboundRequired === false
+      ? null
+      : isContextBundleTool
+        ? retrieved.some((path) => (whyByPath[path] ?? []).includes("boost:links"))
+        : false;
+
+  let status: QueryResult["status"] = "success";
+  let error: string | undefined;
+  if (metadataRequired && metadataSatisfied === false) {
+    status = "error";
+    error = "Metadata why tags missing";
+  }
+  if (inboundRequired && inboundSatisfied === false) {
+    status = "error";
+    error = error ? `${error}; inbound link why tags missing` : "Inbound link why tags missing";
+  }
+
   return {
     id: query.id,
     query: query.query,
     category: query.category,
-    status: "success",
+    status,
     retrieved,
     expected: query.expected.paths,
     precisionAtK: metrics.precisionAtK,
@@ -1171,6 +1351,12 @@ async function executeQuery(
     tokensBaseline,
     tokenSavingsRatio,
     hintCoverage,
+    error,
+    metadataRequired,
+    inboundRequired,
+    metadataSatisfied,
+    inboundSatisfied,
+    whyByPath: Object.keys(whyByPath).length > 0 ? whyByPath : undefined,
   };
 }
 
@@ -1180,6 +1366,8 @@ function generateMarkdown(result: BenchmarkResult, baseline: BaselineData): stri
   const formatNumber = (value: number | null): string =>
     value === null ? "N/A" : Math.round(value).toString();
   const tokenTargetPercent = (TOKEN_SAVINGS_TARGET * 100).toFixed(0);
+  const formatDelta = (value: number | null): string =>
+    value === null ? "N/A" : `${value >= 0 ? "+" : ""}${value.toFixed(3)}`;
 
   let md = `# KIRI Golden Set Evaluation - ${result.timestamp.split("T")[0]}\n\n`;
   md += `**Version**: ${result.version} (${result.gitSha})\n`;
@@ -1199,6 +1387,14 @@ function generateMarkdown(result: BenchmarkResult, baseline: BaselineData): stri
         : "❌";
   md += `| Avg Token Savings | ${formatPercent(result.overall.avgTokenSavingsRatio)} | ≥${tokenTargetPercent}% | ${tokenStatus} |\n`;
   md += `| Avg Hint Coverage | ${formatPercent(result.overall.avgHintCoverage)} | - | - |\n`;
+  if (result.overall.metadataPassRate !== null) {
+    const metadataThreshold = baseline.thresholds.minMetadataPassRate ?? 1;
+    md += `| Metadata Pass | ${formatPercent(result.overall.metadataPassRate)} | ≥${(metadataThreshold * 100).toFixed(0)}% | ${compareThreshold(result.overall.metadataPassRate, metadataThreshold, true)} |\n`;
+  }
+  if (result.overall.inboundPassRate !== null) {
+    const inboundThreshold = baseline.thresholds.minInboundPassRate ?? 1;
+    md += `| Inbound Link Pass | ${formatPercent(result.overall.inboundPassRate)} | ≥${(inboundThreshold * 100).toFixed(0)}% | ${compareThreshold(result.overall.inboundPassRate, inboundThreshold, true)} |\n`;
+  }
   md += `| Avg Bundle Tokens | ${formatNumber(result.overall.avgTokensEstimate)} | - | - |\n`;
   md += `| Avg Baseline Tokens | ${formatNumber(result.overall.avgBaselineTokens)} | - | - |\n`;
   md += `| Total Queries | ${result.overall.totalQueries} | - | - |\n`;
@@ -1206,12 +1402,22 @@ function generateMarkdown(result: BenchmarkResult, baseline: BaselineData): stri
   md += `| Failed | ${result.overall.failedQueries} | - | - |\n\n`;
 
   md += `## By Category\n\n`;
-  md += `| Category | P@${result.k} | Avg TFFU | Avg Token Savings | Avg Hint Coverage | Count |\n`;
-  md += `|----------|------|----------|-----------------|------------------|-------|\n`;
+  md += `| Category | P@${result.k} | Avg TFFU | Avg Token Savings | Avg Hint Coverage | Metadata Pass | Inbound Pass | Count |\n`;
+  md += `|----------|------|----------|-----------------|------------------|---------------|--------------|-------|\n`;
   for (const [category, metrics] of Object.entries(result.byCategory)) {
-    md += `| ${category} | ${metrics.precisionAtK.toFixed(3)} | ${Math.round(metrics.avgTTFU)}ms | ${formatPercent(metrics.avgTokenSavingsRatio ?? null)} | ${formatPercent(metrics.avgHintCoverage ?? null)} | ${metrics.count} |\n`;
+    md += `| ${category} | ${metrics.precisionAtK.toFixed(3)} | ${Math.round(metrics.avgTTFU)}ms | ${formatPercent(metrics.avgTokenSavingsRatio ?? null)} | ${formatPercent(metrics.avgHintCoverage ?? null)} | ${formatPercent(metrics.metadataPassRate ?? null)} | ${formatPercent(metrics.inboundPassRate ?? null)} | ${metrics.count} |\n`;
   }
   md += `\n`;
+
+  if (result.comparisons && result.comparisons.length > 0) {
+    md += `## Category Δ Metrics\n\n`;
+    md += `| Baseline | Variant | ΔP@${result.k} | ΔMetadata Pass | ΔInbound Pass |\n`;
+    md += `|----------|---------|-----------|-----------------|----------------|\n`;
+    for (const comparison of result.comparisons) {
+      md += `| ${comparison.baseline} | ${comparison.variant} | ${formatDelta(comparison.deltaPrecisionAtK)} | ${formatDelta(comparison.deltaMetadataPassRate)} | ${formatDelta(comparison.deltaInboundPassRate)} |\n`;
+    }
+    md += `\n`;
+  }
 
   // Failed queries
   const failed = result.queries.filter((q) => q.status !== "success");

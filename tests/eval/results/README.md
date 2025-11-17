@@ -8,6 +8,9 @@ This directory contains historical benchmark results for tracking KIRI search ac
 
 - **P@10**: Precision at K=10 (target: ≥0.70)
 - **TFFU**: Time To First Useful result in milliseconds (target: ≤1000ms)
+- **Metadata Pass Rate**: Percentage of `requiresMetadata` queries whose `why` tags include `metadata:filter` or `boost:metadata` (target: 100%)
+- **Inbound Link Pass Rate**: Percentage of `requiresInboundLinks` queries whose `why` tags include `boost:links` (target: 100%)
+- **Docs Plain Δ**: Difference between `docs` と `docs-plain` カテゴリの P@10 / Metadata Pass / Inbound Pass（front matter 依存度を把握）
 
 **Related:**
 
@@ -26,6 +29,9 @@ pnpm run eval:golden
 
 # Optionally specify output directory
 pnpm run eval:golden --out var/eval/2025-11-11-feature-x
+
+# Compare docs vs docs-plain only
+pnpm run eval:golden --categories docs,docs-plain --out var/eval/docs-compare
 ```
 
 ### 2. Review Generated Output
@@ -34,6 +40,8 @@ The benchmark script generates two files in the output directory (default: `var/
 
 - `latest.json`: Detailed per-query results
 - `latest.md`: Summary table (copy-paste ready)
+
+When front matter 比較を行う場合は `var/eval/docs-compare/` を出力先に指定し、`docs` / `docs-plain` 両カテゴリの差分（`Category Δ Metrics` セクション）をこのディレクトリから参照できるようにする。
 
 ### 3. Create Result Entry
 
@@ -57,15 +65,16 @@ Add a new row to the "Results Summary" table below with:
 - Dataset version (from queries.yaml)
 - P@10 (overall)
 - Avg TFFU
+- Metadata / inbound pass rates (note if <100%)
 - Notes (brief description of changes)
 
 ---
 
 ## Results Summary
 
-| Date | Version | Git SHA | Dataset | P@10 | Avg TFFU | Notes                                                                     |
-| ---- | ------- | ------- | ------- | ---- | -------- | ------------------------------------------------------------------------- |
-| -    | -       | -       | -       | -    | -        | _No results recorded yet. Run `pnpm run eval:golden` to create baseline._ |
+| Date       | Version | Git SHA | Dataset             | P@10  | Avg TFFU | Notes                                                                                      |
+| ---------- | ------- | ------- | ------------------- | ----- | -------- | ------------------------------------------------------------------------------------------ |
+| 2025-11-17 | 0.10.0  | 9e59843 | v2025-11-docs-plain | 0.286 | 1ms      | Baseline after metadata hint/docmeta split; docs pass=100%, docs-plain intentionally fails |
 
 **Legend:**
 
@@ -125,6 +134,15 @@ YYYY-MM-DD-{description}.md
 - **>2000ms**: Poor - Performance optimization needed
 
 **Common Causes of High TFFU:**
+
+- **Metadata Pass Rate:** Fraction of `requiresMetadata: true` queries that surfaced `metadata:filter` or `boost:metadata` why tags. <100% implies front matter / YAML ingestion regression.
+- **Inbound Link Pass Rate:** Fraction of `requiresInboundLinks: true` queries that surfaced `boost:links` why tags. <100% implies `markdown_link` ingestion/boost regression.
+
+Troubleshooting checklist:
+
+- Run `duckdb var/index.duckdb "SELECT count(*) FROM document_metadata_kv"` to verify metadata tables.
+- Ensure docs contain valid YAML front matter (look for "Failed to parse Markdown front matter" warnings).
+- Check for "Markdown link table not found" warnings; regenerate index if necessary.
 
 - Cold start overhead (insufficient warmup)
 - Complex queries with many keywords

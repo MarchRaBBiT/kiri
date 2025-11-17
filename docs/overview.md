@@ -1,3 +1,14 @@
+---
+title: "KIRI 概要"
+category: "architecture"
+tags:
+  - overview
+  - architecture
+  - docs
+  - llm
+service: "kiri"
+---
+
 # KIRI 概要
 
 ## 基本情報
@@ -13,6 +24,12 @@
 - **MCP Server**: KIRI の検索機能を MCP（JSON-RPC over stdio/HTTP）ツールとして提供するサーバー。
 - **Client**: Codex CLI など MCP ツールを呼び出すクライアント。
 - **断片（Snippet）**: 関数やクラスなど意味境界に沿って抽出した行範囲。
+
+## 関連ドキュメント
+
+- [運用 Runbook](./runbook.md#運用-runbook): デグレード時の復旧と観測手順。Front matter の `tags: [operations, degrade, observability]` を使用。
+- [検索とランキング指針](./search-ranking.md#検索とランキング): `boost_profile` やメタデータブーストの詳細。
+- [テストと評価](./testing.md#テストと評価): ゴールデンセットやカバレッジ指標の延長戦ガイド。
 
 ## 目標と非目標
 

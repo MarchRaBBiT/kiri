@@ -903,13 +903,18 @@ export function createRpcHandler(
         // Legacy direct method invocation (backward compatibility)
         case "context_bundle": {
           const scopedContext = buildRequestContext();
-          result = await executeToolByName(
-            "context_bundle",
-            payload.params,
-            scopedContext,
-            degrade,
-            allowDegrade
-          );
+          try {
+            result = await executeToolByName(
+              "context_bundle",
+              payload.params,
+              scopedContext,
+              degrade,
+              allowDegrade
+            );
+          } catch (error) {
+            console.error("context_bundle execution error:", error);
+            throw error;
+          }
           break;
         }
         case "semantic_rerank": {

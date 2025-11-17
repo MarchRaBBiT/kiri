@@ -181,15 +181,59 @@ describe("context_bundle", () => {
       goal: "tag:observability dashboards",
       limit: 3,
     });
-    expect(filtered.context.map((item) => item.path)).toContain("docs/runbook.md");
-    expect(filtered.context.map((item) => item.path)).not.toContain("docs/faq.md");
+    const filteredPaths = filtered.context.map((item) => item.path);
+    expect(filteredPaths).toContain("docs/runbook.md");
+    const runbook = filtered.context.find((item) => item.path === "docs/runbook.md");
+    expect(runbook?.why).toContain("metadata:hint");
 
     const paramFiltered = await contextBundle(context, {
       goal: "dashboards",
-      metadata_filters: { tags: "payments" },
+      metadata_filters: { "docmeta.tags": "payments" },
       limit: 3,
     });
     expect(paramFiltered.context.map((item) => item.path)).toEqual(["docs/faq.md"]);
+  });
+
+  it("treats meta.* filters as hints and docmeta.* as strict filters", async () => {
+    const repo = await createTempRepo({
+      "docs/runbook.md":
+        "---\nid: runbook-001\ntitle: Incident Runbook\n---\nRefer to runbook-001 for details.\n",
+      "src/handlers/runbook.ts": `export function loadRunbook() {\n  return "runbook-001";\n}\n`,
+    });
+    cleanupTargets.push({ dispose: repo.cleanup });
+
+    const dbDir = await mkdtemp(join(tmpdir(), "kiri-context-meta-mode-"));
+    const dbPath = join(dbDir, "index.duckdb");
+    cleanupTargets.push({ dispose: async () => await rm(dbDir, { recursive: true, force: true }) });
+
+    await runIndexer({ repoRoot: repo.path, databasePath: dbPath, full: true });
+
+    const db = await DuckDBClient.connect({ databasePath: dbPath });
+    cleanupTargets.push({ dispose: async () => await db.close() });
+
+    const repoId = await resolveRepoId(db, repo.path);
+    const context: ServerContext = {
+      db,
+      repoId,
+      services: createServerServices(db),
+      warningManager: new WarningManager(),
+    };
+
+    const hintBundle = await contextBundle(context, {
+      goal: "meta.id:runbook-001",
+      limit: 5,
+    });
+    const hintPaths = hintBundle.context.map((item) => item.path);
+    expect(hintPaths).toContain("docs/runbook.md");
+    expect(hintPaths).toContain("src/handlers/runbook.ts");
+    const docEntry = hintBundle.context.find((item) => item.path === "docs/runbook.md");
+    expect(docEntry?.why).toContain("metadata:hint");
+
+    const strictBundle = await contextBundle(context, {
+      goal: "docmeta.id:runbook-001",
+      limit: 5,
+    });
+    expect(strictBundle.context.map((item) => item.path)).toEqual(["docs/runbook.md"]);
   });
 
   it("skips tokens_estimate calculation unless requested", async () => {

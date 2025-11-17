@@ -55,6 +55,10 @@ Choose one of the following methods:
 npm install -g kiri-mcp-server
 ```
 
+## 📚 Documentation
+
+- [Authoring Docs for KIRI Search](docs/documentation-best-practices.md) – best practices for writing metadata-rich, link-aware documentation so that `context_bundle` and the docs vs. docs-plain benchmark maintain high precision. Includes guidance on querying custom front-matter keys via `meta.<key>:<value>` (for example, `meta.id:runbook-001`).
+
 > **Note**: This installs the `kiri` command globally. You can verify with `kiri --version`.
 
 **Option B: Use npx (No Permanent Installation)**
@@ -188,6 +192,8 @@ The most powerful tool for getting started with unfamiliar code. Provide a task 
 
 Tip: Avoid leading command words like `find` or `show`; instead list concrete modules, files, and observed symptoms to keep rankings sharp.
 
+> **Docs search tip:** Set `boost_profile: "docs"` and include metadata filters when the target lives under `docs/`. Front matter keys are queryable via `meta.<key>:<value>` or `frontmatter.<key>:<value>` — e.g., `meta.id:runbook-001`, `tag:degrade`, `category:operations`. Use `docmeta.<key>:<value>` (or legacy `metadata.<key>`) when you want strict doc-only filtering. See the [Metadata alias reference](docs/documentation-best-practices.md#metadata-aliases--filters) for the full list. This keeps `context_bundle` aligned with the docs vs docs-plain benchmark expectations.
+
 **v0.8.0 improvements:**
 
 - **⚡ Compact mode default (BREAKING)**: `compact: true` is now default, reducing token usage by ~95% (55K → 2.5K tokens). Set `compact: false` to restore full preview mode.
@@ -259,6 +265,9 @@ Fast search across all indexed files. Supports multi-word queries, hyphenated te
 - Multi-word: `"tools call implementation"` → Finds files containing ANY word
 - Hyphenated: `"MCP-server-handler"` → Splits on hyphens and searches each part
 - Single word: `"DuckDB"` → Exact match
+- Metadata filter: `meta.<key>:<value>` / `frontmatter.<key>:<value>` matches front matter (e.g., `meta.id:runbook-001`); `tag:<value>` / `category:<value>` remain shorthand aliases for those standard keys. Use `docmeta.<key>:<value>` (or `metadata.<key>`) when you need strict doc-only filtering.
+
+> **Docs search tip:** Combine `boost_profile: "docs"` (either by parameter or CLI flag) with metadata filters for Markdown corpora. Refer to the [Metadata alias reference](docs/documentation-best-practices.md#metadata-aliases--filters) when issuing `files_search` requests so the same filters you use in benchmarks carry over to ad-hoc queries, and switch to `docmeta.*` when you want docs only.
 
 **Parameters:**
 

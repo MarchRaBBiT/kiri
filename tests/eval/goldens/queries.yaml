@@ -1,5 +1,5 @@
 schemaVersion: "1.0.0"
-datasetVersion: "vscode-2025-11-14"
+datasetVersion: "v2025-11-docs-plain"
 description: "VS Code TypeScript repository queries"
 defaultParams:
   k: 10
@@ -12,6 +12,12 @@ repos:
   vscode:
     repoPath: "external/vscode"
     dbPath: "external/vscode/.kiri/index.duckdb"
+  kiri-docs:
+    repoPath: "."
+    dbPath: "var/index.duckdb"
+  kiri-docs-plain:
+    repoPath: "tmp/docs-plain"
+    dbPath: "tmp/docs-plain/.kiri/index.duckdb"
 
 queries:
   - id: vscode-editor-contributions
@@ -250,3 +256,147 @@ queries:
       - "src/vs/workbench/contrib/tasks/browser/terminalTaskSystem.ts"
       - "src/vs/workbench/contrib/tasks/browser/terminalTaskSystemContribution.ts"
       - "terminalTaskSystemContribution"
+
+  - id: kiri-docs-runbook-degrade
+    query: "tag:degrade metrics アラート Runbook"
+    intent: "Find the degrade recovery runbook using front matter tags and inbound link boost"
+    category: "docs"
+    repo: "kiri-docs"
+    params:
+      boostProfile: "docs"
+      timeoutMs: 30000
+    expected:
+      paths:
+        - "docs/runbook.md"
+    tags: ["docs", "operations", "metadata", "links"]
+    requiresMetadata: true
+    requiresInboundLinks: true
+    notes: "Validation target for Markdown front matter tags and markdown_link counts."
+
+  - id: kiri-docs-security-windows
+    query: "category:security Windows パイプ リスク"
+    intent: "Locate Windows-specific security policy via category metadata"
+    category: "docs"
+    repo: "kiri-docs"
+    params:
+      boostProfile: "docs"
+    expected:
+      paths:
+        - "docs/security.md"
+    tags: ["docs", "security", "metadata"]
+    requiresMetadata: true
+    notes: "Requires front matter category=security to rank above other docs."
+
+  - id: kiri-docs-search-ranking-profile
+    query: "tag:ranking boost_profile docs ブラックリスト"
+    intent: "Check search-ranking guide for doc boost behavior"
+    category: "docs"
+    repo: "kiri-docs"
+    params:
+      boostProfile: "balanced"
+    expected:
+      paths:
+        - "docs/search-ranking.md"
+    tags: ["docs", "ranking", "metadata"]
+    requiresMetadata: true
+    notes: "Ensures metadata tags (ranking) are indexed from Markdown front matter."
+
+  - id: kiri-docs-operations-observability
+    query: "tag:observability SLO 1000ms"
+    intent: "Retrieve operations observability guide via metadata-only search"
+    category: "docs"
+    repo: "kiri-docs"
+    params:
+      boostProfile: "docs"
+    expected:
+      paths:
+        - "docs/operations.md"
+    tags: ["docs", "operations", "metadata"]
+    requiresMetadata: true
+    notes: "Exercises metadata-only candidate path when query is dominated by tag filters."
+
+  - id: kiri-docs-testing-golden
+    query: "tag:golden-set precision at 10"
+    intent: "Find testing/evaluation expectations through front matter tags"
+    category: "docs"
+    repo: "kiri-docs"
+    params:
+      boostProfile: "docs"
+    expected:
+      paths:
+        - "docs/testing.md"
+    tags: ["docs", "testing", "metadata"]
+    requiresMetadata: true
+    notes: "Validates doc metadata ingestion for testing guide."
+
+  - id: kiri-docs-runbook-degrade-plain
+    query: "tag:degrade metrics アラート Runbook"
+    intent: "Baseline without front matter tags for degrade recovery runbook"
+    category: "docs-plain"
+    repo: "kiri-docs-plain"
+    params:
+      boostProfile: "docs"
+      timeoutMs: 30000
+    expected:
+      paths:
+        - "docs/runbook.md"
+    tags: ["docs", "operations", "plain"]
+    requiresMetadata: true
+    requiresInboundLinks: true
+    notes: "Plain corpus variant of runbook query（front matter stripped）."
+
+  - id: kiri-docs-security-windows-plain
+    query: "category:security Windows パイプ リスク"
+    intent: "Plain corpus: locate Windows-specific security policy"
+    category: "docs-plain"
+    repo: "kiri-docs-plain"
+    params:
+      boostProfile: "docs"
+    expected:
+      paths:
+        - "docs/security.md"
+    tags: ["docs", "security", "plain"]
+    requiresMetadata: true
+    notes: "Front matterなしバージョンで metadata pass の低下を観測。"
+
+  - id: kiri-docs-search-ranking-profile-plain
+    query: "tag:ranking boost_profile docs ブラックリスト"
+    intent: "Plain corpus: verify search-ranking guide retrieval"
+    category: "docs-plain"
+    repo: "kiri-docs-plain"
+    params:
+      boostProfile: "balanced"
+    expected:
+      paths:
+        - "docs/search-ranking.md"
+    tags: ["docs", "ranking", "plain"]
+    requiresMetadata: true
+    notes: "metadata削除による precision 低下を確認するための比較用。"
+
+  - id: kiri-docs-operations-observability-plain
+    query: "tag:observability SLO 1000ms"
+    intent: "Plain corpus: operations observability guide"
+    category: "docs-plain"
+    repo: "kiri-docs-plain"
+    params:
+      boostProfile: "docs"
+    expected:
+      paths:
+        - "docs/operations.md"
+    tags: ["docs", "operations", "plain"]
+    requiresMetadata: true
+    notes: "Metadata-only候補が失われた場合の fallback 精度を測定。"
+
+  - id: kiri-docs-testing-golden-plain
+    query: "tag:golden-set precision at 10"
+    intent: "Plain corpus: testing/eval expectations"
+    category: "docs-plain"
+    repo: "kiri-docs-plain"
+    params:
+      boostProfile: "docs"
+    expected:
+      paths:
+        - "docs/testing.md"
+    tags: ["docs", "testing", "plain"]
+    requiresMetadata: true
+    notes: "front matter なしでの Golden set クエリの比較。"

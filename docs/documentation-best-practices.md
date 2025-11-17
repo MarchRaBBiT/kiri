@@ -84,7 +84,13 @@ Notes:
    pnpm run eval:golden --categories docs,docs-plain --out var/eval/docs-compare
    ```
 
-3. Inspect `var/eval/docs-compare/latest.md` → `Category Δ Metrics`. Large negative deltas mean metadata/link signals are missing or misconfigured.
+3. Enforce the docs-only gate before cutting a release. This run fails fast if R@5 drops below 0.5 or MCP startup exceeds 30s:
+
+   ```bash
+   pnpm run eval:golden --categories docs --min-r5 0.5 --max-startup-ms 30000
+   ```
+
+4. Inspect `var/eval/docs-compare/latest.md` → `Category Δ Metrics`. Large negative deltas mean metadata/link signals are missing or misconfigured.
 
 ## 6. When Adding New Docs
 
@@ -98,5 +104,12 @@ Notes:
 - **Metadata pass failure**: check for malformed YAML (e.g., tabs, missing delimiters).
 - **Inbound pass failure**: ensure other docs actually link to yours; one-way links do not generate inbound counts.
 - **`pnpm run eval:golden` fails on plain corpus**: regenerate `tmp/docs-plain` and rerun the security lock command.
+- **Dictionary hints look stale**: enable logging with `KIRI_HINT_LOG=1`, run a few golden queries, then rebuild the dictionary:
+  ```bash
+  pnpm exec tsx scripts/diag/dump-hints.ts --db var/index.duckdb --repo .
+  pnpm exec tsx scripts/diag/build-hint-dictionary.ts --db var/index.duckdb --repo .
+  pnpm exec tsx scripts/diag/cleanup-hints.ts --db var/index.duckdb --days 14
+  ```
+  This keeps `hint_dictionary` synchronized with the latest artifact hints when metadata alone is too abstract.
 
 Following these practices keeps KIRI’s context tools reliable and makes regressions easy to detect. Remember: every doc without front matter reduces overall P@10, so treat metadata as part of the contract, not an optional header.

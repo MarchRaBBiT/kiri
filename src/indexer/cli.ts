@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { readFile, stat } from "node:fs/promises";
+import { readFile, readdir, stat } from "node:fs/promises";
 import { join, resolve, extname, posix as pathPosix } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -124,10 +124,30 @@ interface PairCollectorState {
   seen: Set<string>;
 }
 
+function normalizePathForIndex(value: string): string {
+  return value.replace(/\\/g, "/");
+}
+
+function ensurePairState(
+  stateMap: Map<string, PairCollectorState>,
+  path: string
+): PairCollectorState {
+  const existing = stateMap.get(path);
+  if (existing) {
+    return existing;
+  }
+  const created: PairCollectorState = { count: 0, seen: new Set<string>() };
+  stateMap.set(path, created);
+  return created;
+}
+
 const MAX_SAMPLE_BYTES = 32_768;
 const MAX_FILE_BYTES = 32 * 1024 * 1024; // 32MB limit to prevent memory exhaustion
 const SCAN_BATCH_SIZE = 100; // Process files in batches to limit memory usage
 const MARKDOWN_EXTENSIONS = new Set([".md", ".mdx", ".markdown"]);
+const DOCMETA_SNAPSHOT_DIR = "docmeta/";
+const DOCMETA_SNAPSHOT_TARGET_FIELD = "target_path";
+const DOCMETA_SNAPSHOT_DATA_FIELD = "front_matter";
 
 /**
  * Metadata processing limits to prevent DoS attacks and memory exhaustion.
@@ -965,12 +985,65 @@ function parseYamlValue(content: string, path: string): unknown | null {
   }
 }
 
+interface DocmetaSnapshotRecord {
+  targetPath: string;
+  data: MetadataTree;
+}
+
+function parseDocmetaSnapshot(content: string, path: string): DocmetaSnapshotRecord | null {
+  const parsed = parseJsonValue(content, path);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return null;
+  }
+  const candidate = parsed as Record<string, unknown>;
+  const targetPath = candidate[DOCMETA_SNAPSHOT_TARGET_FIELD];
+  const frontMatter = candidate[DOCMETA_SNAPSHOT_DATA_FIELD];
+  if (typeof targetPath !== "string") {
+    return null;
+  }
+  const sanitized = sanitizeMetadataTree(frontMatter);
+  if (!sanitized) {
+    return null;
+  }
+  return {
+    targetPath: normalizePathForIndex(targetPath),
+    data: sanitized,
+  };
+}
+
+async function collectPlainDocsPaths(repoRoot: string): Promise<string[]> {
+  const results: string[] = [];
+
+  async function walkRelative(relativeDir: string): Promise<void> {
+    const absDir = join(repoRoot, relativeDir);
+    let entries;
+    try {
+      entries = await readdir(absDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const relPath = pathPosix.join(relativeDir, entry.name);
+      if (entry.isDirectory()) {
+        await walkRelative(relPath);
+      } else {
+        results.push(relPath);
+      }
+    }
+  }
+
+  await walkRelative("docs").catch(() => {});
+  await walkRelative("docmeta").catch(() => {});
+  return results;
+}
+
 function extractStructuredData(
   files: FileRecord[],
   blobs: Map<string, BlobRecord>,
   repoFileSet: Set<string>
 ): Map<string, StructuredFileData> {
   const map = new Map<string, StructuredFileData>();
+  const pairStates = new Map<string, PairCollectorState>();
 
   for (const file of files) {
     if (file.isBinary) continue;
@@ -980,18 +1053,49 @@ function extractStructuredData(
     }
 
     const ext = (file.ext ?? "").toLowerCase();
-    const structured: StructuredFileData = {
+    const normalizedPath = normalizePathForIndex(file.path);
+
+    if (normalizedPath.startsWith(DOCMETA_SNAPSHOT_DIR)) {
+      const snapshot = parseDocmetaSnapshot(blob.content, file.path);
+      if (snapshot) {
+        const existing = map.get(snapshot.targetPath);
+        const structured = existing ?? {
+          metadataRecords: [],
+          metadataPairs: [],
+          links: [],
+        };
+        structured.metadataRecords.push({
+          path: snapshot.targetPath,
+          source: "front_matter",
+          data: snapshot.data,
+        });
+        const pairState = ensurePairState(pairStates, snapshot.targetPath);
+        collectMetadataPairsFromValue(
+          snapshot.data,
+          snapshot.targetPath,
+          "front_matter",
+          structured.metadataPairs,
+          pairState
+        );
+        map.set(snapshot.targetPath, structured);
+      }
+      continue;
+    }
+
+    const existingEntry = map.get(file.path);
+    const structured: StructuredFileData = existingEntry ?? {
       metadataRecords: [],
       metadataPairs: [],
       links: [],
     };
-    const pairState: PairCollectorState = { count: 0, seen: new Set<string>() };
+    let mutated = false;
 
     if (ext === ".json") {
       const parsed = parseJsonValue(blob.content, file.path);
       const sanitized = sanitizeMetadataTree(parsed);
       if (sanitized) {
         structured.metadataRecords.push({ path: file.path, source: "json", data: sanitized });
+        const pairState = ensurePairState(pairStates, file.path);
         collectMetadataPairsFromValue(
           sanitized,
           file.path,
@@ -999,12 +1103,14 @@ function extractStructuredData(
           structured.metadataPairs,
           pairState
         );
+        mutated = true;
       }
     } else if (ext === ".yaml" || ext === ".yml") {
       const parsed = parseYamlValue(blob.content, file.path);
       const sanitized = sanitizeMetadataTree(parsed);
       if (sanitized) {
         structured.metadataRecords.push({ path: file.path, source: "yaml", data: sanitized });
+        const pairState = ensurePairState(pairStates, file.path);
         collectMetadataPairsFromValue(
           sanitized,
           file.path,
@@ -1012,6 +1118,7 @@ function extractStructuredData(
           structured.metadataPairs,
           pairState
         );
+        mutated = true;
       }
     }
 
@@ -1027,6 +1134,7 @@ function extractStructuredData(
               source: "front_matter",
               data: sanitized,
             });
+            const pairState = ensurePairState(pairStates, file.path);
             collectMetadataPairsFromValue(
               sanitized,
               file.path,
@@ -1034,6 +1142,7 @@ function extractStructuredData(
               structured.metadataPairs,
               pairState
             );
+            mutated = true;
           }
         }
         markdownBody = frontMatter.body;
@@ -1042,14 +1151,11 @@ function extractStructuredData(
       const links = extractMarkdownLinks(markdownBody, file.path, repoFileSet);
       if (links.length > 0) {
         structured.links.push(...links);
+        mutated = true;
       }
     }
 
-    if (
-      structured.metadataRecords.length > 0 ||
-      structured.metadataPairs.length > 0 ||
-      structured.links.length > 0
-    ) {
+    if (mutated || existingEntry) {
       map.set(file.path, structured);
     }
   }
@@ -1698,7 +1804,16 @@ export async function runIndexer(options: IndexerOptions): Promise<void> {
       }
 
       // Full mode: reindex entire repository
-      const paths = await gitLsFiles(repoRoot);
+      let paths = await gitLsFiles(repoRoot);
+      if (paths.length === 0) {
+        const fallbackPaths = await collectPlainDocsPaths(repoRoot);
+        if (fallbackPaths.length > 0) {
+          console.warn(
+            `git ls-files returned 0 paths for ${repoRoot}. Falling back to filesystem scan (${fallbackPaths.length} files).`
+          );
+          paths = fallbackPaths;
+        }
+      }
       const { blobs, files, embeddings, missingPaths } = await scanFilesInBatches(repoRoot, paths);
 
       // In full mode, missingPaths should be rare (git ls-files returns existing files)

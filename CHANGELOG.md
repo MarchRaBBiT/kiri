@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Re-architected `context_bundle` のアーティファクトヒント処理をフェーズ化し、path/directory/dependency/substring それぞれに why タグを残すようにした。`KIRI_HINT_LOG=1` 時のみ `hint_expansion` に展開ログを保存し、`dictionary:hint:*` で辞書経由の昇格を可視化。
+- `hint_expansion` と `hint_dictionary` テーブル、ならびに `scripts/diag/dump-hints.ts` / `scripts/diag/build-hint-dictionary.ts` / `scripts/diag/cleanup-hints.ts` を追加。辞書の再生成と TTL 削除がワンコマンドで行える。
+- `scripts/eval/run-golden.ts` に R@5 集計、`--min-r5`/`--max-startup-ms` オプション、Markdown 出力への起動時間と R@5 の記録を追加。docs カテゴリだけを落とし穴なしでゲートできるようになった。
+- `KIRI_SERVER_COMMAND` 環境変数で MCP サーバーバイナリを切り替え可能に（例: `npx -y kiri-mcp-server@0.10.0`）
+
+### Fixed
+
+- **Config file noise reduction**: `eslint.config.js`, `.tmLanguage.json`, `.nls.json`, `/cli/` を config patterns に追加し、`context_bundle` で `applyFileTypeMultipliers` を適用。`configPenaltyMultiplier` を 0.05 → 0.01 (99% 削減) に強化。Token Savings が 93.8% → 95.0% (+1.2%) に改善。
+
+### Changed
+
+- **New evaluation baseline established (2025-11-17)**: P@10 = 0.136, R@5 = 0.966, TFFU = 0ms, Token Savings = 94.7% (詳細: `var/eval/BASELINE.md`)
+- **Golden set corrected**: 5 つの存在しないパスを削除 (expected paths: 35 → 30), R@5 が 0.852 → 0.966 (+13.4%) に改善
+
 ## [0.10.0] - 2025-11-13
 
 ### Added

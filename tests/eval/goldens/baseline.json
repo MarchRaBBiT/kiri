@@ -6,6 +6,7 @@
   "description": "Baseline measurement after metadata hint vs docmeta filter split (docs vs docs-plain comparison).",
   "thresholds": {
     "minP10": 0.7,
+    "minR5": 0.5,
     "maxTTFU": 1000,
     "minMetadataPassRate": 1,
     "minInboundPassRate": 1,

@@ -85,6 +85,22 @@ function computeNaiveTokenBaseline(paths: string[], repoRoot: string): number | 
   return total;
 }
 
+function recallAtK(retrieved: string[], relevant: Iterable<string>, k: number): number {
+  const relevantSet = new Set(relevant);
+  if (relevantSet.size === 0 || k <= 0) {
+    return 0;
+  }
+  const limit = Math.min(k, retrieved.length);
+  let hits = 0;
+  for (let index = 0; index < limit; index += 1) {
+    const id = retrieved[index];
+    if (id !== undefined && relevantSet.has(id)) {
+      hits += 1;
+    }
+  }
+  return hits / relevantSet.size;
+}
+
 function computeHintCoverage(items: ContextBundleItemResponse[]): number | null {
   if (!items.length) {
     return null;
@@ -216,6 +232,7 @@ interface QueryResult {
   retrieved: string[];
   expected: string[];
   precisionAtK: number | null;
+  recallAt5: number | null;
   timeToFirstUseful: number | null;
   retriedCount: number;
   error?: string;
@@ -237,8 +254,12 @@ interface BenchmarkResult {
   gitSha: string;
   datasetVersion: string;
   k: number;
+  startup: {
+    maxMs: number;
+  };
   overall: {
     precisionAtK: number;
+    recallAt5: number;
     avgTTFU: number;
     totalQueries: number;
     successfulQueries: number;
@@ -254,6 +275,7 @@ interface BenchmarkResult {
     string,
     {
       precisionAtK: number;
+      recallAt5: number;
       avgTTFU: number;
       count: number;
       avgTokenSavingsRatio: number | null;
@@ -264,6 +286,9 @@ interface BenchmarkResult {
   >;
   queries: QueryResult[];
   comparisons?: CategoryComparison[];
+  thresholdOverrides?: {
+    minR5?: number | null;
+  };
 }
 
 interface CategoryComparison {
@@ -282,6 +307,7 @@ interface BaselineData {
   thresholds: {
     minP10: number;
     maxTTFU: number;
+    minR5?: number;
     minMetadataPassRate?: number;
     minInboundPassRate?: number;
   };
@@ -302,6 +328,8 @@ interface BenchmarkOptions {
   repoOverride: boolean;
   dbOverride: boolean;
   categoryFilter: Set<string>;
+  minR5: number | null;
+  maxStartupMs: number | null;
 }
 
 interface ContextBundleItemResponse {
@@ -334,6 +362,8 @@ function parseArgs(): BenchmarkOptions {
     repoOverride: false,
     dbOverride: false,
     categoryFilter: new Set(),
+    minR5: null,
+    maxStartupMs: null,
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -371,6 +401,18 @@ function parseArgs(): BenchmarkOptions {
         options.categoryFilter = new Set(categories);
         break;
       }
+      case "--min-r5":
+        options.minR5 = Number.parseFloat(args[++i] ?? "");
+        if (!Number.isFinite(options.minR5)) {
+          options.minR5 = null;
+        }
+        break;
+      case "--max-startup-ms":
+        options.maxStartupMs = Number.parseInt(args[++i] ?? "", 10);
+        if (!Number.isFinite(options.maxStartupMs)) {
+          options.maxStartupMs = null;
+        }
+        break;
       case "--help":
         console.log(`
 Usage: tsx scripts/eval/run-golden.ts [options]
@@ -384,6 +426,8 @@ Options:
   --warmup <number>      Warmup runs (default: 2)
   --max-retries <number> Max retries per query (default: 2)
   --categories <list>    Comma-separated category filter (e.g. docs,docs-plain)
+  --min-r5 <number>      Minimum acceptable R@5 (0-1). Fail if below
+  --max-startup-ms <ms>  Fail if MCP startup exceeds this many milliseconds
   --help                 Show this help message
 `);
         process.exit(0);
@@ -396,7 +440,7 @@ Options:
       [options.dbPath, "--db"],
       [options.repoPath, "--repo"],
       [options.outputPath, "--out"],
-    ].find(([value]) => isAbsolute(value));
+    ].find(([value]) => typeof value === "string" && isAbsolute(value));
     if (absoluteArg) {
       const [value, flag] = absoluteArg;
       throw new Error(
@@ -429,11 +473,12 @@ class McpServerManager {
 
   private scoringConfigPath = join(process.cwd(), "config", "scoring-profiles.yml");
 
-  async start(dbPath: string, repoPath: string, verbose: boolean): Promise<void> {
+  async start(dbPath: string, repoPath: string, verbose: boolean): Promise<number> {
     if (this.serverProc) {
       await this.stop();
     }
     this.serverLogs = "";
+    const startedAt = Date.now();
     if (verbose) {
       console.log(
         `  → Starting MCP server on port ${this.assignedPort} (db=${dbPath}, repo=${repoPath})...`
@@ -505,6 +550,7 @@ class McpServerManager {
       await this.stop();
       throw error;
     }
+    return Date.now() - startedAt;
   }
 
   private async waitForReady(verbose: boolean): Promise<void> {
@@ -821,6 +867,7 @@ async function main(): Promise<void> {
   };
 
   let activeRepoId: string | null = null;
+  let slowestStartupMs = 0;
   const ensureServerForRepo = async (repoId: string): Promise<void> => {
     if (activeRepoId === repoId && server.isRunning()) {
       return;
@@ -829,7 +876,13 @@ async function main(): Promise<void> {
     if (!config) {
       throw new Error(`Repository alias '${repoId}' is not configured.`);
     }
-    await server.start(config.dbPath, config.repoPath, options.verbose);
+    const startupMs = await server.start(config.dbPath, config.repoPath, options.verbose);
+    slowestStartupMs = Math.max(slowestStartupMs, startupMs);
+    if (options.maxStartupMs !== null && startupMs > options.maxStartupMs) {
+      throw new Error(
+        `MCP server startup took ${startupMs}ms which exceeds --max-startup-ms=${options.maxStartupMs}`
+      );
+    }
     activeRepoId = repoId;
   };
 
@@ -907,6 +960,8 @@ async function main(): Promise<void> {
     // Include failed queries as P@K=0 to reflect actual user experience
     const overallP10 =
       queryResults.reduce((sum, r) => sum + (r.precisionAtK ?? 0), 0) / queryResults.length;
+    const overallR5 =
+      queryResults.reduce((sum, r) => sum + (r.recallAt5 ?? 0), 0) / queryResults.length;
 
     // TFFU: Only average over successful queries (failures don't have timing)
     const validTTFU = successfulResults.filter(
@@ -918,12 +973,19 @@ async function main(): Promise<void> {
           1000
         : 0;
 
+    if (options.minR5 !== null && overallR5 < options.minR5) {
+      const message = `Overall R@5 (${overallR5.toFixed(3)}) is below the required threshold (${options.minR5}).`;
+      console.error(`❌ ${message}`);
+      throw new Error(message);
+    }
+
     // By-category metrics (include failures as P@K=0)
     const categories = [...new Set(queries.map((q) => q.category))];
     const byCategory: Record<
       string,
       {
         precisionAtK: number;
+        recallAt5: number;
         avgTTFU: number;
         count: number;
         avgTokenSavingsRatio: number | null;
@@ -952,6 +1014,7 @@ async function main(): Promise<void> {
         byCategory[category] = {
           precisionAtK:
             catResults.reduce((sum, r) => sum + (r.precisionAtK ?? 0), 0) / catResults.length,
+          recallAt5: catResults.reduce((sum, r) => sum + (r.recallAt5 ?? 0), 0) / catResults.length,
           avgTTFU:
             catValidTTFU.length > 0
               ? (catValidTTFU.reduce((sum, r) => sum + (r.timeToFirstUseful ?? 0), 0) /
@@ -1005,14 +1068,22 @@ async function main(): Promise<void> {
 
     const comparisons = computeCategoryComparisons(byCategory);
 
+    const thresholdOverrides =
+      options.minR5 !== null
+        ? {
+            minR5: options.minR5,
+          }
+        : undefined;
     const benchmarkResult: BenchmarkResult = {
       timestamp: new Date().toISOString(),
       version: packageJson.version,
       gitSha,
       datasetVersion: goldenSet.datasetVersion,
       k: options.k,
+      startup: { maxMs: slowestStartupMs },
       overall: {
         precisionAtK: overallP10,
+        recallAt5: overallR5,
         avgTTFU: overallTTFU,
         totalQueries: queryResults.length,
         successfulQueries: successfulResults.length,
@@ -1027,6 +1098,7 @@ async function main(): Promise<void> {
       byCategory,
       queries: queryResults,
       ...(comparisons.length > 0 && { comparisons }),
+      ...(thresholdOverrides && { thresholdOverrides }),
     };
 
     // Write output files
@@ -1043,6 +1115,14 @@ async function main(): Promise<void> {
     console.log(
       `Overall:  P@${options.k} = ${overallP10.toFixed(3)} ${compareThreshold(overallP10, baseline.thresholds.minP10, true)}`
     );
+    const r5Threshold = options.minR5 ?? baseline.thresholds.minR5 ?? null;
+    if (r5Threshold !== null) {
+      console.log(
+        `          R@5 = ${overallR5.toFixed(3)} ${compareThreshold(overallR5, r5Threshold, true)}`
+      );
+    } else {
+      console.log(`          R@5 = ${overallR5.toFixed(3)}`);
+    }
     console.log(
       `          TFFU = ${Math.round(overallTTFU)}ms ${compareThreshold(overallTTFU, baseline.thresholds.maxTTFU, false)}`
     );
@@ -1067,6 +1147,7 @@ async function main(): Promise<void> {
       );
     }
     console.log(`Queries:  ${successfulResults.length} successful, ${failedResults.length} failed`);
+    console.log(`Startup:  max ${Math.round(slowestStartupMs)}ms`);
     console.log("=".repeat(60));
 
     // Baseline comparison
@@ -1131,6 +1212,7 @@ async function executeQueryWithRetry(
           retrieved: [],
           expected: query.expected.paths,
           precisionAtK: null,
+          recallAt5: null,
           timeToFirstUseful: null,
           retriedCount: attempt,
           error: error instanceof Error ? error.message : String(error),
@@ -1212,6 +1294,7 @@ async function executeQuery(
       retrieved: [],
       expected: [],
       precisionAtK: null,
+      recallAt5: null,
       timeToFirstUseful: null,
       retriedCount: 0,
       durationMs,
@@ -1274,6 +1357,7 @@ async function executeQuery(
       retrieved: [],
       expected: query.expected.paths,
       precisionAtK: 0,
+      recallAt5: 0,
       timeToFirstUseful: null,
       retriedCount: 0,
       durationMs,
@@ -1308,6 +1392,7 @@ async function executeQuery(
   }));
 
   const metrics = evaluateRetrieval({ items: events, relevant: relevantSet, k });
+  const recall5 = recallAtK(retrieved, relevantSet, 5);
 
   const metadataSatisfied =
     metadataRequired === false
@@ -1336,7 +1421,7 @@ async function executeQuery(
     error = error ? `${error}; inbound link why tags missing` : "Inbound link why tags missing";
   }
 
-  return {
+  const baseResult: QueryResult = {
     id: query.id,
     query: query.query,
     category: query.category,
@@ -1344,6 +1429,7 @@ async function executeQuery(
     retrieved,
     expected: query.expected.paths,
     precisionAtK: metrics.precisionAtK,
+    recallAt5: recall5,
     timeToFirstUseful: metrics.timeToFirstUseful,
     retriedCount: 0,
     durationMs,
@@ -1351,13 +1437,18 @@ async function executeQuery(
     tokensBaseline,
     tokenSavingsRatio,
     hintCoverage,
-    error,
     metadataRequired,
     inboundRequired,
     metadataSatisfied,
     inboundSatisfied,
-    whyByPath: Object.keys(whyByPath).length > 0 ? whyByPath : undefined,
   };
+  if (Object.keys(whyByPath).length > 0) {
+    baseResult.whyByPath = whyByPath;
+  }
+  if (error) {
+    baseResult.error = error;
+  }
+  return baseResult;
 }
 
 function generateMarkdown(result: BenchmarkResult, baseline: BaselineData): string {
@@ -1378,6 +1469,12 @@ function generateMarkdown(result: BenchmarkResult, baseline: BaselineData): stri
   md += `| Metric | Value | Threshold | Status |\n`;
   md += `|--------|-------|-----------|--------|\n`;
   md += `| P@${result.k} | ${result.overall.precisionAtK.toFixed(3)} | ≥${baseline.thresholds.minP10} | ${result.overall.precisionAtK >= baseline.thresholds.minP10 ? "✅" : "❌"} |\n`;
+  const mdR5Threshold = baseline.thresholds.minR5 ?? result.thresholdOverrides?.minR5 ?? null;
+  if (mdR5Threshold !== null) {
+    md += `| R@5 | ${result.overall.recallAt5.toFixed(3)} | ≥${mdR5Threshold} | ${result.overall.recallAt5 >= mdR5Threshold ? "✅" : "❌"} |\n`;
+  } else {
+    md += `| R@5 | ${result.overall.recallAt5.toFixed(3)} | - | - |\n`;
+  }
   md += `| Avg TFFU | ${Math.round(result.overall.avgTTFU)}ms | ≤${baseline.thresholds.maxTTFU}ms | ${result.overall.avgTTFU <= baseline.thresholds.maxTTFU ? "✅" : "❌"} |\n`;
   const tokenStatus =
     result.overall.avgTokenSavingsRatio === null
@@ -1397,15 +1494,16 @@ function generateMarkdown(result: BenchmarkResult, baseline: BaselineData): stri
   }
   md += `| Avg Bundle Tokens | ${formatNumber(result.overall.avgTokensEstimate)} | - | - |\n`;
   md += `| Avg Baseline Tokens | ${formatNumber(result.overall.avgBaselineTokens)} | - | - |\n`;
+  md += `| Max Startup | ${Math.round(result.startup.maxMs)}ms | - | - |\n`;
   md += `| Total Queries | ${result.overall.totalQueries} | - | - |\n`;
   md += `| Successful | ${result.overall.successfulQueries} | - | - |\n`;
   md += `| Failed | ${result.overall.failedQueries} | - | - |\n\n`;
 
   md += `## By Category\n\n`;
-  md += `| Category | P@${result.k} | Avg TFFU | Avg Token Savings | Avg Hint Coverage | Metadata Pass | Inbound Pass | Count |\n`;
-  md += `|----------|------|----------|-----------------|------------------|---------------|--------------|-------|\n`;
+  md += `| Category | P@${result.k} | R@5 | Avg TFFU | Avg Token Savings | Avg Hint Coverage | Metadata Pass | Inbound Pass | Count |\n`;
+  md += `|----------|------|-----|----------|-----------------|------------------|---------------|--------------|-------|\n`;
   for (const [category, metrics] of Object.entries(result.byCategory)) {
-    md += `| ${category} | ${metrics.precisionAtK.toFixed(3)} | ${Math.round(metrics.avgTTFU)}ms | ${formatPercent(metrics.avgTokenSavingsRatio ?? null)} | ${formatPercent(metrics.avgHintCoverage ?? null)} | ${formatPercent(metrics.metadataPassRate ?? null)} | ${formatPercent(metrics.inboundPassRate ?? null)} | ${metrics.count} |\n`;
+    md += `| ${category} | ${metrics.precisionAtK.toFixed(3)} | ${metrics.recallAt5.toFixed(3)} | ${Math.round(metrics.avgTTFU)}ms | ${formatPercent(metrics.avgTokenSavingsRatio ?? null)} | ${formatPercent(metrics.avgHintCoverage ?? null)} | ${formatPercent(metrics.metadataPassRate ?? null)} | ${formatPercent(metrics.inboundPassRate ?? null)} | ${metrics.count} |\n`;
   }
   md += `\n`;
 

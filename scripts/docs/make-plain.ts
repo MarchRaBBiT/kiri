@@ -9,7 +9,9 @@
 
 import { spawn } from "node:child_process";
 import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
-import { dirname, extname, join } from "node:path";
+import { basename, dirname, extname, join, relative } from "node:path";
+
+import { parse as parseYAML } from "yaml";
 
 const SOURCE_DIR = process.argv.includes("--source")
   ? resolveArgValue("--source")
@@ -18,11 +20,13 @@ const DEST_DIR = process.argv.includes("--out")
   ? resolveArgValue("--out")
   : join(process.cwd(), "tmp", "docs-plain");
 const DOCS_ROOT = join(DEST_DIR, "docs");
+const DOCMETA_ROOT = join(DEST_DIR, "docmeta");
 const SHOULD_INDEX = process.argv.includes("--index");
 
 interface StripResult {
   updated: boolean;
   content: string;
+  frontMatter: Record<string, unknown> | null;
 }
 
 function resolveArgValue(flag: string): string {
@@ -44,19 +48,33 @@ async function removeDirectory(path: string): Promise<void> {
 async function copyDocsTree(): Promise<void> {
   await removeDirectory(DEST_DIR);
   await mkdir(DOCS_ROOT, { recursive: true });
+  await mkdir(DOCMETA_ROOT, { recursive: true });
   await cp(SOURCE_DIR, DOCS_ROOT, { recursive: true });
 }
 
-function stripFrontMatter(content: string): StripResult {
+function stripFrontMatter(filePath: string, content: string): StripResult {
   if (!content.startsWith("---")) {
-    return { updated: false, content };
+    return { updated: false, content, frontMatter: null };
   }
   const fmMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
   if (!fmMatch) {
-    return { updated: false, content };
+    return { updated: false, content, frontMatter: null };
   }
   const remainder = content.slice(fmMatch[0].length).replace(/^\s*\r?\n/, "");
-  return { updated: true, content: remainder };
+  let parsed: Record<string, unknown> | null = null;
+  try {
+    const block = fmMatch[1] ?? "";
+    const result = parseYAML(block);
+    if (result && typeof result === "object" && !Array.isArray(result)) {
+      parsed = JSON.parse(JSON.stringify(result)) as Record<string, unknown>;
+    }
+  } catch (error) {
+    console.warn(
+      `⚠️  Failed to parse front matter for ${filePath}:`,
+      error instanceof Error ? error.message : String(error)
+    );
+  }
+  return { updated: true, content: remainder, frontMatter: parsed };
 }
 
 async function* walk(dir: string): AsyncGenerator<string> {
@@ -71,23 +89,62 @@ async function* walk(dir: string): AsyncGenerator<string> {
   }
 }
 
-async function processMarkdownFiles(): Promise<{ total: number; stripped: number }> {
+function toPosixPath(value: string): string {
+  return value.replace(/\\/g, "/");
+}
+
+function buildDocmetaPath(relativeDocPath: string): { outputPath: string; targetPath: string } {
+  const repoRelative = toPosixPath(join("docs", relativeDocPath));
+  const dirName = dirname(relativeDocPath);
+  const baseName = basename(relativeDocPath, extname(relativeDocPath));
+  const outputDir = dirName === "." ? DOCMETA_ROOT : join(DOCMETA_ROOT, dirName);
+  const outputPath = join(outputDir, `${baseName}.json`);
+  return { outputPath, targetPath: repoRelative };
+}
+
+async function writeDocmetaSnapshot(
+  relativeDocPath: string,
+  frontMatter: Record<string, unknown>
+): Promise<void> {
+  if (!frontMatter || Object.keys(frontMatter).length === 0) {
+    return;
+  }
+  const { outputPath, targetPath } = buildDocmetaPath(relativeDocPath);
+  await mkdir(dirname(outputPath), { recursive: true });
+  const payload = {
+    target_path: targetPath,
+    front_matter: frontMatter,
+  };
+  await writeFile(outputPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+}
+
+async function processMarkdownFiles(): Promise<{
+  total: number;
+  stripped: number;
+  snapshots: number;
+}> {
   let total = 0;
   let stripped = 0;
+  let snapshots = 0;
   for await (const filePath of walk(DOCS_ROOT)) {
     if (extname(filePath) !== ".md") {
       continue;
     }
     total += 1;
     const original = await readFile(filePath, "utf8");
-    const result = stripFrontMatter(original);
+    const result = stripFrontMatter(filePath, original);
     if (!result.updated) {
       continue;
     }
     stripped += 1;
     await writeFile(filePath, result.content, "utf8");
+    const relativePath = relative(DOCS_ROOT, filePath);
+    if (result.frontMatter) {
+      await writeDocmetaSnapshot(relativePath, result.frontMatter);
+      snapshots += 1;
+    }
   }
-  return { total, stripped };
+  return { total, stripped, snapshots };
 }
 
 async function runIndexer(): Promise<void> {
@@ -117,9 +174,9 @@ async function main(): Promise<void> {
 
   console.log(`🧹 Creating plain docs corpus from ${SOURCE_DIR}`);
   await copyDocsTree();
-  const { total, stripped } = await processMarkdownFiles();
+  const { total, stripped, snapshots } = await processMarkdownFiles();
   console.log(
-    `✅ Plain corpus ready at ${DOCS_ROOT} (${stripped}/${total} markdown files had front matter removed)`
+    `✅ Plain corpus ready at ${DOCS_ROOT} (${stripped}/${total} markdown files stripped, ${snapshots} metadata snapshots)`
   );
 
   if (SHOULD_INDEX) {

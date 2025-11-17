@@ -246,6 +246,52 @@ describe("context_bundle", () => {
     expect(strictBundle.context.map((item) => item.path)).toEqual(["docs/runbook.md"]);
   });
 
+  it("honors docmeta filters when front matter is stored in snapshot files", async () => {
+    const docmetaPayload = JSON.stringify(
+      {
+        target_path: "docs/runbook.md",
+        front_matter: {
+          id: "runbook-001",
+          title: "Incident Runbook",
+          tags: ["operations"],
+        },
+      },
+      null,
+      2
+    );
+    const repo = await createTempRepo({
+      "docs/runbook.md": "Refer to runbook-001 for details.\n",
+      "docmeta/runbook.json": `${docmetaPayload}\n`,
+    });
+    cleanupTargets.push({ dispose: repo.cleanup });
+
+    const dbDir = await mkdtemp(join(tmpdir(), "kiri-context-docmeta-snapshot-"));
+    const dbPath = join(dbDir, "index.duckdb");
+    cleanupTargets.push({ dispose: async () => await rm(dbDir, { recursive: true, force: true }) });
+
+    await runIndexer({ repoRoot: repo.path, databasePath: dbPath, full: true });
+
+    const db = await DuckDBClient.connect({ databasePath: dbPath });
+    cleanupTargets.push({ dispose: async () => await db.close() });
+
+    const repoId = await resolveRepoId(db, repo.path);
+    const context: ServerContext = {
+      db,
+      repoId,
+      services: createServerServices(db),
+      warningManager: new WarningManager(),
+    };
+
+    const bundle = await contextBundle(context, {
+      goal: "docmeta.id:runbook-001",
+      limit: 3,
+    });
+
+    expect(bundle.context.map((item) => item.path)).toEqual(["docs/runbook.md"]);
+    const entry = bundle.context[0];
+    expect(entry?.why).toContain("metadata:filter");
+  });
+
   it("promotes dictionary entries when only substring hints are available", async () => {
     const repo = await createTempRepo({
       "src/stats/mann.ts": `export function mannWhitneyUTest(a: number[], b: number[]): number {

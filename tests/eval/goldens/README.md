@@ -14,6 +14,7 @@
 
 - [docs/overview.md](../../../docs/overview.md): P@10 ≥ 0.7, TTFU ≤ 1.0s の目標定義
 - [docs/search-ranking.md](../../../docs/search-ranking.md): スコアリングアルゴリズム詳細
+- [var/eval/BASELINE.md](../../../var/eval/BASELINE.md): 現在のベースライン (P@10=0.136, 2025-11-17)
 
 ---
 

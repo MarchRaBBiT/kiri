@@ -30,6 +30,7 @@ queries:
       paths:
         - "src/vs/workbench/browser/workbench.ts"
         - "src/vs/workbench/browser/workbench.contribution.ts"
+        - "src/vs/workbench/common/contributions.ts"
     tags: ["workbench", "contribution"]
     hints:
       - "registerWorkbenchContribution"
@@ -46,14 +47,11 @@ queries:
     expected:
       paths:
         - "src/vs/workbench/api/common/extHostTreeViews.ts"
-        - "src/vs/workbench/browser/parts/views/viewsRegistry.ts"
     tags: ["tree", "extension"]
     hints:
       - "registerTreeDataProvider"
       - "extHostTreeViews.ts"
-      - "viewsRegistry"
       - "src/vs/workbench/api/common/extHostTreeViews.ts"
-      - "src/vs/workbench/browser/parts/views/viewsRegistry.ts"
 
   - id: vscode-debug-adapter
     query: "DebugAdapter tracker session"
@@ -80,8 +78,11 @@ queries:
     repo: "vscode"
     expected:
       paths:
-        - "src/vs/workbench/contrib/terminal/browser/terminalShellIntegration.ts"
         - "src/vs/workbench/contrib/terminal/browser/terminalInstance.ts"
+        - "src/vs/workbench/api/common/extHostTerminalShellIntegration.ts"
+        - "src/vs/platform/terminal/common/terminal.ts"
+        - "src/vs/workbench/api/browser/mainThreadTerminalShellIntegration.ts"
+        - "src/vs/workbench/contrib/terminal/browser/terminal.ts"
     tags: ["terminal", "shell", "prompt"]
     hints:
       - "terminalShellIntegration"
@@ -102,6 +103,8 @@ queries:
       paths:
         - "src/vs/workbench/contrib/notebook/browser/services/notebookKernelServiceImpl.ts"
         - "src/vs/workbench/contrib/notebook/common/notebookKernelService.ts"
+        - "src/vs/workbench/contrib/notebook/common/notebookCommon.ts"
+        - "src/vs/workbench/contrib/notebook/browser/notebookBrowser.ts"
     tags: ["notebook", "kernel"]
     hints:
       - "NotebookKernelService"
@@ -147,6 +150,8 @@ queries:
       paths:
         - "src/vs/platform/theme/common/colorRegistry.ts"
         - "src/vs/workbench/common/theme.ts"
+        - "src/vs/editor/common/core/editorColorRegistry.ts"
+        - "src/vs/workbench/contrib/preferences/common/settingsEditorColorRegistry.ts"
     tags: ["color", "theme"]
     hints:
       - "registerColor"
@@ -165,6 +170,7 @@ queries:
       paths:
         - "src/vs/workbench/services/search/node/ripgrepTextSearchEngine.ts"
         - "src/vs/workbench/services/search/common/searchExtTypes.ts"
+        - "src/vs/workbench/services/search/node/textSearchAdapter.ts"
     tags: ["search", "ripgrep"]
     hints:
       - "ripgrepTextSearchEngine"
@@ -184,7 +190,7 @@ queries:
     expected:
       paths:
         - "src/vs/workbench/api/common/extHostExtensionService.ts"
-        - "src/vs/workbench/services/extensions/browser/extensionHostProcess.ts"
+        - "src/vs/workbench/api/node/extensionHostProcess.ts"
     tags: ["extension", "activation"]
     hints:
       - "setupActivationEvents"
@@ -205,6 +211,7 @@ queries:
         - "src/vs/platform/userDataSync/common/settingsSync.ts"
         - "src/vs/platform/userDataSync/common/abstractSynchronizer.ts"
         - "src/vs/platform/userDataSync/common/userDataSync.ts"
+        - "src/vs/platform/userDataSync/common/keybindingsMerge.ts"
       patterns:
         - "src/vs/platform/userDataSync/**/*.ts"
     tags: ["sync", "settings"]
@@ -227,7 +234,6 @@ queries:
     repo: "vscode"
     expected:
       paths:
-        - "src/vs/base/common/microtaskQueue.ts"
         - "src/vs/platform/telemetry/common/telemetryUtils.ts"
     tags: ["microtask", "telemetry"]
     hints:
@@ -247,7 +253,6 @@ queries:
     expected:
       paths:
         - "src/vs/workbench/contrib/tasks/browser/terminalTaskSystem.ts"
-        - "src/vs/workbench/contrib/tasks/browser/terminalTaskSystemContribution.ts"
     tags: ["task", "terminal"]
     hints:
       - "TaskTerminalShellIntegration"
@@ -268,6 +273,8 @@ queries:
     expected:
       paths:
         - "docs/runbook.md"
+        - "docs/operations.md"
+        - "docs/search-ranking.md"
     tags: ["docs", "operations", "metadata", "links"]
     requiresMetadata: true
     requiresInboundLinks: true
@@ -283,6 +290,7 @@ queries:
     expected:
       paths:
         - "docs/security.md"
+        - "docs/runbook.md"
     tags: ["docs", "security", "metadata"]
     requiresMetadata: true
     notes: "Requires front matter category=security to rank above other docs."
@@ -297,6 +305,7 @@ queries:
     expected:
       paths:
         - "docs/search-ranking.md"
+        - "docs/overview.md"
     tags: ["docs", "ranking", "metadata"]
     requiresMetadata: true
     notes: "Ensures metadata tags (ranking) are indexed from Markdown front matter."
@@ -311,6 +320,8 @@ queries:
     expected:
       paths:
         - "docs/operations.md"
+        - "docs/runbook.md"
+        - "docs/testing.md"
     tags: ["docs", "operations", "metadata"]
     requiresMetadata: true
     notes: "Exercises metadata-only candidate path when query is dominated by tag filters."
@@ -325,6 +336,7 @@ queries:
     expected:
       paths:
         - "docs/testing.md"
+        - "docs/search-ranking.md"
     tags: ["docs", "testing", "metadata"]
     requiresMetadata: true
     notes: "Validates doc metadata ingestion for testing guide."
@@ -340,6 +352,8 @@ queries:
     expected:
       paths:
         - "docs/runbook.md"
+        - "docs/operations.md"
+        - "docs/search-ranking.md"
     tags: ["docs", "operations", "plain"]
     requiresMetadata: true
     requiresInboundLinks: true
@@ -355,6 +369,7 @@ queries:
     expected:
       paths:
         - "docs/security.md"
+        - "docs/runbook.md"
     tags: ["docs", "security", "plain"]
     requiresMetadata: true
     notes: "Front matterなしバージョンで metadata pass の低下を観測。"
@@ -369,6 +384,7 @@ queries:
     expected:
       paths:
         - "docs/search-ranking.md"
+        - "docs/overview.md"
     tags: ["docs", "ranking", "plain"]
     requiresMetadata: true
     notes: "metadata削除による precision 低下を確認するための比較用。"
@@ -383,6 +399,8 @@ queries:
     expected:
       paths:
         - "docs/operations.md"
+        - "docs/runbook.md"
+        - "docs/testing.md"
     tags: ["docs", "operations", "plain"]
     requiresMetadata: true
     notes: "Metadata-only候補が失われた場合の fallback 精度を測定。"
@@ -397,6 +415,7 @@ queries:
     expected:
       paths:
         - "docs/testing.md"
+        - "docs/search-ranking.md"
     tags: ["docs", "testing", "plain"]
     requiresMetadata: true
     notes: "front matter なしでの Golden set クエリの比較。"

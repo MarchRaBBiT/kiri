@@ -78,11 +78,11 @@ queries:
     repo: "vscode"
     expected:
       paths:
-        - "src/vs/workbench/contrib/terminal/browser/terminalInstance.ts"
-        - "src/vs/workbench/api/common/extHostTerminalShellIntegration.ts"
-        - "src/vs/platform/terminal/common/terminal.ts"
-        - "src/vs/workbench/api/browser/mainThreadTerminalShellIntegration.ts"
-        - "src/vs/workbench/contrib/terminal/browser/terminal.ts"
+        - "src/vs/workbench/contrib/terminal/browser/terminalInstance.ts" # Primary: terminal instance implementation
+        - "src/vs/workbench/api/common/extHostTerminalShellIntegration.ts" # Related: extension host integration
+        - "src/vs/platform/terminal/common/terminal.ts" # Related: platform definitions
+        - "src/vs/workbench/api/browser/mainThreadTerminalShellIntegration.ts" # Related: main thread integration
+        - "src/vs/workbench/contrib/terminal/browser/terminal.ts" # Related: terminal browser types
     tags: ["terminal", "shell", "prompt"]
     hints:
       - "terminalShellIntegration"
@@ -272,9 +272,9 @@ queries:
       timeoutMs: 30000
     expected:
       paths:
-        - "docs/runbook.md"
-        - "docs/operations.md"
-        - "docs/search-ranking.md"
+        - "docs/runbook.md" # Primary: degrade recovery procedures
+        - "docs/operations.md" # Related: operational context (SLO, observability)
+        - "docs/search-ranking.md" # Related: ranking behavior during degradation
     tags: ["docs", "operations", "metadata", "links"]
     requiresMetadata: true
     requiresInboundLinks: true

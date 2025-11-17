@@ -2,7 +2,7 @@
 /**
  * Verify that all expected paths in golden set queries actually exist
  */
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { parse as parseYAML } from "yaml";
 
@@ -16,8 +16,14 @@ interface GoldenQuery {
   };
 }
 
+interface RepoConfig {
+  repoPath: string;
+  dbPath: string;
+}
+
 interface GoldenSet {
   queries: GoldenQuery[];
+  repos?: Record<string, RepoConfig>;
 }
 
 interface ValidationResult {
@@ -27,15 +33,27 @@ interface ValidationResult {
     queryId: string;
     repo: string;
     path: string;
+    reason?: string;
   }>;
   queriesWithMissing: Set<string>;
 }
 
-const REPO_ROOTS: Record<string, string> = {
-  vscode: "external/vscode",
-  "kiri-docs": ".", // kiri-docs queries use absolute paths from repo root
-  "kiri-docs-plain": ".", // kiri-docs-plain queries use absolute paths from repo root
-};
+function loadRepoRoots(goldenSet: GoldenSet): Record<string, string> {
+  const repoRoots: Record<string, string> = {};
+
+  if (goldenSet.repos) {
+    for (const [name, config] of Object.entries(goldenSet.repos)) {
+      repoRoots[name] = config.repoPath;
+    }
+  }
+
+  // Fallback for repos not defined in golden set
+  if (!repoRoots.vscode) {
+    repoRoots.vscode = "external/vscode";
+  }
+
+  return repoRoots;
+}
 
 function main(): void {
   const goldenPath = join(process.cwd(), "tests/eval/goldens/queries.yaml");
@@ -47,6 +65,8 @@ function main(): void {
 
   const content = readFileSync(goldenPath, "utf8");
   const goldenSet = parseYAML(content) as GoldenSet;
+
+  const REPO_ROOTS = loadRepoRoots(goldenSet);
 
   console.log("\n🔍 Verifying Golden Set Expected Paths...\n");
 
@@ -72,11 +92,34 @@ function main(): void {
     for (const expectedPath of expectedPaths) {
       const fullPath = join(process.cwd(), repoRoot, expectedPath);
 
-      if (!existsSync(fullPath)) {
+      try {
+        if (!existsSync(fullPath)) {
+          result.missingPaths.push({
+            queryId: query.id,
+            repo,
+            path: expectedPath,
+            reason: "File does not exist",
+          });
+          result.queriesWithMissing.add(query.id);
+          continue;
+        }
+
+        const stats = statSync(fullPath);
+        if (!stats.isFile()) {
+          result.missingPaths.push({
+            queryId: query.id,
+            repo,
+            path: expectedPath,
+            reason: "Path exists but is not a file",
+          });
+          result.queriesWithMissing.add(query.id);
+        }
+      } catch (error) {
         result.missingPaths.push({
           queryId: query.id,
           repo,
           path: expectedPath,
+          reason: error instanceof Error ? error.message : "Unknown error",
         });
         result.queriesWithMissing.add(query.id);
       }
@@ -97,18 +140,21 @@ function main(): void {
   console.log("❌ Missing Paths:\n");
 
   // Group by query
-  const byQuery = new Map<string, Array<{ repo: string; path: string }>>();
+  const byQuery = new Map<string, Array<{ repo: string; path: string; reason?: string }>>();
   for (const missing of result.missingPaths) {
     if (!byQuery.has(missing.queryId)) {
       byQuery.set(missing.queryId, []);
     }
-    byQuery.get(missing.queryId)!.push({ repo: missing.repo, path: missing.path });
+    byQuery
+      .get(missing.queryId)!
+      .push({ repo: missing.repo, path: missing.path, reason: missing.reason });
   }
 
   for (const [queryId, paths] of byQuery.entries()) {
     console.log(`  Query: ${queryId}`);
-    for (const { repo, path } of paths) {
-      console.log(`    - ${repo}: ${path}`);
+    for (const { repo, path, reason } of paths) {
+      const reasonSuffix = reason ? ` (${reason})` : "";
+      console.log(`    - ${repo}: ${path}${reasonSuffix}`);
     }
     console.log();
   }

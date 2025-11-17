@@ -1,6 +1,8 @@
 import process from "node:process";
+import { resolve } from "node:path";
 
 import { DuckDBClient } from "../../src/shared/duckdb.js";
+import { normalizeRepoPath } from "../../src/shared/utils/path.js";
 
 interface BuildArgs {
   databasePath: string;
@@ -33,6 +35,7 @@ function parseArgs(argv: string[]): BuildArgs {
 
 export async function main(argv = process.argv.slice(2)): Promise<void> {
   const args = parseArgs(argv);
+  const normalizedRepoRoot = normalizeRepoPath(resolve(args.repoRoot));
   const db = await DuckDBClient.connect({
     databasePath: args.databasePath,
     ensureDirectory: false,
@@ -40,10 +43,10 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   try {
     const repoRows = await db.all<{ id: number }>(
       `SELECT id FROM repo WHERE root = ? OR normalized_root = ? LIMIT 1`,
-      [args.repoRoot, args.repoRoot]
+      [normalizedRepoRoot, normalizedRepoRoot]
     );
     if (repoRows.length === 0) {
-      throw new Error(`Repository not found for root: ${args.repoRoot}`);
+      throw new Error(`Repository not found for root: ${normalizedRepoRoot}`);
     }
     const repoId = repoRows[0]!.id;
 
@@ -68,7 +71,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     );
 
     console.info(
-      `Hint dictionary rebuilt for repo_id=${repoId} (root=${args.repoRoot}) with min_freq=${args.minFreq}.`
+      `Hint dictionary rebuilt for repo_id=${repoId} (root=${normalizedRepoRoot}) with min_freq=${args.minFreq}.`
     );
   } finally {
     await db.close();

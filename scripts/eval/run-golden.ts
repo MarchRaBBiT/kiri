@@ -974,10 +974,9 @@ async function main(): Promise<void> {
         : 0;
 
     if (options.minR5 !== null && overallR5 < options.minR5) {
-      console.error(
-        `❌ Overall R@5 (${overallR5.toFixed(3)}) is below the required threshold (${options.minR5}).`
-      );
-      process.exit(1);
+      const message = `Overall R@5 (${overallR5.toFixed(3)}) is below the required threshold (${options.minR5}).`;
+      console.error(`❌ ${message}`);
+      throw new Error(message);
     }
 
     // By-category metrics (include failures as P@K=0)

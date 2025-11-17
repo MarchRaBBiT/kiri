@@ -1,7 +1,9 @@
 import { writeFile } from "node:fs/promises";
 import process from "node:process";
+import { resolve } from "node:path";
 
 import { DuckDBClient } from "../../src/shared/duckdb.js";
+import { normalizeRepoPath } from "../../src/shared/utils/path.js";
 
 interface DumpArgs {
   databasePath: string;
@@ -52,12 +54,13 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   try {
     let repoId: number | null = null;
     if (args.repoRoot) {
+      const normalizedRepoRoot = normalizeRepoPath(resolve(args.repoRoot));
       const repoRows = await db.all<{ id: number }>(
         `SELECT id FROM repo WHERE root = ? OR normalized_root = ? LIMIT 1`,
-        [args.repoRoot, args.repoRoot]
+        [normalizedRepoRoot, normalizedRepoRoot]
       );
       if (repoRows.length === 0) {
-        throw new Error(`Repository not found for root: ${args.repoRoot}`);
+        throw new Error(`Repository not found for root: ${normalizedRepoRoot}`);
       }
       repoId = repoRows[0]!.id;
     }

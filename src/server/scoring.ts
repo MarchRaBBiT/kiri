@@ -74,9 +74,24 @@ function validateWeights(weights: unknown, profileName: string): ScoringWeights 
   const obj = weights as Record<string, unknown>;
 
   // v1.0.0: Provide default values for new fields (backward compatibility)
-  if (obj.blacklistPenaltyMultiplier === undefined) obj.blacklistPenaltyMultiplier = 0.01;
-  if (obj.testPenaltyMultiplier === undefined) obj.testPenaltyMultiplier = 0.02;
-  if (obj.lockPenaltyMultiplier === undefined) obj.lockPenaltyMultiplier = 0.01;
+  if (obj.blacklistPenaltyMultiplier === undefined) {
+    console.warn(
+      `[KIRI] Profile '${profileName}' missing blacklistPenaltyMultiplier, using default 0.01`
+    );
+    obj.blacklistPenaltyMultiplier = 0.01;
+  }
+  if (obj.testPenaltyMultiplier === undefined) {
+    console.warn(
+      `[KIRI] Profile '${profileName}' missing testPenaltyMultiplier, using default 0.02`
+    );
+    obj.testPenaltyMultiplier = 0.02;
+  }
+  if (obj.lockPenaltyMultiplier === undefined) {
+    console.warn(
+      `[KIRI] Profile '${profileName}' missing lockPenaltyMultiplier, using default 0.01`
+    );
+    obj.lockPenaltyMultiplier = 0.01;
+  }
 
   for (const key of required) {
     const value = obj[key];

@@ -68,7 +68,14 @@ function validateDataset(datasetPath: string): ValidationError[] {
     }
 
     if (!expected || expected.length === 0) {
-      // No expected items - this might be valid for some queries
+      // Empty or missing expected items should be an error
+      // All queries must have at least one expected result for proper evaluation
+      errors.push({
+        queryId: query.id,
+        field: "expected",
+        message:
+          "Query must have at least one expected item. Queries without expected results cannot be properly evaluated.",
+      });
       continue;
     }
 

@@ -27,6 +27,12 @@ export interface ScoringWeights {
   configPenaltyMultiplier: number;
   /** 実装ファイルへの乗算的ブースト（1.0以上、デフォルト: 1.3 = 30%ブースト） */
   implBoostMultiplier: number;
+  /** ブラックリストディレクトリへの乗算的ペナルティ（0.0-1.0、デフォルト: 0.01 = 99%削減） */
+  blacklistPenaltyMultiplier: number;
+  /** テストファイルへの乗算的ペナルティ（0.0-1.0、デフォルト: 0.05 = 95%削減） */
+  testPenaltyMultiplier: number;
+  /** Lockファイルへの乗算的ペナルティ（0.0-1.0、デフォルト: 0.01 = 99%削減） */
+  lockPenaltyMultiplier: number;
 }
 
 export type ScoringProfileName =
@@ -61,8 +67,31 @@ function validateWeights(weights: unknown, profileName: string): ScoringWeights 
     "docPenaltyMultiplier",
     "configPenaltyMultiplier",
     "implBoostMultiplier",
+    "blacklistPenaltyMultiplier",
+    "testPenaltyMultiplier",
+    "lockPenaltyMultiplier",
   ];
   const obj = weights as Record<string, unknown>;
+
+  // v1.0.0: Provide default values for new fields (backward compatibility)
+  if (obj.blacklistPenaltyMultiplier === undefined) {
+    console.warn(
+      `[KIRI] Profile '${profileName}' missing blacklistPenaltyMultiplier, using default 0.01`
+    );
+    obj.blacklistPenaltyMultiplier = 0.01;
+  }
+  if (obj.testPenaltyMultiplier === undefined) {
+    console.warn(
+      `[KIRI] Profile '${profileName}' missing testPenaltyMultiplier, using default 0.02`
+    );
+    obj.testPenaltyMultiplier = 0.02;
+  }
+  if (obj.lockPenaltyMultiplier === undefined) {
+    console.warn(
+      `[KIRI] Profile '${profileName}' missing lockPenaltyMultiplier, using default 0.01`
+    );
+    obj.lockPenaltyMultiplier = 0.01;
+  }
 
   for (const key of required) {
     const value = obj[key];
@@ -86,6 +115,21 @@ function validateWeights(weights: unknown, profileName: string): ScoringWeights 
   if ((obj.implBoostMultiplier as number) < 1) {
     throw new Error(
       `Profile '${profileName}' has implBoostMultiplier < 1 (${obj.implBoostMultiplier}). Boost multipliers must be ≥ 1.`
+    );
+  }
+  if ((obj.blacklistPenaltyMultiplier as number) > 1) {
+    throw new Error(
+      `Profile '${profileName}' has blacklistPenaltyMultiplier > 1 (${obj.blacklistPenaltyMultiplier}). Penalties must be ≤ 1.`
+    );
+  }
+  if ((obj.testPenaltyMultiplier as number) > 1) {
+    throw new Error(
+      `Profile '${profileName}' has testPenaltyMultiplier > 1 (${obj.testPenaltyMultiplier}). Penalties must be ≤ 1.`
+    );
+  }
+  if ((obj.lockPenaltyMultiplier as number) > 1) {
+    throw new Error(
+      `Profile '${profileName}' has lockPenaltyMultiplier > 1 (${obj.lockPenaltyMultiplier}). Penalties must be ≤ 1.`
     );
   }
 
@@ -176,6 +220,9 @@ function loadProfilesFromConfig(): Record<ScoringProfileName, ScoringWeights> {
         docPenaltyMultiplier: 0.5,
         configPenaltyMultiplier: 0.05,
         implBoostMultiplier: 1.3,
+        blacklistPenaltyMultiplier: 0.01,
+        testPenaltyMultiplier: 0.02,
+        lockPenaltyMultiplier: 0.01,
       },
       debug: {
         textMatch: 1.0,
@@ -187,6 +234,9 @@ function loadProfilesFromConfig(): Record<ScoringProfileName, ScoringWeights> {
         docPenaltyMultiplier: 0.5,
         configPenaltyMultiplier: 0.05,
         implBoostMultiplier: 1.45,
+        blacklistPenaltyMultiplier: 0.01,
+        testPenaltyMultiplier: 0.02,
+        lockPenaltyMultiplier: 0.01,
       },
       api: {
         textMatch: 1.0,
@@ -198,6 +248,9 @@ function loadProfilesFromConfig(): Record<ScoringProfileName, ScoringWeights> {
         docPenaltyMultiplier: 0.55,
         configPenaltyMultiplier: 0.05,
         implBoostMultiplier: 1.4,
+        blacklistPenaltyMultiplier: 0.01,
+        testPenaltyMultiplier: 0.02,
+        lockPenaltyMultiplier: 0.01,
       },
       editor: {
         textMatch: 1.0,
@@ -209,6 +262,9 @@ function loadProfilesFromConfig(): Record<ScoringProfileName, ScoringWeights> {
         docPenaltyMultiplier: 0.6,
         configPenaltyMultiplier: 0.05,
         implBoostMultiplier: 1.4,
+        blacklistPenaltyMultiplier: 0.01,
+        testPenaltyMultiplier: 0.02,
+        lockPenaltyMultiplier: 0.01,
       },
       bugfix: {
         textMatch: 1.0,
@@ -220,6 +276,9 @@ function loadProfilesFromConfig(): Record<ScoringProfileName, ScoringWeights> {
         docPenaltyMultiplier: 0.5,
         configPenaltyMultiplier: 0.05,
         implBoostMultiplier: 1.3,
+        blacklistPenaltyMultiplier: 0.01,
+        testPenaltyMultiplier: 0.02,
+        lockPenaltyMultiplier: 0.01,
       },
       testfail: {
         textMatch: 1.0,
@@ -231,6 +290,9 @@ function loadProfilesFromConfig(): Record<ScoringProfileName, ScoringWeights> {
         docPenaltyMultiplier: 0.5,
         configPenaltyMultiplier: 0.05,
         implBoostMultiplier: 1.3,
+        blacklistPenaltyMultiplier: 0.01,
+        testPenaltyMultiplier: 0.2,
+        lockPenaltyMultiplier: 0.01,
       },
       typeerror: {
         textMatch: 1.0,
@@ -242,6 +304,9 @@ function loadProfilesFromConfig(): Record<ScoringProfileName, ScoringWeights> {
         docPenaltyMultiplier: 0.5,
         configPenaltyMultiplier: 0.05,
         implBoostMultiplier: 1.3,
+        blacklistPenaltyMultiplier: 0.01,
+        testPenaltyMultiplier: 0.02,
+        lockPenaltyMultiplier: 0.01,
       },
       feature: {
         textMatch: 1.0,
@@ -253,6 +318,9 @@ function loadProfilesFromConfig(): Record<ScoringProfileName, ScoringWeights> {
         docPenaltyMultiplier: 0.5,
         configPenaltyMultiplier: 0.05,
         implBoostMultiplier: 1.3,
+        blacklistPenaltyMultiplier: 0.01,
+        testPenaltyMultiplier: 0.02,
+        lockPenaltyMultiplier: 0.01,
       },
     };
     return profilesCache;

@@ -222,25 +222,70 @@ const INBOUND_LINK_WEIGHT = 0.2;
  * 起動時にテーブルの存在を確認し、TableAvailabilityオブジェクトを生成する。
  * これにより、グローバルミュータブル変数による競合状態を回避する。
  *
+ * NOTE: スキーマ変更（テーブル追加）後はサーバーの再起動が必要です。
+ *
  * @param db - DuckDBClient インスタンス
  * @returns TableAvailability オブジェクト
+ * @throws データベース接続エラー等、テーブル不在以外のエラーが発生した場合
  */
 export async function checkTableAvailability(db: DuckDBClient): Promise<TableAvailability> {
-  const checkTable = async (tableName: string): Promise<boolean> => {
+  const ALLOWED_TABLES = [
+    "document_metadata_kv",
+    "markdown_link",
+    "hint_expansion",
+    "hint_dictionary",
+  ] as const;
+
+  const checkTable = async (tableName: (typeof ALLOWED_TABLES)[number]): Promise<boolean> => {
+    if (!ALLOWED_TABLES.includes(tableName)) {
+      throw new Error(`Invalid table name: ${tableName}`);
+    }
+
     try {
       await db.all(`SELECT 1 FROM ${tableName} LIMIT 0`);
       return true;
-    } catch {
-      return false;
+    } catch (error) {
+      // テーブル不在エラーのみキャッチ
+      if (isTableMissingError(error, tableName)) {
+        return false;
+      }
+      // その他のエラー（接続エラー等）は再スロー
+      throw new Error(
+        `Failed to check table availability for ${tableName}: ${error instanceof Error ? error.message : String(error)}`
+      );
     }
   };
 
-  return {
+  const result = {
     hasMetadataTables: await checkTable("document_metadata_kv"),
     hasLinkTable: await checkTable("markdown_link"),
     hasHintLog: await checkTable("hint_expansion"),
     hasHintDictionary: await checkTable("hint_dictionary"),
   };
+
+  // 起動時警告: テーブルが存在しない場合に通知
+  if (!result.hasMetadataTables) {
+    console.warn(
+      "document_metadata_kv table is missing. Metadata filters and boosts disabled until database is upgraded."
+    );
+  }
+  if (!result.hasLinkTable) {
+    console.warn(
+      "markdown_link table is missing. Inbound link boosting disabled until database is upgraded."
+    );
+  }
+  if (!result.hasHintLog) {
+    console.warn(
+      "hint_expansion table is missing. Hint logging disabled. Enable the latest schema and rerun the indexer to capture hint logs."
+    );
+  }
+  if (!result.hasHintDictionary) {
+    console.warn(
+      "hint_dictionary table is missing. Dictionary hints disabled. Run scripts/diag/build-hint-dictionary.ts after upgrading the schema."
+    );
+  }
+
+  return result;
 }
 
 async function hasDirtyRepos(db: DuckDBClient): Promise<boolean> {

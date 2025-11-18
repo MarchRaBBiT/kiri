@@ -7,7 +7,7 @@ import {
   ComparisonRunner,
   JsonReporter,
   ComparisonReporter,
-} from "../../external/assay-kit/src/index.ts";
+} from "../../external/assay-kit/packages/assay-kit/src/index.ts";
 
 import { createKiriAdapter, getVariantConfig, getAvailableVariants } from "./kiri-variants.js";
 

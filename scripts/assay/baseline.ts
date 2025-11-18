@@ -2,9 +2,9 @@
 import process from "node:process";
 import { isAbsolute } from "node:path";
 
-import { BaselineService } from "../../external/assay-kit/src/baseline/service.ts";
-import type { PromotePayload } from "../../external/assay-kit/src/baseline/types.ts";
-import { loadMetricsFromFile } from "../../external/assay-kit/src/baseline/utils.ts";
+import { BaselineService } from "../../external/assay-kit/packages/assay-kit/src/baseline/service.ts";
+import type { PromotePayload } from "../../external/assay-kit/packages/assay-kit/src/baseline/types.ts";
+import { loadMetricsFromFile } from "../../external/assay-kit/packages/assay-kit/src/baseline/utils.ts";
 import { resolveSafePath } from "../../src/shared/fs/safePath.ts";
 
 interface CliOptions {

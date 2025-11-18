@@ -3,7 +3,8 @@ import { maskValue } from "../shared/security/masker.js";
 
 const RESPONSE_MASK_SKIP_KEYS = ["path"];
 
-import { isValidBoostProfile } from "./boost-profiles.js";
+import { isValidBoostProfile, BOOST_PROFILES } from "./boost-profiles.js";
+import { selectProfileFromQuery } from "./profile-selector.js";
 import { ServerContext } from "./context.js";
 import { DegradeController } from "./fallbacks/degradeController.js";
 import {
@@ -459,17 +460,23 @@ function parseFilesSearchParams(input: unknown): FilesSearchParams {
     params.limit = limit;
   }
 
-  // Parse boost_profile parameter
+  // Parse boost_profile parameter with dynamic selection support
   const boostProfile = record.boost_profile;
+  const autoSelect = record.auto_select_profile === true;
+
   if (typeof boostProfile === "string") {
+    // Explicit profile specified
     if (isValidBoostProfile(boostProfile)) {
       params.boost_profile = boostProfile;
     } else {
       throw new Error(
         `Invalid boost_profile: "${boostProfile}". ` +
-          `Valid profiles are: default, docs, none, balanced`
+          `Valid profiles are: ${Object.keys(BOOST_PROFILES).join(", ")}`
       );
     }
+  } else if (autoSelect && typeof params.query === "string") {
+    // Auto-select profile based on query text (for FilesSearch)
+    params.boost_profile = selectProfileFromQuery(params.query, "default");
   }
 
   if (typeof record.compact === "boolean") {
@@ -620,7 +627,7 @@ function parseContextBundleParams(input: unknown, context: ServerContext): Conte
     } else {
       throw new Error(
         `Invalid boost_profile: "${boostProfile}". ` +
-          `Valid profiles are: default, docs, none, balanced`
+          `Valid profiles are: ${Object.keys(BOOST_PROFILES).join(", ")}`
       );
     }
   }

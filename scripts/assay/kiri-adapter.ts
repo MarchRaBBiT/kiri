@@ -10,8 +10,11 @@ import type {
   Metrics,
   Query,
   Dataset,
-} from "../../external/assay-kit/src/index.ts";
-import { precisionAtK, recallAtK } from "../../external/assay-kit/src/index.ts";
+} from "../../external/assay-kit/packages/assay-kit/src/index.ts";
+import {
+  evaluateRetrieval,
+  type RetrievalMetrics,
+} from "../../external/assay-kit/packages/assay-kit/src/index.ts";
 
 const MAX_QUERY_HINTS = 8;
 
@@ -21,9 +24,14 @@ export interface KiriAdapterConfig {
   boostProfile?: string;
 }
 
+interface ExpectedItem {
+  path: string;
+  relevance: number;
+}
+
 interface KiriQueryMetadata extends Record<string, unknown> {
   hints?: string[];
-  expected?: string[];
+  expected?: (string | ExpectedItem)[]; // Support both old and new formats
 }
 
 type KiriQuery = Query<Record<string, unknown>, KiriQueryMetadata>;
@@ -179,17 +187,65 @@ export class KiriSearchAdapter implements SearchAdapter<KiriQuery, Metrics> {
       const k = this.config.limit;
       const expectedPaths = this.getExpectedPaths(query);
 
-      const precision = precisionAtK(retrievedPaths, expectedPaths, k);
-      const recall = recallAtK(retrievedPaths, expectedPaths, k);
+      // Build relevance grades map for NDCG calculation
+      const relevanceGrades = new Map<string, number>();
+      const relevantPaths: string[] = [];
+
+      if (query.metadata?.expected && Array.isArray(query.metadata.expected)) {
+        for (const item of query.metadata.expected) {
+          if (typeof item === "object" && "path" in item && "relevance" in item) {
+            const path = item.path as string;
+            const relevance = item.relevance as number;
+            relevanceGrades.set(path, relevance);
+            if (relevance > 0) {
+              relevantPaths.push(path);
+            }
+          } else if (typeof item === "string") {
+            // Backward compatibility: string items are treated as relevance=1
+            relevanceGrades.set(item, 1);
+            relevantPaths.push(item);
+          }
+        }
+      }
+
+      // Use evaluateRetrieval() to calculate comprehensive metrics including MRR and NDCG
+      const evaluateOptions: {
+        items: Array<{ id: string; timestampMs: number }>;
+        relevant: string[];
+        k: number;
+        startTimestampMs: number;
+        relevanceGrades?: Map<string, number>;
+      } = {
+        items: retrievedPaths.map((path, i) => ({
+          id: path,
+          timestampMs: startTime + i * 10, // Sequential timestamps (10ms apart)
+        })),
+        relevant: relevanceGrades.size > 0 ? relevantPaths : expectedPaths,
+        k,
+        startTimestampMs: startTime,
+      };
+
+      if (relevanceGrades.size > 0) {
+        evaluateOptions.relevanceGrades = relevanceGrades;
+      }
+
+      const retrievalMetrics: RetrievalMetrics = evaluateRetrieval(evaluateOptions);
 
       return {
         latencyMs,
-        precision,
-        recall,
+        precision: retrievalMetrics.precisionAtK,
+        recall: retrievalMetrics.recallAtK,
         extras: {
           resultCount: retrievedPaths.length,
           serverPort: this.port,
           k,
+          // Include additional IR metrics
+          mrr: retrievalMetrics.mrr,
+          map: retrievalMetrics.map,
+          hitsAtK: retrievalMetrics.hitsAtK,
+          f1: retrievalMetrics.f1,
+          tffu: retrievalMetrics.timeToFirstUseful,
+          ndcg: retrievalMetrics.ndcg ?? 0, // Add NDCG (default to 0 if undefined)
         },
       };
     } catch (error) {
@@ -365,9 +421,18 @@ export class KiriSearchAdapter implements SearchAdapter<KiriQuery, Metrics> {
 
   private getExpectedPaths(query: KiriQuery): string[] {
     const expected = query.metadata?.expected;
-    if (Array.isArray(expected)) {
-      return expected as string[];
+    if (!Array.isArray(expected)) {
+      return [];
     }
-    return [];
+
+    const paths: string[] = [];
+    for (const item of expected) {
+      if (typeof item === "string") {
+        paths.push(item);
+      } else if (typeof item === "object" && "path" in item) {
+        paths.push(item.path as string);
+      }
+    }
+    return paths;
   }
 }

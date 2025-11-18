@@ -8,8 +8,8 @@ import {
   JsonReporter,
   MarkdownReporter,
   ConsoleReporter,
-} from "../../external/assay-kit/src/index.ts";
-import { PluginRegistry } from "../../external/assay-kit/src/plugins/registry.ts";
+} from "../../external/assay-kit/packages/assay-kit/src/index.ts";
+import { PluginRegistry } from "../../external/assay-kit/packages/assay-kit/src/plugins/registry.ts";
 
 import { createKiriAdapter } from "./kiri-variants.js";
 import contextCoverageMetric from "./plugins/context-coverage-metric.js";

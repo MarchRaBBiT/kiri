@@ -169,3 +169,146 @@ pnpm exec tsx scripts/docs/make-plain.ts --index
 - どちらのコマンドも `.kiri/index.duckdb` を利用するため、事前に `pnpm exec kiri index --repo . --db .kiri/index.duckdb` などで最新のインデックスを作成してください。
 - `scripts/assay/plugins` にはカスタムメトリクス（Phase 2.2）の登録例があり、`assay:evaluate` 実行時に PluginRegistry を通じて読み込まれます。今後はここに自社固有のレポーターやベースラインプロバイダを追加できます。
 - Assay Kit v0.1.1 で統計補正の互換性が更新されたため、カスタムプラグインの `meta.assay` は `">=0.1.1"` を指定し、CLI から Holm/Bonferroni 補正を選べるようにしました。
+
+## データセット設計のベストプラクティス
+
+### hintsの役割と影響
+
+**重要**: `hints`（`metadata.hints`）は検索結果に**強く影響**します。
+
+#### hintsの動作
+
+1. `hints` は `artifacts` としてMCP `context_bundle` に渡される
+2. KIRIは `artifacts.hints` に含まれるファイルパスやキーワードを優先的に検索結果に含める
+3. **hintsに含まれるファイルは、通常のスコアリングよりも高く評価される**
+
+#### ベストプラクティス
+
+**✅ DO**: hintsとexpectedを一致させる
+
+```yaml
+expected:
+  - path: "src/plugins/registry.ts"
+    relevance: 3
+  - path: "src/plugins/types.ts"
+    relevance: 2
+hints:
+  - "PluginRegistry"
+  - "registerPlugin"
+  - "src/plugins/registry.ts" # expectedの最重要ファイルを含める
+  - "src/plugins/types.ts" # expectedの重要ファイルを含める
+```
+
+**❌ DON'T**: hintsに無関係なファイルを含める
+
+```yaml
+expected:
+  - path: "src/plugins/registry.ts"
+    relevance: 3
+  - path: "src/plugins/types.ts"
+    relevance: 2
+hints:
+  - "PluginRegistry"
+  - "registerPlugin"
+  - "src/cli/commands/evaluate.ts" # ❌ expectedに含まれない！
+```
+
+**理由**: 上記の誤った例では、`cli/commands/evaluate.ts` が検索結果の上位に現れ、本当に重要な `plugins/registry.ts` や `plugins/types.ts` が検索結果に含まれなくなります。その結果、NDCG が大幅に低下します（実例: 0.871 → 0.098、-89%）。
+
+#### デバッグ方法
+
+hintsが原因で検索結果が期待と異なる場合:
+
+1. **デバッグログを追加**して実行時の検索結果を確認:
+
+```typescript
+if (query.id === "問題のクエリID") {
+  console.error("Retrieved paths:", retrievedPaths.slice(0, 5));
+  console.error("Expected paths:", expectedPaths);
+}
+```
+
+2. **手動検証との比較**（artifacts なしで実行）:
+
+```bash
+# artifactsなしで直接サーバーを呼ぶ
+curl -X POST http://localhost:19999/rpc \
+  -d '{"method": "context_bundle", "params": {"goal": "クエリテキスト", "limit": 10}}'
+```
+
+3. **hints を段階的に削除**して影響を確認
+
+### relevanceスコアの設計
+
+#### 推奨レンジ
+
+| relevance | 意味         | 使用場面                                      |
+| --------- | ------------ | --------------------------------------------- |
+| **3**     | 必須・最重要 | クエリの核心に直接答えるファイル（通常1-2件） |
+| **2**     | 重要         | 核心の周辺、重要な関連ファイル（通常1-3件）   |
+| **1**     | 関連あり     | 参考になるが必須ではない（3-5件程度）         |
+| **0**     | 無関係       | （明示的に指定する必要なし）                  |
+
+#### 例: プラグインシステムの実装
+
+```yaml
+id: "q-feature"
+text: "plugin system registry initialization"
+expected:
+  - path: "src/plugins/registry.ts" # relevance=3: レジストリの実装（核心）
+    relevance: 3
+  - path: "src/plugins/types.ts" # relevance=2: 型定義（重要な関連）
+    relevance: 2
+  - path: "src/plugins/logger.ts" # relevance=1: ロガー（参考）
+    relevance: 1
+  - path: "src/plugins/dependencies.ts" # relevance=1: 依存関係（参考）
+    relevance: 1
+  - path: "src/cli/commands/evaluate.ts" # relevance=1: 利用側（参考）
+    relevance: 1
+```
+
+### NDCG目標値の設定
+
+| NDCG          | 評価      | アクション                  |
+| ------------- | --------- | --------------------------- |
+| **≥ 0.70**    | ✅ 合格   | そのまま使用可能            |
+| **0.50-0.69** | ⚠️ 警告   | hintsとexpectedの一致を確認 |
+| **< 0.50**    | ❌ 不合格 | データセット設計を見直し    |
+
+### 検証チェックリスト
+
+新しいクエリを追加する際:
+
+- [ ] `hints` に含まれる全てのファイルパスが `expected` に含まれている
+- [ ] `expected` の relevance=3, 2 のファイルが `hints` に含まれている
+- [ ] relevance スコアが適切（3: 最重要、2: 重要、1: 参考）
+- [ ] 実際の検索結果を確認（デバッグログまたは手動検証）
+- [ ] NDCG ≥ 0.70 を達成している
+
+### トラブルシューティング
+
+#### 症状: NDCGが予想より低い（< 0.50）
+
+**原因の可能性**:
+
+1. **hints の不一致** (最頻出)
+2. expected ファイルがインデックスに含まれていない
+3. クエリテキストが漠然としすぎている
+
+**診断手順**:
+
+1. hints と expected を比較
+2. デバッグログで実際の検索結果を確認
+3. 手動検証（artifacts なし）と比較
+
+#### 症状: 手動検証とテスト結果が異なる
+
+**原因**: hints が artifacts として渡されている（テストのみ）
+
+**対策**: デバッグログで実行時の検索結果を確認
+
+### 参考資料
+
+- **実例**: `docs/eval-debug-success-2025-11-18.md` - hintsの誤りによるNDCG低下とデバッグプロセス
+- **データセット**: `datasets/kiri-ab.yaml` - 正しい hints 設計の例
+- **評価結果**: `docs/eval-ndcg-results-2025-11-18.md` - NDCG による評価

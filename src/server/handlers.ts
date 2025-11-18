@@ -2392,7 +2392,7 @@ function applyFileTypeBoost(
   path: string,
   baseScore: number,
   profileConfig: BoostProfileConfig,
-  _weights: ScoringWeights
+  weights: ScoringWeights
 ): number {
   // Blacklisted directories that are almost always irrelevant for code context
   const blacklistedDirs = [
@@ -2411,7 +2411,8 @@ function applyFileTypeBoost(
       if (profileConfig.denylistOverrides.includes(dir)) {
         continue;
       }
-      return -100; // Effectively remove it
+      // v1.0.0: Use multiplicative penalty instead of absolute -100
+      return baseScore * weights.blacklistPenaltyMultiplier;
     }
   }
 
@@ -2449,9 +2450,9 @@ function applyFileTypeBoost(
     }
   }
 
-  // Test files: additive penalty (keep strong for files_search)
+  // Test files: multiplicative penalty (v1.0.0)
   if (path.startsWith("tests/") || path.startsWith("test/")) {
-    return baseScore * 0.2; // Strong penalty for tests
+    return baseScore * weights.testPenaltyMultiplier;
   }
 
   return baseScore * multiplier;
@@ -2572,19 +2573,24 @@ function applyPathBasedScoring(
 }
 
 /**
- * 加算的ファイルペナルティを適用
- * ブラックリストディレクトリ、テストファイル、lockファイル、設定ファイル、マイグレーションファイルに強いペナルティ
- * @param profile - boost_profile設定（"docs"の場合はdocs/ディレクトリのブラックリストをスキップ）
- * @returns true if penalty was applied and processing should stop
+ * 乗算的ファイルペナルティを適用（v1.0.0+）
+ * ブラックリストディレクトリ、テストファイル、lockファイルに乗算ペナルティ
+ * v1.0.0: 絶対ペナルティ(-100)から乗算ペナルティ(×0.01など)に移行
+ * @param weights - スコアリングウェイト設定（乗算ペナルティ係数を含む）
+ * @param profile - boost_profile設定（denylistOverridesなど）
+ * @returns true if severe penalty was applied (caller should skip further boosts)
  */
-function applyAdditiveFilePenalties(
+function applyMultiplicativeFilePenalties(
   candidate: CandidateInfo,
   path: string,
   lowerPath: string,
   fileName: string,
+  weights: ScoringWeights,
   profileConfig: BoostProfileConfig
 ): boolean {
-  // Blacklisted directories - effectively remove
+  // Returns true if a severe penalty was applied (should skip further boosts)
+
+  // Blacklisted directories - apply strong multiplicative penalty (99% reduction)
   const blacklistedDirs = [
     ".cursor/",
     ".devcontainer/",
@@ -2615,27 +2621,29 @@ function applyAdditiveFilePenalties(
       if (profileConfig.denylistOverrides.includes(dir)) {
         continue; // Skip this blacklisted directory
       }
-      candidate.score = -100;
+      // v1.0.0: Use multiplicative penalty instead of absolute -100
+      candidate.scoreMultiplier *= weights.blacklistPenaltyMultiplier;
       candidate.reasons.add("penalty:blacklisted-dir");
-      return true;
+      return true; // Signal to skip further boosts - this is the strongest penalty
     }
   }
 
   if (isSuppressedPath(path)) {
-    candidate.score = -100;
+    // v1.0.0: Use multiplicative penalty instead of absolute -100
+    candidate.scoreMultiplier *= weights.blacklistPenaltyMultiplier;
     candidate.reasons.add("penalty:suppressed");
-    return true;
+    return true; // Signal to skip further boosts
   }
 
-  // Test files - strong penalty
+  // Test files - strong multiplicative penalty (95% reduction)
   const testPatterns = [".spec.ts", ".spec.js", ".test.ts", ".test.js", ".spec.tsx", ".test.tsx"];
   if (testPatterns.some((pattern) => lowerPath.endsWith(pattern))) {
-    candidate.score -= 2.0;
+    candidate.scoreMultiplier *= weights.testPenaltyMultiplier;
     candidate.reasons.add("penalty:test-file");
-    return true;
+    return true; // Signal to skip further boosts
   }
 
-  // Lock files - very strong penalty
+  // Lock files - very strong multiplicative penalty (99% reduction)
   const lockFiles = [
     "package-lock.json",
     "pnpm-lock.yaml",
@@ -2646,89 +2654,13 @@ function applyAdditiveFilePenalties(
     "poetry.lock",
   ];
   if (lockFiles.some((lockFile) => fileName === lockFile)) {
-    candidate.score -= 3.0;
+    candidate.scoreMultiplier *= weights.lockPenaltyMultiplier;
     candidate.reasons.add("penalty:lock-file");
-    return true;
+    return true; // Signal to skip further boosts
   }
 
-  // Configuration files - penalty handling depends on profile
-  const configPatterns = [
-    ".config.js",
-    ".config.ts",
-    ".config.mjs",
-    ".config.cjs",
-    "tsconfig.json",
-    "jsconfig.json",
-    "package.json",
-    ".eslintrc",
-    ".prettierrc",
-    "jest.config",
-    "vite.config",
-    "vitest.config",
-    "webpack.config",
-    "rollup.config",
-  ];
-  if (
-    configPatterns.some((pattern) => lowerPath.endsWith(pattern) || fileName.startsWith(".env")) ||
-    fileName === "Dockerfile" ||
-    fileName === "docker-compose.yml" ||
-    fileName === "docker-compose.yaml"
-  ) {
-    // ✅ Use explicit flag instead of magic number (0.3) to determine behavior
-    // This decouples profile detection from multiplier values
-    if (profileConfig.skipConfigAdditivePenalty) {
-      return false; // Continue to multiplicative penalty only
-    }
-    // For other profiles, apply strong additive penalty
-    candidate.score -= 1.5;
-    candidate.reasons.add("penalty:config-file");
-    return true;
-  }
-
-  // Syntax grammars (tmLanguage/plist) - extremely long strings, low semantic value
-  const isSyntaxGrammar =
-    path.includes("/syntaxes/") &&
-    (lowerPath.endsWith(".tmlanguage") ||
-      lowerPath.endsWith(".tmlanguage.json") ||
-      lowerPath.endsWith(".tmtheme") ||
-      lowerPath.endsWith(".plist"));
-  if (isSyntaxGrammar) {
-    candidate.score -= 2.5;
-    candidate.reasons.add("penalty:syntax-file");
-    return true;
-  }
-
-  // Perf data dumps (perf.data/perf-data fixtures)
-  if (
-    lowerPath.includes(".perf.data") ||
-    lowerPath.includes(".perf-data") ||
-    lowerPath.includes("-perf-data")
-  ) {
-    candidate.score -= 2.0;
-    candidate.reasons.add("penalty:perf-data");
-    return true;
-  }
-
-  // Legal / inventory files (e.g., ThirdPartyNotices, cgmanifest) - deprioritize
-  if (fileName.toLowerCase().includes("thirdpartynotices")) {
-    candidate.score -= 3.0;
-    candidate.reasons.add("penalty:legal-notice");
-    return true;
-  }
-  if (fileName.toLowerCase() === "cgmanifest.json") {
-    candidate.score -= 2.5;
-    candidate.reasons.add("penalty:manifest");
-    return true;
-  }
-
-  // Migration files - strong penalty
-  if (lowerPath.includes("migrate") || lowerPath.includes("migration")) {
-    candidate.score -= 2.0;
-    candidate.reasons.add("penalty:migration-file");
-    return true;
-  }
-
-  return false; // No penalty applied, continue processing
+  // v1.0.0: No penalty applied, allow further boosts/penalties
+  return false;
 }
 
 /**
@@ -2741,18 +2673,42 @@ function applyFileTypeMultipliers(
   path: string,
   ext: string | null,
   profileConfig: BoostProfileConfig,
-  _weights: ScoringWeights
+  weights: ScoringWeights
 ): void {
   const fileName = path.split("/").pop() ?? "";
+  const lowerPath = path.toLowerCase();
 
-  // ✅ Step 1: Config files
+  // ✅ Step 1: Low-value files (v1.0.0: syntax/perf/legal/migration)
+  // Apply configPenaltyMultiplier (strong penalty) to rarely useful file types
+  const isSyntaxGrammar =
+    path.includes("/syntaxes/") &&
+    (lowerPath.endsWith(".tmlanguage") ||
+      lowerPath.endsWith(".tmlanguage.json") ||
+      lowerPath.endsWith(".tmtheme") ||
+      lowerPath.endsWith(".plist"));
+  const isPerfData =
+    lowerPath.includes(".perf.data") ||
+    lowerPath.includes(".perf-data") ||
+    lowerPath.includes("-perf-data");
+  const isLegalFile =
+    fileName.toLowerCase().includes("thirdpartynotices") ||
+    fileName.toLowerCase() === "cgmanifest.json";
+  const isMigrationFile = lowerPath.includes("migrate") || lowerPath.includes("migration");
+
+  if (isSyntaxGrammar || isPerfData || isLegalFile || isMigrationFile) {
+    candidate.scoreMultiplier *= weights.configPenaltyMultiplier;
+    candidate.reasons.add("penalty:low-value-file");
+    return; // Don't apply impl boosts
+  }
+
+  // ✅ Step 2: Config files
   if (isConfigFile(path, fileName)) {
     candidate.scoreMultiplier *= profileConfig.fileTypeMultipliers.config;
     candidate.reasons.add("penalty:config-file");
     return; // Don't apply impl boosts to config files
   }
 
-  // ✅ Step 2: Documentation files
+  // ✅ Step 3: Documentation files
   const docExtensions = [".md", ".yaml", ".yml", ".mdc"];
   if (docExtensions.some((docExt) => path.endsWith(docExt))) {
     const docMultiplier = profileConfig.fileTypeMultipliers.doc;
@@ -2766,7 +2722,7 @@ function applyFileTypeMultipliers(
     return; // Don't apply impl boosts to docs
   }
 
-  // ✅ Step 3: Implementation files with path-specific boosts
+  // ✅ Step 4: Implementation files with path-specific boosts
   const implMultiplier = profileConfig.fileTypeMultipliers.impl;
 
   // ✅ Use longest-prefix-match logic (order-independent)
@@ -2795,16 +2751,21 @@ function applyFileTypeMultipliers(
 }
 
 /**
- * contextBundle専用のブーストプロファイル適用（v0.7.0+: リファクタリング版）
+ * contextBundle専用のブーストプロファイル適用（v1.0.0: 乗算ペナルティモデル）
  * 複雑度を削減するために3つのヘルパー関数に分割：
  * 1. applyPathBasedScoring: パスベースの加算的スコアリング
- * 2. applyAdditiveFilePenalties: 強力な加算的ペナルティ
- * 3. applyFileTypeMultipliers: 乗算的ペナルティ/ブースト
+ * 2. applyMultiplicativeFilePenalties: 乗算的ペナルティ（blacklist/test/lock）
+ * 3. applyFileTypeMultipliers: 乗算的ペナルティ/ブースト（doc/config/impl）
  *
- * CRITICAL SAFETY RULES:
- * 1. Multipliers are stored in candidate.scoreMultiplier, applied AFTER all additive scoring
- * 2. profile="docs" skips documentation penalties (allows doc-focused queries)
- * 3. Blacklist/test/lock/config files keep additive penalties (already very strong)
+ * v1.0.0 CHANGES:
+ * - 絶対ペナルティ(-100)を乗算ペナルティ(×0.01など)に置き換え
+ * - すべてのペナルティが組み合わせ可能に（boost_profileとの相互作用が予測可能）
+ * - v0.9.0の特別ケース処理（if profile === "docs"）が不要に
+ *
+ * SCORING PHASES:
+ * 1. Additive phase: テキストマッチ、パスマッチ、依存関係、近接性を加算
+ * 2. Multiplicative phase: ペナルティとブーストを scoreMultiplier に蓄積
+ * 3. Final application: score *= scoreMultiplier（最終段階で一度だけ適用）
  */
 function applyBoostProfile(
   candidate: CandidateInfo,
@@ -2820,20 +2781,22 @@ function applyBoostProfile(
   // Step 1: パスベースのスコアリング（加算的ブースト）
   applyPathBasedScoring(candidate, lowerPath, weights, extractedTerms);
 
-  // Step 2: 加算的ペナルティ（ブラックリスト、テスト、lock、設定、マイグレーション）
-  const shouldStop = applyAdditiveFilePenalties(
+  // Step 2: 乗算的ペナルティ（ブラックリスト、テスト、lock）
+  // v1.0.0: Returns true if severe penalty applied (should skip further boosts)
+  const skipFurtherBoosts = applyMultiplicativeFilePenalties(
     candidate,
     path,
     lowerPath,
     fileName,
+    weights,
     profileConfig
   );
-  if (shouldStop) {
-    return; // ペナルティが適用された場合は処理終了
-  }
 
   // Step 3: ファイルタイプ別の乗算的ペナルティ/ブースト
-  applyFileTypeMultipliers(candidate, path, ext, profileConfig, weights);
+  // Skip if severe penalty was applied (blacklist/test/lock files shouldn't get impl boosts)
+  if (!skipFurtherBoosts) {
+    applyFileTypeMultipliers(candidate, path, ext, profileConfig, weights);
+  }
 }
 
 export async function filesSearch(
@@ -3080,6 +3043,7 @@ export async function filesSearch(
 
       return result;
     })
+    .filter((result) => result.score > SCORE_FILTER_THRESHOLD) // v1.0.0: Filter out extremely low-scored files (multiplicative penalties)
     .sort((a, b) => b.score - a.score);
 }
 
@@ -3088,6 +3052,14 @@ export async function filesSearch(
 // ============================================================================
 // Issue #68: Path/Large File Penalty Helper Functions
 // ============================================================================
+
+/**
+ * v1.0.0: Score filtering threshold for multiplicative penalty model
+ * Files with score < threshold are filtered out (unless they are hint paths)
+ * Default: 0.05 removes files with >95% penalty while keeping relevant files
+ * Can be overridden via KIRI_SCORE_THRESHOLD environment variable
+ */
+const SCORE_FILTER_THRESHOLD = parseFloat(process.env.KIRI_SCORE_THRESHOLD ?? "0.05");
 
 /**
  * 環境変数からペナルティ機能フラグを読み取る
@@ -3979,9 +3951,16 @@ async function contextBundleImpl(
     logPenaltyTelemetry(telemetry, queryStats);
   }
 
+  // v1.0.0: Filter out extremely low-scored candidates (result of multiplicative penalties)
+  // Threshold removes files with >95% penalty while keeping reasonably relevant files
+  // Hint paths are exempt from this threshold (always included if score > 0)
   const hintPathSet = new Set(resolvedPathHintTargets.map((target) => target.path));
   const rankedCandidates = materializedCandidates
-    .filter((candidate) => candidate.score > 0 || hintPathSet.has(candidate.path))
+    .filter(
+      (candidate) =>
+        candidate.score > SCORE_FILTER_THRESHOLD ||
+        (candidate.score > 0 && hintPathSet.has(candidate.path))
+    )
     .sort((a, b) => {
       if (b.score === a.score) {
         return a.path.localeCompare(b.path);

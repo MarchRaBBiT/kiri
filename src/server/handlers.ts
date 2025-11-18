@@ -2591,14 +2591,13 @@ function applyMultiplicativeFilePenalties(
   // Returns true if a severe penalty was applied (should skip further boosts)
 
   // Blacklisted directories - apply strong multiplicative penalty (99% reduction)
+  // v1.0.0: test/ and tests/ removed - handled by testPenaltyMultiplier instead
   const blacklistedDirs = [
     ".cursor/",
     ".devcontainer/",
     ".serena/",
     "__mocks__/",
     "docs/",
-    "test/",
-    "tests/",
     ".git/",
     ".github/",
     "node_modules/",

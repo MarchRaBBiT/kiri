@@ -49,8 +49,8 @@ describe("files_search", () => {
       warningManager: new WarningManager(),
     };
 
-    // v1.0.0: Use "docs" profile to include docs/ files (otherwise filtered by blacklistPenaltyMultiplier)
-    const results = await filesSearch(context, { query: "meaning", boost_profile: "docs" });
+    // v1.0.0: Use "balanced" profile to include both docs/ and src/ files equally
+    const results = await filesSearch(context, { query: "meaning", boost_profile: "balanced" });
     expect(results.length).toBeGreaterThan(0);
     const paths = results.map((item) => item.path);
     expect(paths).toContain("src/main.ts");
@@ -115,10 +115,10 @@ describe("files_search", () => {
     };
 
     // Multi-word query: should split into "tools" OR "call" OR "implementation"
-    // v1.0.0: Use "docs" profile to include docs/ files
+    // v1.0.0: Use "balanced" profile to include both docs/ and src/ files equally
     const results = await filesSearch(context, {
       query: "tools/call implementation",
-      boost_profile: "docs",
+      boost_profile: "balanced",
     });
     expect(results.length).toBeGreaterThan(0);
 
@@ -269,8 +269,11 @@ describe("files_search", () => {
       warningManager: new WarningManager(),
     };
 
-    // v1.0.0: Use "docs" profile to include docs/ files
-    const results = await filesSearch(context, { query: "observability", boost_profile: "docs" });
+    // v1.0.0: Use "balanced" profile to include docs/ files
+    const results = await filesSearch(context, {
+      query: "observability",
+      boost_profile: "balanced",
+    });
     expect(results.map((item) => item.path)).toContain("docs/runbook.md");
   });
 

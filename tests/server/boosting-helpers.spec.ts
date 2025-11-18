@@ -1031,7 +1031,8 @@ describe("Boosting Helper Functions (v0.7.0+)", () => {
         }
         if (migrationFile) {
           expect(controllerRank).toBeLessThan(bundle.context.indexOf(migrationFile));
-          expect(migrationFile.why.some((reason) => reason === "penalty:migration-file")).toBe(
+          // v1.0.0: Migration files now use "penalty:low-value-file" instead of "penalty:migration-file"
+          expect(migrationFile.why.some((reason) => reason === "penalty:low-value-file")).toBe(
             true
           );
         }

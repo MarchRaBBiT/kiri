@@ -6,6 +6,7 @@
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
+
 import { load, dump } from "js-yaml";
 
 interface Query {

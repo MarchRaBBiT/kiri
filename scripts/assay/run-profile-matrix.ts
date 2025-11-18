@@ -1,7 +1,7 @@
 #!/usr/bin/env tsx
+import { spawnSync, execSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import { spawnSync, execSync } from "node:child_process";
 
 import { getAvailableVariants } from "./kiri-variants.js";
 

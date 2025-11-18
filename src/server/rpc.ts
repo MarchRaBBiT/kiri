@@ -4,7 +4,6 @@ import { maskValue } from "../shared/security/masker.js";
 const RESPONSE_MASK_SKIP_KEYS = ["path"];
 
 import { isValidBoostProfile, BOOST_PROFILES } from "./boost-profiles.js";
-import { selectProfileFromQuery } from "./profile-selector.js";
 import { ServerContext } from "./context.js";
 import { DegradeController } from "./fallbacks/degradeController.js";
 import {
@@ -21,6 +20,7 @@ import {
 } from "./handlers.js";
 import { MetricsRegistry } from "./observability/metrics.js";
 import { withSpan } from "./observability/tracing.js";
+import { selectProfileFromQuery } from "./profile-selector.js";
 
 /**
  * WarningManager - 警告メッセージの表示を管理するクラス

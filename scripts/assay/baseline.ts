@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
-import process from "node:process";
 import { isAbsolute } from "node:path";
+import process from "node:process";
 
 import { BaselineService } from "../../external/assay-kit/packages/assay-kit/src/baseline/service.ts";
 import type { PromotePayload } from "../../external/assay-kit/packages/assay-kit/src/baseline/types.ts";

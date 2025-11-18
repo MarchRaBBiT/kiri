@@ -37,13 +37,6 @@ interface ComparisonResult {
   };
 }
 
-interface DatasetQuery {
-  id: string;
-  metadata: {
-    category: string;
-  };
-}
-
 interface CategoryMetrics {
   category: string;
   profile: string;

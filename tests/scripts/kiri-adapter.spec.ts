@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { KiriSearchAdapter } from "../../scripts/assay/kiri-adapter.js";
+
 import type { Query } from "../../external/assay-kit/src/index.ts";
+import { KiriSearchAdapter } from "../../scripts/assay/kiri-adapter.js";
 
 class TestableKiriSearchAdapter extends KiriSearchAdapter {
   public lastParams?: Record<string, unknown>;

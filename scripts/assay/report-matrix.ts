@@ -1,6 +1,5 @@
 #!/usr/bin/env tsx
 import { readFileSync, writeFileSync } from "node:fs";
-import { join, basename } from "node:path";
 
 interface ComparisonResult {
   comparisonId: string;

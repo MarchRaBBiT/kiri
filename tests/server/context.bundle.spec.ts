@@ -6,7 +6,12 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { runIndexer } from "../../src/indexer/cli.js";
 import { ServerContext } from "../../src/server/context.js";
-import { contextBundle, resolveRepoId, semanticRerank } from "../../src/server/handlers.js";
+import {
+  checkTableAvailability,
+  contextBundle,
+  resolveRepoId,
+  semanticRerank,
+} from "../../src/server/handlers.js";
 import { startServer } from "../../src/server/main.js";
 import { WarningManager } from "../../src/server/rpc.js";
 import { createServerServices } from "../../src/server/services/index.js";
@@ -66,10 +71,12 @@ describe("context_bundle", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
+    const tableAvailability = await checkTableAvailability(db);
     const context: ServerContext = {
       db,
       repoId,
       services: createServerServices(db),
+      tableAvailability,
       warningManager: new WarningManager(),
     };
 
@@ -120,10 +127,12 @@ describe("context_bundle", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
+    const tableAvailability = await checkTableAvailability(db);
     const context: ServerContext = {
       db,
       repoId,
       services: createServerServices(db),
+      tableAvailability,
       warningManager: new WarningManager(),
     };
 
@@ -170,10 +179,12 @@ describe("context_bundle", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
+    const tableAvailability = await checkTableAvailability(db);
     const context: ServerContext = {
       db,
       repoId,
       services: createServerServices(db),
+      tableAvailability,
       warningManager: new WarningManager(),
     };
 
@@ -212,10 +223,12 @@ describe("context_bundle", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
+    const tableAvailability = await checkTableAvailability(db);
     const context: ServerContext = {
       db,
       repoId,
       services: createServerServices(db),
+      tableAvailability,
       warningManager: new WarningManager(),
     };
 
@@ -275,10 +288,12 @@ describe("context_bundle", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
+    const tableAvailability = await checkTableAvailability(db);
     const context: ServerContext = {
       db,
       repoId,
       services: createServerServices(db),
+      tableAvailability,
       warningManager: new WarningManager(),
     };
 
@@ -319,10 +334,12 @@ describe("context_bundle", () => {
       [repoId, "mann", "src/stats/mann.ts", 5]
     );
 
+    const tableAvailability = await checkTableAvailability(db);
     const context: ServerContext = {
       db,
       repoId,
       services: createServerServices(db),
+      tableAvailability,
       warningManager: new WarningManager(),
     };
 
@@ -355,10 +372,12 @@ describe("context_bundle", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
+    const tableAvailability = await checkTableAvailability(db);
     const context: ServerContext = {
       db,
       repoId,
       services: createServerServices(db),
+      tableAvailability,
       warningManager: new WarningManager(),
     };
 
@@ -387,10 +406,12 @@ describe("context_bundle", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
+    const tableAvailability = await checkTableAvailability(db);
     const serverContext: ServerContext = {
       db,
       repoId,
       services: createServerServices(db),
+      tableAvailability,
       warningManager: new WarningManager(),
     };
 
@@ -413,10 +434,12 @@ describe("context_bundle", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
+    const tableAvailability = await checkTableAvailability(db);
     const context: ServerContext = {
       db,
       repoId,
       services: createServerServices(db),
+      tableAvailability,
       warningManager: new WarningManager(),
     };
 
@@ -452,10 +475,12 @@ describe("context_bundle", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
+    const tableAvailability = await checkTableAvailability(db);
     const context: ServerContext = {
       db,
       repoId,
       services: createServerServices(db),
+      tableAvailability,
       warningManager: new WarningManager(),
     };
 
@@ -491,10 +516,12 @@ describe("context_bundle", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
+    const tableAvailability = await checkTableAvailability(db);
     const context: ServerContext = {
       db,
       repoId,
       services: createServerServices(db),
+      tableAvailability,
       warningManager: new WarningManager(),
     };
 
@@ -526,10 +553,12 @@ describe("context_bundle", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
+    const tableAvailability = await checkTableAvailability(db);
     const context: ServerContext = {
       db,
       repoId,
       services: createServerServices(db),
+      tableAvailability,
       warningManager: new WarningManager(),
     };
 
@@ -565,10 +594,12 @@ describe("context_bundle", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
+    const tableAvailability = await checkTableAvailability(db);
     const context: ServerContext = {
       db,
       repoId,
       services: createServerServices(db),
+      tableAvailability,
       warningManager: new WarningManager(),
     };
 
@@ -593,10 +624,12 @@ describe("context_bundle", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
+    const tableAvailability = await checkTableAvailability(db);
     const context: ServerContext = {
       db,
       repoId,
       services: createServerServices(db),
+      tableAvailability,
       warningManager: new WarningManager(),
     };
 
@@ -628,10 +661,12 @@ describe("context_bundle", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
+    const tableAvailability = await checkTableAvailability(db);
     const context: ServerContext = {
       db,
       repoId,
       services: createServerServices(db),
+      tableAvailability,
       warningManager: new WarningManager(),
     };
 
@@ -669,10 +704,12 @@ describe("context_bundle", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
+    const tableAvailability = await checkTableAvailability(db);
     const context: ServerContext = {
       db,
       repoId,
       services: createServerServices(db),
+      tableAvailability,
       warningManager: new WarningManager(),
     };
 
@@ -741,10 +778,12 @@ describe("context_bundle", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
+    const tableAvailability = await checkTableAvailability(db);
     const context: ServerContext = {
       db,
       repoId,
       services: createServerServices(db),
+      tableAvailability,
       warningManager: new WarningManager(),
     };
 
@@ -802,10 +841,12 @@ describe("context_bundle", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
+    const tableAvailability = await checkTableAvailability(db);
     const context: ServerContext = {
       db,
       repoId,
       services: createServerServices(db),
+      tableAvailability,
       warningManager: new WarningManager(),
     };
 
@@ -857,10 +898,12 @@ describe("context_bundle", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
+    const tableAvailability = await checkTableAvailability(db);
     const context: ServerContext = {
       db,
       repoId,
       services: createServerServices(db),
+      tableAvailability,
       warningManager: new WarningManager(),
     };
 
@@ -913,10 +956,12 @@ describe("context_bundle", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
+    const tableAvailability = await checkTableAvailability(db);
     const context: ServerContext = {
       db,
       repoId,
       services: createServerServices(db),
+      tableAvailability,
       warningManager: new WarningManager(),
     };
 
@@ -958,10 +1003,12 @@ describe("context_bundle", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
+    const tableAvailability = await checkTableAvailability(db);
     const context: ServerContext = {
       db,
       repoId,
       services: createServerServices(db),
+      tableAvailability,
       warningManager: new WarningManager(),
     };
 
@@ -1013,10 +1060,12 @@ describe("context_bundle", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
+    const tableAvailability = await checkTableAvailability(db);
     const context: ServerContext = {
       db,
       repoId,
       services: createServerServices(db),
+      tableAvailability,
       warningManager: new WarningManager(),
     };
 
@@ -1093,10 +1142,12 @@ This Lambda function handles canvas-agent operations.
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
+    const tableAvailability = await checkTableAvailability(db);
     const context: ServerContext = {
       db,
       repoId,
       services: createServerServices(db),
+      tableAvailability,
       warningManager: new WarningManager(),
     };
 
@@ -1172,11 +1223,13 @@ This Lambda function handles canvas-agent operations.
       cleanupTargets.push({ dispose: async () => await db.close() });
 
       const repoId = await resolveRepoId(db, repo.path);
+      const tableAvailability = await checkTableAvailability(db);
       const manager = new WarningManager();
       const context: ServerContext = {
         db,
         repoId,
         services: createServerServices(db),
+        tableAvailability,
         warningManager: manager,
       };
 

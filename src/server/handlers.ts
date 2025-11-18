@@ -13,7 +13,7 @@ import {
   getBoostProfile,
 } from "./boost-profiles.js";
 import { loadServerConfig } from "./config.js";
-import { FtsStatusCache, ServerContext } from "./context.js";
+import { FtsStatusCache, ServerContext, TableAvailability } from "./context.js";
 import { coerceProfileName, loadScoringProfile, type ScoringWeights } from "./scoring.js";
 import { createServerServices, ServerServices } from "./services/index.js";
 
@@ -216,10 +216,77 @@ const METADATA_FILTER_MATCH_WEIGHT = 0.1;
 const METADATA_HINT_BONUS = 0.25;
 const INBOUND_LINK_WEIGHT = 0.2;
 
-// TODO: Issue - グローバルミュータブル変数による並行処理の競合状態リスク
-// これらの変数はServerContextに移動し、起動時に一度だけチェックするべき
-let metadataTablesMissing = false;
-let linkTableMissing = false;
+/**
+ * checkTableAvailability
+ *
+ * 起動時にテーブルの存在を確認し、TableAvailabilityオブジェクトを生成する。
+ * これにより、グローバルミュータブル変数による競合状態を回避する。
+ *
+ * NOTE: スキーマ変更（テーブル追加）後はサーバーの再起動が必要です。
+ *
+ * @param db - DuckDBClient インスタンス
+ * @returns TableAvailability オブジェクト
+ * @throws データベース接続エラー等、テーブル不在以外のエラーが発生した場合
+ */
+export async function checkTableAvailability(db: DuckDBClient): Promise<TableAvailability> {
+  const ALLOWED_TABLES = [
+    "document_metadata_kv",
+    "markdown_link",
+    "hint_expansion",
+    "hint_dictionary",
+  ] as const;
+
+  const checkTable = async (tableName: (typeof ALLOWED_TABLES)[number]): Promise<boolean> => {
+    if (!ALLOWED_TABLES.includes(tableName)) {
+      throw new Error(`Invalid table name: ${tableName}`);
+    }
+
+    try {
+      await db.all(`SELECT 1 FROM ${tableName} LIMIT 0`);
+      return true;
+    } catch (error) {
+      // テーブル不在エラーのみキャッチ
+      if (isTableMissingError(error, tableName)) {
+        return false;
+      }
+      // その他のエラー（接続エラー等）は再スロー
+      throw new Error(
+        `Failed to check table availability for ${tableName}: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  };
+
+  const result = {
+    hasMetadataTables: await checkTable("document_metadata_kv"),
+    hasLinkTable: await checkTable("markdown_link"),
+    hasHintLog: await checkTable("hint_expansion"),
+    hasHintDictionary: await checkTable("hint_dictionary"),
+  };
+
+  // 起動時警告: テーブルが存在しない場合に通知
+  if (!result.hasMetadataTables) {
+    console.warn(
+      "document_metadata_kv table is missing. Metadata filters and boosts disabled until database is upgraded."
+    );
+  }
+  if (!result.hasLinkTable) {
+    console.warn(
+      "markdown_link table is missing. Inbound link boosting disabled until database is upgraded."
+    );
+  }
+  if (!result.hasHintLog) {
+    console.warn(
+      "hint_expansion table is missing. Hint logging disabled. Enable the latest schema and rerun the indexer to capture hint logs."
+    );
+  }
+  if (!result.hasHintDictionary) {
+    console.warn(
+      "hint_dictionary table is missing. Dictionary hints disabled. Run scripts/diag/build-hint-dictionary.ts after upgrading the schema."
+    );
+  }
+
+  return result;
+}
 
 async function hasDirtyRepos(db: DuckDBClient): Promise<boolean> {
   const statusCheck = await db.all<{ count: number }>(
@@ -450,6 +517,7 @@ function isMissingTableError(error: unknown, table: string): boolean {
 
 async function logHintExpansionEntry(
   db: DuckDBClient,
+  tableAvailability: TableAvailability,
   entry: {
     repoId: number;
     hintValue: string;
@@ -461,7 +529,7 @@ async function logHintExpansionEntry(
   if (!HINT_LOG_ENABLED) {
     return;
   }
-  if (hintLogTableMissing) {
+  if (!tableAvailability.hasHintLog) {
     return;
   }
   try {
@@ -480,7 +548,6 @@ async function logHintExpansionEntry(
     );
   } catch (error) {
     if (isMissingTableError(error, "hint_expansion")) {
-      hintLogTableMissing = true;
       console.warn(
         "hint_expansion table is missing in the active database. Enable the latest schema and rerun the indexer to capture hint logs."
       );
@@ -492,6 +559,7 @@ async function logHintExpansionEntry(
 
 async function fetchDictionaryPathHints(
   db: DuckDBClient,
+  tableAvailability: TableAvailability,
   repoId: number,
   hints: string[],
   perHintLimit: number
@@ -499,7 +567,7 @@ async function fetchDictionaryPathHints(
   if (!HINT_DICTIONARY_ENABLED || perHintLimit <= 0 || hints.length === 0) {
     return [];
   }
-  if (hintDictionaryTableMissing) {
+  if (!tableAvailability.hasHintDictionary) {
     return [];
   }
   const uniqueHints = Array.from(new Set(hints));
@@ -520,7 +588,6 @@ async function fetchDictionaryPathHints(
       );
     } catch (error) {
       if (isMissingTableError(error, "hint_dictionary")) {
-        hintDictionaryTableMissing = true;
         console.warn(
           "hint_dictionary table is missing in the active database. Run scripts/diag/build-hint-dictionary.ts after upgrading the schema."
         );
@@ -682,9 +749,6 @@ const HINT_DICTIONARY_LIMIT = Math.max(
   0,
   Number.parseInt(process.env.KIRI_HINT_DICTIONARY_LIMIT ?? "2", 10)
 );
-// TODO: Issue - グローバルミュータブル変数による並行処理の競合状態リスク
-let hintLogTableMissing = false;
-let hintDictionaryTableMissing = false;
 
 // Issue #68: Path/Large File Penalty configuration (環境変数で上書き可能)
 const PATH_MISS_DELTA = serverConfig.penalties.pathMissDelta;
@@ -1279,6 +1343,7 @@ function ensureCandidate(map: Map<string, CandidateInfo>, filePath: string): Can
 
 interface ExpandHintParams {
   db: DuckDBClient;
+  tableAvailability: TableAvailability;
   repoId: number;
   hintPaths: string[];
   candidates: Map<string, CandidateInfo>;
@@ -1369,6 +1434,7 @@ function applyHintReasonBoost(
 
 interface PathHintPromotionArgs {
   db: DuckDBClient;
+  tableAvailability: TableAvailability;
   repoId: number;
   hintTargets: ResolvedPathHint[];
   candidates: Map<string, CandidateInfo>;
@@ -1390,7 +1456,7 @@ async function applyPathHintPromotions(args: PathHintPromotionArgs): Promise<voi
     candidate.reasons.add(`${reasonPrefix}:${target.path}`);
     candidate.pathMatchHits = Math.max(candidate.pathMatchHits, 3);
     candidate.matchLine ??= 1;
-    await logHintExpansionEntry(args.db, {
+    await logHintExpansionEntry(args.db, args.tableAvailability, {
       repoId: args.repoId,
       hintValue: target.sourceHint,
       kind: target.origin === "dictionary" ? "dictionary" : "path",
@@ -1403,6 +1469,7 @@ async function applyPathHintPromotions(args: PathHintPromotionArgs): Promise<voi
   }
   await expandHintCandidatesForHints({
     db: args.db,
+    tableAvailability: args.tableAvailability,
     repoId: args.repoId,
     hintPaths: hintTargets.map((target) => target.path),
     candidates: args.candidates,
@@ -1415,6 +1482,7 @@ async function applyPathHintPromotions(args: PathHintPromotionArgs): Promise<voi
 
 async function addHintSubstringMatches(
   db: DuckDBClient,
+  tableAvailability: TableAvailability,
   repoId: number,
   hints: string[],
   candidates: Map<string, CandidateInfo>,
@@ -1444,7 +1512,7 @@ async function addHintSubstringMatches(
       const candidate = ensureCandidate(candidates, row.path);
       const reason = `substring:hint:${hint}`;
       if (applyHintReasonBoost(candidate, reason, boost)) {
-        await logHintExpansionEntry(db, {
+        await logHintExpansionEntry(db, tableAvailability, {
           repoId,
           hintValue: hint,
           kind: "substring",
@@ -1499,7 +1567,7 @@ async function addHintDirectoryNeighbors(
     if (applyHintReasonBoost(candidate, reason, args.config.dirBoost, row.lang, row.ext)) {
       added += 1;
       const seedMeta = getHintSeedMeta(args.hintSeedMeta, args.hintPath);
-      await logHintExpansionEntry(args.db, {
+      await logHintExpansionEntry(args.db, args.tableAvailability, {
         repoId: args.repoId,
         hintValue: seedMeta?.sourceHint ?? args.hintPath,
         kind: "directory",
@@ -1616,7 +1684,7 @@ async function applyDependencyRows(
     if (applyHintReasonBoost(candidate, reason, args.config.depBoost)) {
       added += 1;
       const seedMeta = getHintSeedMeta(args.hintSeedMeta, args.hintPath);
-      await logHintExpansionEntry(args.db, {
+      await logHintExpansionEntry(args.db, args.tableAvailability, {
         repoId: args.repoId,
         hintValue: seedMeta?.sourceHint ?? args.hintPath,
         kind: "dependency",
@@ -2109,17 +2177,17 @@ function isTableMissingError(error: unknown, table: string): boolean {
 
 async function safeMetadataQuery<T>(
   db: DuckDBClient,
+  tableAvailability: TableAvailability,
   sql: string,
   params: unknown[]
 ): Promise<T[]> {
-  if (metadataTablesMissing) {
+  if (!tableAvailability.hasMetadataTables) {
     return [];
   }
   try {
     return await db.all<T>(sql, params);
   } catch (error) {
     if (isTableMissingError(error, "document_metadata_kv")) {
-      metadataTablesMissing = true;
       console.warn(
         "Metadata tables not found; disabling metadata filters and boosts until database is upgraded."
       );
@@ -2129,15 +2197,19 @@ async function safeMetadataQuery<T>(
   }
 }
 
-async function safeLinkQuery<T>(db: DuckDBClient, sql: string, params: unknown[]): Promise<T[]> {
-  if (linkTableMissing) {
+async function safeLinkQuery<T>(
+  db: DuckDBClient,
+  tableAvailability: TableAvailability,
+  sql: string,
+  params: unknown[]
+): Promise<T[]> {
+  if (!tableAvailability.hasLinkTable) {
     return [];
   }
   try {
     return await db.all<T>(sql, params);
   } catch (error) {
     if (isTableMissingError(error, "markdown_link")) {
-      linkTableMissing = true;
       console.warn(
         "Markdown link table not found; inbound link boosting disabled until database is upgraded."
       );
@@ -2149,11 +2221,12 @@ async function safeLinkQuery<T>(db: DuckDBClient, sql: string, params: unknown[]
 
 async function fetchMetadataOnlyCandidates(
   db: DuckDBClient,
+  tableAvailability: TableAvailability,
   repoId: number,
   filters: MetadataFilter[],
   limit: number
 ): Promise<FileRow[]> {
-  if (metadataTablesMissing || filters.length === 0 || limit <= 0) {
+  if (!tableAvailability.hasMetadataTables || filters.length === 0 || limit <= 0) {
     return [];
   }
 
@@ -2179,7 +2252,6 @@ async function fetchMetadataOnlyCandidates(
     return await db.all<FileRow>(sql, params);
   } catch (error) {
     if (isTableMissingError(error, "document_metadata_kv")) {
-      metadataTablesMissing = true;
       console.warn(
         "Metadata tables not found; disabling metadata-only searches until database is upgraded."
       );
@@ -2191,13 +2263,14 @@ async function fetchMetadataOnlyCandidates(
 
 async function fetchMetadataKeywordMatches(
   db: DuckDBClient,
+  tableAvailability: TableAvailability,
   repoId: number,
   keywords: string[],
   filters: MetadataFilter[],
   limit: number,
   excludePaths: Set<string>
 ): Promise<FileRow[]> {
-  if (metadataTablesMissing || keywords.length === 0 || limit <= 0) {
+  if (!tableAvailability.hasMetadataTables || keywords.length === 0 || limit <= 0) {
     return [];
   }
 
@@ -2232,17 +2305,18 @@ async function fetchMetadataKeywordMatches(
     LIMIT ?
   `;
 
-  const rows = await safeMetadataQuery<FileRow>(db, sql, params);
+  const rows = await safeMetadataQuery<FileRow>(db, tableAvailability, sql, params);
   return rows.map((row) => ({ ...row, score: Number(row.score ?? 1) }));
 }
 
 async function loadMetadataForPaths(
   db: DuckDBClient,
+  tableAvailability: TableAvailability,
   repoId: number,
   paths: string[]
 ): Promise<Map<string, MetadataEntry[]>> {
   const result = new Map<string, MetadataEntry[]>();
-  if (metadataTablesMissing || paths.length === 0) {
+  if (!tableAvailability.hasMetadataTables || paths.length === 0) {
     return result;
   }
 
@@ -2257,7 +2331,7 @@ async function loadMetadataForPaths(
     key: string;
     value: string;
     source: string | null;
-  }>(db, sql, [repoId, ...paths]);
+  }>(db, tableAvailability, sql, [repoId, ...paths]);
 
   for (const row of rows) {
     if (!result.has(row.path)) {
@@ -2274,11 +2348,12 @@ async function loadMetadataForPaths(
 
 async function loadInboundLinkCounts(
   db: DuckDBClient,
+  tableAvailability: TableAvailability,
   repoId: number,
   paths: string[]
 ): Promise<Map<string, number>> {
   const counts = new Map<string, number>();
-  if (linkTableMissing || paths.length === 0) {
+  if (!tableAvailability.hasLinkTable || paths.length === 0) {
     return counts;
   }
   const placeholders = paths.map(() => "?").join(", ");
@@ -2288,10 +2363,12 @@ async function loadInboundLinkCounts(
     WHERE repo_id = ? AND resolved_path IS NOT NULL AND resolved_path IN (${placeholders})
     GROUP BY resolved_path
   `;
-  const rows = await safeLinkQuery<{ path: string; inbound: number | bigint }>(db, sql, [
-    repoId,
-    ...paths,
-  ]);
+  const rows = await safeLinkQuery<{ path: string; inbound: number | bigint }>(
+    db,
+    tableAvailability,
+    sql,
+    [repoId, ...paths]
+  );
   for (const row of rows) {
     const inboundValue =
       typeof row.inbound === "bigint" ? Number(row.inbound) : Number(row.inbound ?? 0);
@@ -2975,6 +3052,7 @@ export async function filesSearch(
   if (!hasTextQuery && hasAnyMetadataFilters) {
     const metadataOnlyRows = await fetchMetadataOnlyCandidates(
       db,
+      context.tableAvailability,
       repoId,
       metadataFilters,
       limit * 2
@@ -2993,6 +3071,7 @@ export async function filesSearch(
       const excludePaths = new Set(candidateRows.map((row) => row.path));
       const metadataRows = await fetchMetadataKeywordMatches(
         db,
+        context.tableAvailability,
         repoId,
         metadataKeywords,
         metadataFilters,
@@ -3020,8 +3099,8 @@ export async function filesSearch(
   const dedupedRows = Array.from(rowMap.values()).sort((a, b) => (b.score ?? 1) - (a.score ?? 1));
   const limitedRows = dedupedRows.slice(0, limit);
   const paths = limitedRows.map((row) => row.path);
-  const metadataMap = await loadMetadataForPaths(db, repoId, paths);
-  const inboundCounts = await loadInboundLinkCounts(db, repoId, paths);
+  const metadataMap = await loadMetadataForPaths(db, context.tableAvailability, repoId, paths);
+  const inboundCounts = await loadInboundLinkCounts(db, context.tableAvailability, repoId, paths);
   const metadataKeywordSet = hasTextQuery
     ? new Set(splitQueryWords(cleanedQuery.toLowerCase()).map((kw) => kw.toLowerCase()))
     : new Set<string>();
@@ -3639,6 +3718,7 @@ async function contextBundleImpl(
   }));
   const dictionaryPathTargets = await fetchDictionaryPathHints(
     db,
+    context.tableAvailability,
     repoId,
     substringHints,
     HINT_DICTIONARY_LIMIT
@@ -3651,6 +3731,7 @@ async function contextBundleImpl(
   if (resolvedPathHintTargets.length > 0) {
     await applyPathHintPromotions({
       db,
+      tableAvailability: context.tableAvailability,
       repoId,
       hintTargets: resolvedPathHintTargets,
       candidates,
@@ -3663,6 +3744,7 @@ async function contextBundleImpl(
   if (substringHints.length > 0) {
     await addHintSubstringMatches(
       db,
+      context.tableAvailability,
       repoId,
       substringHints,
       candidates,
@@ -3802,7 +3884,13 @@ async function contextBundleImpl(
     if (!hasAnyMetadataFilters) {
       return;
     }
-    const metadataRows = await fetchMetadataOnlyCandidates(db, repoId, metadataFilters, limit * 2);
+    const metadataRows = await fetchMetadataOnlyCandidates(
+      db,
+      context.tableAvailability,
+      repoId,
+      metadataFilters,
+      limit * 2
+    );
     if (metadataRows.length === 0) {
       return;
     }
@@ -3858,6 +3946,7 @@ async function contextBundleImpl(
   if (hasAnyMetadataFilters || metadataKeywordSet.size > 0 || filterValueSet.size > 0) {
     metadataEntriesMap = await loadMetadataForPaths(
       db,
+      context.tableAvailability,
       repoId,
       materializedCandidates.map((candidate) => candidate.path)
     );
@@ -3911,6 +4000,7 @@ async function contextBundleImpl(
 
   const inboundCounts = await loadInboundLinkCounts(
     db,
+    context.tableAvailability,
     repoId,
     materializedCandidates.map((candidate) => candidate.path)
   );

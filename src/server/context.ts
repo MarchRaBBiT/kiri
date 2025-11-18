@@ -10,6 +10,13 @@ export interface FtsStatusCache {
   lastChecked: number;
 }
 
+export interface TableAvailability {
+  hasMetadataTables: boolean;
+  hasLinkTable: boolean;
+  hasHintLog: boolean;
+  hasHintDictionary: boolean;
+}
+
 export interface ServerContext {
   db: DuckDBClient;
   repoId: number;
@@ -18,6 +25,7 @@ export interface ServerContext {
     fts?: boolean; // FTS拡張が利用可能かどうか
   };
   ftsStatusCache?: FtsStatusCache;
+  tableAvailability: TableAvailability;
   warningManager: WarningManager;
 }
 
@@ -36,12 +44,14 @@ export function createServerContext(options: {
   services: ServerServices;
   features?: { fts?: boolean };
   ftsStatusCache?: FtsStatusCache;
+  tableAvailability: TableAvailability;
   warningManager: WarningManager;
 }): ServerContext {
   const context: ServerContext = {
     db: options.db,
     repoId: options.repoId,
     services: options.services,
+    tableAvailability: options.tableAvailability,
     warningManager: options.warningManager,
   };
 

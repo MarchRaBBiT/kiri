@@ -17,6 +17,7 @@ import {
 } from "../../external/assay-kit/packages/assay-kit/src/index.ts";
 
 const MAX_QUERY_HINTS = 8;
+const TIMESTAMP_INTERVAL_MS = 10; // Interval between simulated result timestamps for metrics calculation
 
 export interface KiriAdapterConfig {
   limit?: number;
@@ -66,6 +67,21 @@ function normalizeQueryHints(hints?: unknown): string[] {
   return normalized;
 }
 
+/**
+ * Prepares artifacts for the KIRI context_bundle API call.
+ *
+ * **Important**: hints are passed as "artifacts" to the MCP context_bundle tool.
+ * The KIRI server prioritizes files/keywords in artifacts.hints when ranking results.
+ * This can significantly boost certain files in search results.
+ *
+ * **Best Practice**: Ensure hints align with expected results to avoid misleading rankings.
+ * Misaligned hints can cause NDCG to drop significantly (e.g., 0.871 → 0.098, -89%).
+ *
+ * See docs/testing.md#データセット設計のベストプラクティス for details.
+ *
+ * @param metadata - Query metadata containing hints array
+ * @returns Artifacts object with hints array (max 8 items), or undefined if no hints
+ */
 function buildArtifactsFromMetadata(
   metadata?: KiriQueryMetadata
 ): ContextBundleArtifactsPayload | undefined {
@@ -188,25 +204,7 @@ export class KiriSearchAdapter implements SearchAdapter<KiriQuery, Metrics> {
       const expectedPaths = this.getExpectedPaths(query);
 
       // Build relevance grades map for NDCG calculation
-      const relevanceGrades = new Map<string, number>();
-      const relevantPaths: string[] = [];
-
-      if (query.metadata?.expected && Array.isArray(query.metadata.expected)) {
-        for (const item of query.metadata.expected) {
-          if (typeof item === "object" && "path" in item && "relevance" in item) {
-            const path = item.path as string;
-            const relevance = item.relevance as number;
-            relevanceGrades.set(path, relevance);
-            if (relevance > 0) {
-              relevantPaths.push(path);
-            }
-          } else if (typeof item === "string") {
-            // Backward compatibility: string items are treated as relevance=1
-            relevanceGrades.set(item, 1);
-            relevantPaths.push(item);
-          }
-        }
-      }
+      const { relevanceGrades, relevantPaths } = this.buildRelevanceGrades(query);
 
       // Use evaluateRetrieval() to calculate comprehensive metrics including MRR and NDCG
       const evaluateOptions: {
@@ -218,7 +216,7 @@ export class KiriSearchAdapter implements SearchAdapter<KiriQuery, Metrics> {
       } = {
         items: retrievedPaths.map((path, i) => ({
           id: path,
-          timestampMs: startTime + i * 10, // Sequential timestamps (10ms apart)
+          timestampMs: startTime + i * TIMESTAMP_INTERVAL_MS,
         })),
         relevant: relevanceGrades.size > 0 ? relevantPaths : expectedPaths,
         k,
@@ -417,6 +415,60 @@ export class KiriSearchAdapter implements SearchAdapter<KiriQuery, Metrics> {
     }
 
     return [];
+  }
+
+  /**
+   * Builds relevance grades map from query metadata for NDCG calculation.
+   *
+   * Supports both old format (string array) and new format (object array with relevance).
+   * Validates types and relevance ranges (0-3).
+   *
+   * @param query - Query with metadata.expected
+   * @returns Object containing relevanceGrades map and relevantPaths array
+   */
+  private buildRelevanceGrades(query: KiriQuery): {
+    relevanceGrades: Map<string, number>;
+    relevantPaths: string[];
+  } {
+    const relevanceGrades = new Map<string, number>();
+    const relevantPaths: string[] = [];
+
+    const expected = query.metadata?.expected;
+    if (!Array.isArray(expected)) {
+      return { relevanceGrades, relevantPaths };
+    }
+
+    for (const item of expected) {
+      if (typeof item === "object" && "path" in item && "relevance" in item) {
+        const path = item.path;
+        const relevance = item.relevance;
+
+        // Validate types
+        if (typeof path !== "string" || typeof relevance !== "number") {
+          console.warn(
+            `Invalid expected item in query ${query.id}: path=${path}, relevance=${relevance}`
+          );
+          continue;
+        }
+
+        // Validate relevance range (0-3)
+        if (relevance < 0 || relevance > 3) {
+          console.warn(`Relevance out of range (0-3) in query ${query.id}: ${relevance}`);
+          continue;
+        }
+
+        relevanceGrades.set(path, relevance);
+        if (relevance > 0) {
+          relevantPaths.push(path);
+        }
+      } else if (typeof item === "string") {
+        // Backward compatibility: string items are treated as relevance=1
+        relevanceGrades.set(item, 1);
+        relevantPaths.push(item);
+      }
+    }
+
+    return { relevanceGrades, relevantPaths };
   }
 
   private getExpectedPaths(query: KiriQuery): string[] {

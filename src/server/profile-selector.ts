@@ -233,7 +233,35 @@ const PROFILE_PATTERNS: ProfilePattern[] = [
 ];
 
 /**
+ * Pre-compiled patterns for efficient keyword matching.
+ * Each pattern combines all keywords into a single regex with capturing groups.
+ */
+interface CompiledPattern {
+  profile: BoostProfileName;
+  regex: RegExp;
+  weight: number;
+  keywords: string[]; // Keep original keywords for explainProfileSelection
+}
+
+const COMPILED_PATTERNS: CompiledPattern[] = PROFILE_PATTERNS.map((pattern) => {
+  // Escape special regex characters and create alternation pattern
+  const escapedKeywords = pattern.keywords.map((k) =>
+    k.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  );
+  const regexPattern = escapedKeywords.join("|");
+
+  return {
+    profile: pattern.profile,
+    regex: new RegExp(regexPattern, "gi"), // 'g' for global matching, 'i' for case-insensitive
+    weight: pattern.weight,
+    keywords: pattern.keywords,
+  };
+});
+
+/**
  * Analyzes query text and returns the most appropriate boost profile
+ *
+ * Performance: O(n) where n is the number of profiles (uses pre-compiled regex)
  *
  * @param query - Query text to analyze
  * @param fallback - Fallback profile if no match found (default: "default")
@@ -252,18 +280,17 @@ export function selectProfileFromQuery(
   let bestMatch: BoostProfileName = fallback;
   let highestScore = 0;
 
-  for (const pattern of PROFILE_PATTERNS) {
-    let score = 0;
+  for (const pattern of COMPILED_PATTERNS) {
+    // Count all matches using the regex
+    const matches = normalizedQuery.match(pattern.regex);
+    const matchCount = matches ? matches.length : 0;
 
-    for (const keyword of pattern.keywords) {
-      if (normalizedQuery.includes(keyword.toLowerCase())) {
-        score += pattern.weight;
+    if (matchCount > 0) {
+      const score = matchCount * pattern.weight;
+      if (score > highestScore) {
+        highestScore = score;
+        bestMatch = pattern.profile;
       }
-    }
-
-    if (score > highestScore) {
-      highestScore = score;
-      bestMatch = pattern.profile;
     }
   }
 
@@ -281,8 +308,9 @@ export function explainProfileSelection(query: string, selectedProfile: BoostPro
   const normalizedQuery = query.toLowerCase().trim();
   const matchedKeywords: string[] = [];
 
-  for (const pattern of PROFILE_PATTERNS) {
+  for (const pattern of COMPILED_PATTERNS) {
     if (pattern.profile === selectedProfile) {
+      // Use original keywords for more readable explanation
       for (const keyword of pattern.keywords) {
         if (normalizedQuery.includes(keyword.toLowerCase())) {
           matchedKeywords.push(keyword);

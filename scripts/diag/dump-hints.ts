@@ -1,6 +1,6 @@
 import { writeFile } from "node:fs/promises";
-import process from "node:process";
 import { resolve } from "node:path";
+import process from "node:process";
 
 import { DuckDBClient } from "../../src/shared/duckdb.js";
 import { normalizeRepoPath } from "../../src/shared/utils/path.js";

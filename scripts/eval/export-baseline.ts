@@ -1,7 +1,8 @@
 #!/usr/bin/env tsx
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import type { Metrics } from "../../external/assay-kit/src/types/metrics.ts";
+
+import type { Metrics } from "../../external/assay-kit/packages/assay-kit/src/types/metrics.ts";
 
 interface GoldenEvalResult {
   timestamp?: string;

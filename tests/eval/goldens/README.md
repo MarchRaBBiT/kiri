@@ -119,21 +119,22 @@ repos:
 
 #### queries[i]
 
-| Field                  | Type     | Required | Description                                                                                                |
-| ---------------------- | -------- | -------- | ---------------------------------------------------------------------------------------------------------- |
-| `id`                   | string   | ✅       | Unique ID (format: `{category}-{nnn}`)                                                                     |
-| `query`                | string   | ✅       | Search query (5-100 chars recommended)                                                                     |
-| `tool`                 | string   | ❌       | Override default tool                                                                                      |
-| `intent`               | string   | ✅       | 開発意図（自由記述）                                                                                       |
-| `category`             | string   | ✅       | カテゴリ (bugfix/feature/refactor/infra/docs)                                                              |
-| `repo`                 | string   | ❌       | `repos` セクションで定義したリポジトリエイリアス                                                           |
-| `expected.paths`       | string[] | ✅       | 期待される完全一致パス（rank 1-3）                                                                         |
-| `expected.patterns`    | string[] | ❌       | 許容されるglobパターン                                                                                     |
-| `params`               | object   | ❌       | クエリ固有のパラメータ                                                                                     |
-| `tags`                 | string[] | ✅       | タグリスト                                                                                                 |
-| `notes`                | string   | ❌       | 備考・補足説明                                                                                             |
-| `requiresMetadata`     | boolean  | ❌       | ✅ にすると、`why` タグに `metadata:filter` または `boost:metadata` が含まれない限りクエリを失敗扱いにする |
-| `requiresInboundLinks` | boolean  | ❌       | ✅ にすると、`why` タグに `boost:links`（Markdown link ブースト）が出現しない場合に失敗扱いにする          |
+| Field                  | Type     | Required | Description                                                                                                       |
+| ---------------------- | -------- | -------- | ----------------------------------------------------------------------------------------------------------------- |
+| `id`                   | string   | ✅       | Unique ID (format: `{category}-{nnn}`)                                                                            |
+| `query`                | string   | ✅       | Search query (5-100 chars recommended)                                                                            |
+| `tool`                 | string   | ❌       | Override default tool                                                                                             |
+| `intent`               | string   | ✅       | 開発意図（自由記述）                                                                                              |
+| `category`             | string   | ✅       | カテゴリ (bugfix/feature/refactor/infra/docs)                                                                     |
+| `repo`                 | string   | ❌       | `repos` セクションで定義したリポジトリエイリアス                                                                  |
+| `hints`                | string[] | ❌       | **重要**: 検索ヒント。`context_bundle`のartifactsとして渡され、検索結果に強く影響する。`expected`と一致させること |
+| `expected.paths`       | string[] | ✅       | 期待される完全一致パス（rank 1-3）                                                                                |
+| `expected.patterns`    | string[] | ❌       | 許容されるglobパターン                                                                                            |
+| `params`               | object   | ❌       | クエリ固有のパラメータ                                                                                            |
+| `tags`                 | string[] | ✅       | タグリスト                                                                                                        |
+| `notes`                | string   | ❌       | 備考・補足説明                                                                                                    |
+| `requiresMetadata`     | boolean  | ❌       | ✅ にすると、`why` タグに `metadata:filter` または `boost:metadata` が含まれない限りクエリを失敗扱いにする        |
+| `requiresInboundLinks` | boolean  | ❌       | ✅ にすると、`why` タグに `boost:links`（Markdown link ブースト）が出現しない場合に失敗扱いにする                 |
 
 ---
 
@@ -440,6 +441,57 @@ v{YYYY-MM-DD}
 1. そのカテゴリのクエリを5件以上に増やす
 2. スコアリングプロファイルを見直し（docs/search-ranking.md参照）
 
+### Q: NDCGが予想より低い（< 0.50）
+
+**最も多い原因: hintsとexpectedの不一致**
+
+`hints` フィールドに含まれるファイルパスが `expected` に含まれていない場合、検索結果が大きく歪みます。
+
+**診断例:**
+
+```yaml
+# 問題のあるクエリ
+hints:
+  - "PluginRegistry"
+  - "registerPlugin"
+  - "src/cli/commands/evaluate.ts" # ❌ expectedに含まれない！
+expected:
+  - path: "src/plugins/registry.ts"
+    relevance: 3
+  - path: "src/plugins/types.ts"
+    relevance: 2
+```
+
+**結果**: `cli/commands/evaluate.ts` が検索結果の上位に現れ、本当に重要な `plugins/registry.ts` が検索結果に含まれない → NDCG 大幅低下（実例: 0.871 → 0.098）
+
+**対策:**
+
+1. `hints` に含まれる全てのファイルパスが `expected` に含まれているか確認
+2. `expected` の relevance=3, 2 のファイルが `hints` に含まれているか確認
+3. デバッグログを追加して実際の検索結果を確認（詳細: `docs/testing.md#データセット設計のベストプラクティス`）
+
+### Q: 手動検証と自動テストで結果が異なる
+
+**原因**: `hints` が自動テストでのみ `artifacts` として渡される
+
+手動でサーバーを呼び出す場合:
+
+```bash
+curl -X POST http://localhost:19999/rpc \
+  -d '{"method": "context_bundle", "params": {"goal": "query text", "limit": 10}}'
+```
+
+この場合、`artifacts` は渡されないため、`hints` の影響を受けない。
+
+**対策:**
+
+- 自動テストと同じ条件で検証する場合は、デバッグログで実行時の検索結果を確認
+- または、手動でも `artifacts` を渡す:
+  ```bash
+  curl -X POST http://localhost:19999/rpc \
+    -d '{"method": "context_bundle", "params": {"goal": "query text", "limit": 10, "artifacts": {"hints": ["path1", "path2"]}}}'
+  ```
+
 ---
 
 ## 参考資料
@@ -447,4 +499,6 @@ v{YYYY-MM-DD}
 - [Issue #65](https://github.com/CAPHTECH/kiri/issues/65): Golden set導入の背景
 - [docs/overview.md](../../../docs/overview.md): P@10/TFFU目標値の定義
 - [docs/search-ranking.md](../../../docs/search-ranking.md): スコアリングアルゴリズム
+- [docs/testing.md](../../../docs/testing.md#データセット設計のベストプラクティス): データセット設計ガイド（hintsの使い方など）
+- [docs/eval-debug-success-2025-11-18.md](../../../docs/eval-debug-success-2025-11-18.md): hintsの誤りによるNDCG低下の実例とデバッグプロセス
 - [src/eval/metrics.ts](../../../src/eval/metrics.ts): メトリクス計算実装

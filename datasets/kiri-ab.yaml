@@ -3,7 +3,7 @@ schemaVersion: "1.0.0"
 name: "kiri-ab-issue76"
 datasetId: "kiri-ab"
 description: "Expanded A/B dataset emphasizing abstract terminology with concrete hint metadata."
-version: "v2025-11-14-expansion"
+version: "v2025-11-14"
 
 defaultParams:
   k: 10
@@ -21,10 +21,18 @@ queries:
       hints:
         - "loadDatasetFromYAML"
         - "SchemaVersionError"
-        - "external/assay-kit/src/dataset/loader.ts"
+        - "external/assay-kit/packages/assay-kit/src/dataset/loader.ts"
       expected:
-        - "external/assay-kit/src/dataset/loader.ts"
-        - "external/assay-kit/src/dataset/schemas/dataset.schema.ts"
+        - path: "external/assay-kit/packages/assay-kit/src/dataset/loader.ts"
+          relevance: 3
+        - path: "external/assay-kit/packages/assay-kit/src/dataset/schemas/dataset.schema.ts"
+          relevance: 2
+        - path: "src/shared/security/masker.ts"
+          relevance: 1
+        - path: "src/shared/utils/validation.ts"
+          relevance: 1
+        - path: "src/server/fallbacks/degradeController.ts"
+          relevance: 1
   - id: "q-feature"
     text: "plugin system registry initialization"
     goal: "Understand plugin registry bootstrap path"
@@ -36,10 +44,19 @@ queries:
       hints:
         - "PluginRegistry"
         - "registerPlugin"
-        - "external/assay-kit/src/cli/commands/evaluate.ts"
+        - "external/assay-kit/packages/assay-kit/src/plugins/registry.ts"
+        - "external/assay-kit/packages/assay-kit/src/plugins/types.ts"
       expected:
-        - "external/assay-kit/src/runner/types.ts"
-        - "external/assay-kit/src/cli/commands/evaluate.ts"
+        - path: "external/assay-kit/packages/assay-kit/src/plugins/registry.ts"
+          relevance: 3
+        - path: "external/assay-kit/packages/assay-kit/src/plugins/types.ts"
+          relevance: 2
+        - path: "external/assay-kit/packages/assay-kit/src/plugins/logger.ts"
+          relevance: 1
+        - path: "external/assay-kit/packages/assay-kit/src/plugins/dependencies.ts"
+          relevance: 1
+        - path: "external/assay-kit/packages/assay-kit/src/cli/commands/evaluate.ts"
+          relevance: 1
   - id: "q-refactor"
     text: "comparison runner pairing strategy"
     goal: "Inspect comparison runner pairing policy for refactor"
@@ -51,10 +68,10 @@ queries:
       hints:
         - "pairingPolicy"
         - "ComparisonRunner"
-        - "external/assay-kit/src/runner/index.ts"
+        - "external/assay-kit/packages/assay-kit/src/runner/index.ts"
       expected:
-        - "external/assay-kit/src/runner/types.ts"
-        - "external/assay-kit/src/runner/index.ts"
+        - "external/assay-kit/packages/assay-kit/src/runner/types.ts"
+        - "external/assay-kit/packages/assay-kit/src/runner/index.ts"
   - id: "q-testfail"
     text: "mann whitney u mannWhitneyU stats/tests.ts statistical analysis"
     goal: "Recover Mann-Whitney U implementation for regression debugging"
@@ -66,10 +83,10 @@ queries:
       hints:
         - "mannWhitneyUTest"
         - "rankBiserialEffect"
-        - "external/assay-kit/src/stats/mann-whitney.ts"
+        - "external/assay-kit/packages/assay-kit/src/stats/mann-whitney.ts"
       expected:
-        - "external/assay-kit/src/stats/mann-whitney.ts"
-        - "external/assay-kit/src/stats/rank-biserial.ts"
+        - "external/assay-kit/packages/assay-kit/src/stats/mann-whitney.ts"
+        - "external/assay-kit/packages/assay-kit/src/stats/rank-biserial.ts"
   - id: "q-performance"
     text: "orchestrator orchestratorMain runtime/workerPool.ts scheduling latency"
     goal: "Locate orchestrator bottleneck hot path for perf triage"
@@ -81,10 +98,10 @@ queries:
       hints:
         - "orchestratorMain"
         - "workerPoolScheduler"
-        - "external/assay-kit/src/tuning/orchestrator.ts"
+        - "external/assay-kit/packages/assay-kit/src/tuning/orchestrator.ts"
       expected:
-        - "external/assay-kit/src/tuning/orchestrator.ts"
-        - "external/assay-kit/src/runtime/worker-pool.ts"
+        - "external/assay-kit/packages/assay-kit/src/tuning/orchestrator.ts"
+        - "external/assay-kit/packages/assay-kit/src/runtime/worker-pool.ts"
   - id: "q-metrics"
     text: "precision recall calculation utility functions"
     goal: "Find shared precision/recall helpers"
@@ -96,10 +113,10 @@ queries:
       hints:
         - "precisionAtK"
         - "recallAtK"
-        - "external/assay-kit/src/metrics/index.ts"
+        - "external/assay-kit/packages/assay-kit/src/metrics/index.ts"
       expected:
-        - "external/assay-kit/src/metrics/index.ts"
-        - "external/assay-kit/src/types/metrics.ts"
+        - "external/assay-kit/packages/assay-kit/src/metrics/index.ts"
+        - "external/assay-kit/packages/assay-kit/src/types/metrics.ts"
   - id: "q-adapter"
     text: "search adapter interface implementation"
     goal: "Review search adapter contracts"
@@ -111,10 +128,10 @@ queries:
       hints:
         - "SearchAdapter"
         - "MockSearchAdapter"
-        - "external/assay-kit/src/types/adapters.ts"
+        - "external/assay-kit/packages/assay-kit/src/types/adapters.ts"
       expected:
-        - "external/assay-kit/src/types/adapters.ts"
-        - "external/assay-kit/src/adapters/mock.ts"
+        - "external/assay-kit/packages/assay-kit/src/types/adapters.ts"
+        - "external/assay-kit/packages/assay-kit/src/adapters/mock.ts"
   - id: "q-reporter"
     text: "markdown reporter output formatting"
     goal: "Locate markdown reporter implementation"
@@ -126,10 +143,18 @@ queries:
       hints:
         - "MarkdownReporter"
         - "renderMarkdownResult"
-        - "external/assay-kit/src/reporting/markdown.ts"
+        - "external/assay-kit/packages/assay-kit/src/reporting/markdown.ts"
       expected:
-        - "external/assay-kit/src/reporting/markdown.ts"
-        - "external/assay-kit/src/types/adapters.ts"
+        - path: "external/assay-kit/packages/assay-kit/src/reporting/markdown.ts"
+          relevance: 3
+        - path: "external/assay-kit/packages/assay-kit/src/types/adapters.ts"
+          relevance: 2
+        - path: "scripts/assay/report-matrix.ts"
+          relevance: 1
+        - path: "scripts/assay/baseline.ts"
+          relevance: 1
+        - path: "scripts/eval/export-baseline.ts"
+          relevance: 1
   - id: "q-dataset"
     text: "dataset loader yaml parsing"
     goal: "Find dataset loading logic"
@@ -141,10 +166,10 @@ queries:
       hints:
         - "loadDataset"
         - "validateDatasetCommand"
-        - "external/assay-kit/src/cli/commands/validate.ts"
+        - "external/assay-kit/packages/assay-kit/src/cli/commands/validate.ts"
       expected:
-        - "external/assay-kit/src/dataset/loader.ts"
-        - "external/assay-kit/src/cli/commands/validate.ts"
+        - "external/assay-kit/packages/assay-kit/src/dataset/loader.ts"
+        - "external/assay-kit/packages/assay-kit/src/cli/commands/validate.ts"
   - id: "q-integration"
     text: "kiri search adapter http json rpc"
     goal: "Review example KIRI adapter integration"
@@ -158,8 +183,16 @@ queries:
         - "runEvaluation"
         - "external/assay-kit/examples/kiri-integration/src/kiri-adapter.ts"
       expected:
-        - "external/assay-kit/examples/kiri-integration/src/kiri-adapter.ts"
-        - "external/assay-kit/examples/kiri-integration/src/run-evaluation.ts"
+        - path: "external/assay-kit/examples/kiri-integration/src/kiri-adapter.ts"
+          relevance: 3
+        - path: "external/assay-kit/examples/kiri-integration/src/run-evaluation.ts"
+          relevance: 2
+        - path: "tests/integration/daemon.spec.ts"
+          relevance: 1
+        - path: "tests/integration/security.lock.integration.spec.ts"
+          relevance: 1
+        - path: "src/client/start-daemon.ts"
+          relevance: 1
   - id: "q-cli-main"
     text: "assay-kit cli main entrypoint command routing"
     goal: "Locate CLI bootstrap and command registration"
@@ -171,10 +204,10 @@ queries:
       hints:
         - "runCli"
         - "registerCommands"
-        - "external/assay-kit/src/cli/main.ts"
+        - "external/assay-kit/packages/assay-kit/src/cli/main.ts"
       expected:
-        - "external/assay-kit/src/cli/main.ts"
-        - "external/assay-kit/src/cli/commands/types.ts"
+        - "external/assay-kit/packages/assay-kit/src/cli/main.ts"
+        - "external/assay-kit/packages/assay-kit/src/cli/commands/types.ts"
   - id: "q-cli-compare"
     text: "compare command diff reporter"
     goal: "Inspect CLI compare command to review diff output"
@@ -186,10 +219,10 @@ queries:
       hints:
         - "executeCompareCommand"
         - "ComparisonReporter"
-        - "external/assay-kit/src/cli/commands/compare.ts"
+        - "external/assay-kit/packages/assay-kit/src/cli/commands/compare.ts"
       expected:
-        - "external/assay-kit/src/cli/commands/compare.ts"
-        - "external/assay-kit/src/runner/comparison.ts"
+        - "external/assay-kit/packages/assay-kit/src/cli/commands/compare.ts"
+        - "external/assay-kit/packages/assay-kit/src/runner/comparison.ts"
   - id: "q-baseline"
     text: "baseline loader filesystem snapshot"
     goal: "Find baseline loader that reads saved results"
@@ -201,10 +234,10 @@ queries:
       hints:
         - "FilesystemBaselineSource"
         - "loadBaselineRun"
-        - "external/assay-kit/src/baseline/filesystem.ts"
+        - "external/assay-kit/packages/assay-kit/src/baseline/filesystem.ts"
       expected:
-        - "external/assay-kit/src/baseline/filesystem.ts"
-        - "external/assay-kit/src/baseline/index.ts"
+        - "external/assay-kit/packages/assay-kit/src/baseline/filesystem.ts"
+        - "external/assay-kit/packages/assay-kit/src/baseline/index.ts"
   - id: "q-plugin-logger"
     text: "plugin lifecycle logging hooks"
     goal: "Review plugin logger behavior"
@@ -216,10 +249,18 @@ queries:
       hints:
         - "PluginLogger"
         - "logPluginLifecycle"
-        - "external/assay-kit/src/plugins/logger.ts"
+        - "external/assay-kit/packages/assay-kit/src/plugins/logger.ts"
       expected:
-        - "external/assay-kit/src/plugins/logger.ts"
-        - "external/assay-kit/src/plugins/registry.ts"
+        - path: "external/assay-kit/packages/assay-kit/src/plugins/logger.ts"
+          relevance: 3
+        - path: "external/assay-kit/packages/assay-kit/src/plugins/registry.ts"
+          relevance: 2
+        - path: "src/server/observability/tracing.ts"
+          relevance: 1
+        - path: "src/server/observability/metrics.ts"
+          relevance: 1
+        - path: "tests/server/tracing.spec.ts"
+          relevance: 1
   - id: "q-plugin-deps"
     text: "plugin dependency resolver validation"
     goal: "Inspect plugin dependency handling"
@@ -231,10 +272,10 @@ queries:
       hints:
         - "resolvePluginDependencies"
         - "DependencyValidationError"
-        - "external/assay-kit/src/plugins/dependencies.ts"
+        - "external/assay-kit/packages/assay-kit/src/plugins/dependencies.ts"
       expected:
-        - "external/assay-kit/src/plugins/dependencies.ts"
-        - "external/assay-kit/src/plugins/types.ts"
+        - "external/assay-kit/packages/assay-kit/src/plugins/dependencies.ts"
+        - "external/assay-kit/packages/assay-kit/src/plugins/types.ts"
   - id: "q-runner-analysis"
     text: "statistical analyzer significance detection"
     goal: "Study statistical analyzer for comparisons"
@@ -246,10 +287,10 @@ queries:
       hints:
         - "StatisticalAnalyzer"
         - "analyzeSignificance"
-        - "external/assay-kit/src/runner/statistical-analyzer.ts"
+        - "external/assay-kit/packages/assay-kit/src/runner/statistical-analyzer.ts"
       expected:
-        - "external/assay-kit/src/runner/statistical-analyzer.ts"
-        - "external/assay-kit/src/runner/comparison-types.ts"
+        - "external/assay-kit/packages/assay-kit/src/runner/statistical-analyzer.ts"
+        - "external/assay-kit/packages/assay-kit/src/runner/comparison-types.ts"
   - id: "q-runner-summary"
     text: "comparison summary builder rows"
     goal: "Locate summary builder logic"
@@ -261,10 +302,10 @@ queries:
       hints:
         - "buildComparisonSummary"
         - "SummaryRow"
-        - "external/assay-kit/src/runner/summary.ts"
+        - "external/assay-kit/packages/assay-kit/src/runner/summary.ts"
       expected:
-        - "external/assay-kit/src/runner/summary.ts"
-        - "external/assay-kit/src/runner/index.ts"
+        - "external/assay-kit/packages/assay-kit/src/runner/summary.ts"
+        - "external/assay-kit/packages/assay-kit/src/runner/index.ts"
   - id: "q-metrics-latency"
     text: "latency metric percentile calculation"
     goal: "Review latency metric helpers"
@@ -276,10 +317,10 @@ queries:
       hints:
         - "LatencyMetric"
         - "computeLatencyStats"
-        - "external/assay-kit/src/metrics/latency.ts"
+        - "external/assay-kit/packages/assay-kit/src/metrics/latency.ts"
       expected:
-        - "external/assay-kit/src/metrics/latency.ts"
-        - "external/assay-kit/src/metrics/index.ts"
+        - "external/assay-kit/packages/assay-kit/src/metrics/latency.ts"
+        - "external/assay-kit/packages/assay-kit/src/metrics/index.ts"
   - id: "q-metrics-ranking"
     text: "ranking metrics ndcg precision"
     goal: "Inspect ranking metric implementations"
@@ -291,10 +332,10 @@ queries:
       hints:
         - "RankingMetric"
         - "dcg"
-        - "external/assay-kit/src/metrics/ranking.ts"
+        - "external/assay-kit/packages/assay-kit/src/metrics/ranking.ts"
       expected:
-        - "external/assay-kit/src/metrics/ranking.ts"
-        - "external/assay-kit/src/metrics/combined.ts"
+        - "external/assay-kit/packages/assay-kit/src/metrics/ranking.ts"
+        - "external/assay-kit/packages/assay-kit/src/metrics/combined.ts"
   - id: "q-utils-glob"
     text: "glob matcher utility double star"
     goal: "Review glob utility behavior"
@@ -306,10 +347,10 @@ queries:
       hints:
         - "matchGlob"
         - "GlobPattern"
-        - "external/assay-kit/src/utils/glob.ts"
+        - "external/assay-kit/packages/assay-kit/src/utils/glob.ts"
       expected:
-        - "external/assay-kit/src/utils/glob.ts"
-        - "external/assay-kit/src/utils/index.ts"
+        - "external/assay-kit/packages/assay-kit/src/utils/glob.ts"
+        - "external/assay-kit/packages/assay-kit/src/utils/index.ts"
   - id: "q-errors-timeout"
     text: "timeout error retry classification"
     goal: "Inspect timeout error helper"
@@ -321,10 +362,10 @@ queries:
       hints:
         - "TimeoutError"
         - "retryable"
-        - "external/assay-kit/src/errors/timeout-error.ts"
+        - "external/assay-kit/packages/assay-kit/src/errors/timeout-error.ts"
       expected:
-        - "external/assay-kit/src/errors/timeout-error.ts"
-        - "external/assay-kit/src/errors/index.ts"
+        - "external/assay-kit/packages/assay-kit/src/errors/timeout-error.ts"
+        - "external/assay-kit/packages/assay-kit/src/errors/index.ts"
   - id: "q-types-query"
     text: "assay query metadata tags"
     goal: "Locate query type definitions"
@@ -336,10 +377,10 @@ queries:
       hints:
         - "AssayQuery"
         - "QueryMetadata"
-        - "external/assay-kit/src/types/query.ts"
+        - "external/assay-kit/packages/assay-kit/src/types/query.ts"
       expected:
-        - "external/assay-kit/src/types/query.ts"
-        - "external/assay-kit/src/types/index.ts"
+        - "external/assay-kit/packages/assay-kit/src/types/query.ts"
+        - "external/assay-kit/packages/assay-kit/src/types/index.ts"
   - id: "q-types-dataset"
     text: "dataset definition schema types"
     goal: "Review dataset type definitions"
@@ -351,10 +392,10 @@ queries:
       hints:
         - "DatasetDefinition"
         - "QueryResultRow"
-        - "external/assay-kit/src/types/dataset.ts"
+        - "external/assay-kit/packages/assay-kit/src/types/dataset.ts"
       expected:
-        - "external/assay-kit/src/types/dataset.ts"
-        - "external/assay-kit/src/types/index.ts"
+        - "external/assay-kit/packages/assay-kit/src/types/dataset.ts"
+        - "external/assay-kit/packages/assay-kit/src/types/index.ts"
   - id: "q-reporting-json"
     text: "json reporter emit artifacts"
     goal: "Find JSON reporter implementation"
@@ -366,57 +407,57 @@ queries:
       hints:
         - "JsonReporter"
         - "writeJsonReport"
-        - "external/assay-kit/src/reporting/json.ts"
+        - "external/assay-kit/packages/assay-kit/src/reporting/json.ts"
       expected:
-        - "external/assay-kit/src/reporting/json.ts"
-        - "external/assay-kit/src/reporting/index.ts"
+        - "external/assay-kit/packages/assay-kit/src/reporting/json.ts"
+        - "external/assay-kit/packages/assay-kit/src/reporting/index.ts"
 
 expected:
   - id: "q-bugfix"
     reference:
       paths:
-        - "external/assay-kit/src/dataset/loader.ts"
-        - "external/assay-kit/src/dataset/schemas/dataset.schema.ts"
+        - "external/assay-kit/packages/assay-kit/src/dataset/loader.ts"
+        - "external/assay-kit/packages/assay-kit/src/dataset/schemas/dataset.schema.ts"
   - id: "q-feature"
     reference:
       paths:
-        - "external/assay-kit/src/runner/types.ts"
-        - "external/assay-kit/src/cli/commands/evaluate.ts"
+        - "external/assay-kit/packages/assay-kit/src/runner/types.ts"
+        - "external/assay-kit/packages/assay-kit/src/cli/commands/evaluate.ts"
   - id: "q-refactor"
     reference:
       paths:
-        - "external/assay-kit/src/runner/types.ts"
-        - "external/assay-kit/src/runner/index.ts"
+        - "external/assay-kit/packages/assay-kit/src/runner/types.ts"
+        - "external/assay-kit/packages/assay-kit/src/runner/index.ts"
   - id: "q-testfail"
     reference:
       paths:
-        - "external/assay-kit/src/stats/mann-whitney.ts"
-        - "external/assay-kit/src/stats/rank-biserial.ts"
+        - "external/assay-kit/packages/assay-kit/src/stats/mann-whitney.ts"
+        - "external/assay-kit/packages/assay-kit/src/stats/rank-biserial.ts"
   - id: "q-performance"
     reference:
       paths:
-        - "external/assay-kit/src/tuning/orchestrator.ts"
-        - "external/assay-kit/src/runtime/worker-pool.ts"
+        - "external/assay-kit/packages/assay-kit/src/tuning/orchestrator.ts"
+        - "external/assay-kit/packages/assay-kit/src/runtime/worker-pool.ts"
   - id: "q-metrics"
     reference:
       paths:
-        - "external/assay-kit/src/metrics/index.ts"
-        - "external/assay-kit/src/types/metrics.ts"
+        - "external/assay-kit/packages/assay-kit/src/metrics/index.ts"
+        - "external/assay-kit/packages/assay-kit/src/types/metrics.ts"
   - id: "q-adapter"
     reference:
       paths:
-        - "external/assay-kit/src/types/adapters.ts"
-        - "external/assay-kit/src/adapters/mock.ts"
+        - "external/assay-kit/packages/assay-kit/src/types/adapters.ts"
+        - "external/assay-kit/packages/assay-kit/src/adapters/mock.ts"
   - id: "q-reporter"
     reference:
       paths:
-        - "external/assay-kit/src/reporting/markdown.ts"
-        - "external/assay-kit/src/types/adapters.ts"
+        - "external/assay-kit/packages/assay-kit/src/reporting/markdown.ts"
+        - "external/assay-kit/packages/assay-kit/src/types/adapters.ts"
   - id: "q-dataset"
     reference:
       paths:
-        - "external/assay-kit/src/dataset/loader.ts"
-        - "external/assay-kit/src/cli/commands/validate.ts"
+        - "external/assay-kit/packages/assay-kit/src/dataset/loader.ts"
+        - "external/assay-kit/packages/assay-kit/src/cli/commands/validate.ts"
   - id: "q-integration"
     reference:
       paths:
@@ -425,70 +466,70 @@ expected:
   - id: "q-cli-main"
     reference:
       paths:
-        - "external/assay-kit/src/cli/main.ts"
-        - "external/assay-kit/src/cli/commands/types.ts"
+        - "external/assay-kit/packages/assay-kit/src/cli/main.ts"
+        - "external/assay-kit/packages/assay-kit/src/cli/commands/types.ts"
   - id: "q-cli-compare"
     reference:
       paths:
-        - "external/assay-kit/src/cli/commands/compare.ts"
-        - "external/assay-kit/src/runner/comparison.ts"
+        - "external/assay-kit/packages/assay-kit/src/cli/commands/compare.ts"
+        - "external/assay-kit/packages/assay-kit/src/runner/comparison.ts"
   - id: "q-baseline"
     reference:
       paths:
-        - "external/assay-kit/src/baseline/filesystem.ts"
-        - "external/assay-kit/src/baseline/index.ts"
+        - "external/assay-kit/packages/assay-kit/src/baseline/filesystem.ts"
+        - "external/assay-kit/packages/assay-kit/src/baseline/index.ts"
   - id: "q-plugin-logger"
     reference:
       paths:
-        - "external/assay-kit/src/plugins/logger.ts"
-        - "external/assay-kit/src/plugins/registry.ts"
+        - "external/assay-kit/packages/assay-kit/src/plugins/logger.ts"
+        - "external/assay-kit/packages/assay-kit/src/plugins/registry.ts"
   - id: "q-plugin-deps"
     reference:
       paths:
-        - "external/assay-kit/src/plugins/dependencies.ts"
-        - "external/assay-kit/src/plugins/types.ts"
+        - "external/assay-kit/packages/assay-kit/src/plugins/dependencies.ts"
+        - "external/assay-kit/packages/assay-kit/src/plugins/types.ts"
   - id: "q-runner-analysis"
     reference:
       paths:
-        - "external/assay-kit/src/runner/statistical-analyzer.ts"
-        - "external/assay-kit/src/runner/comparison-types.ts"
+        - "external/assay-kit/packages/assay-kit/src/runner/statistical-analyzer.ts"
+        - "external/assay-kit/packages/assay-kit/src/runner/comparison-types.ts"
   - id: "q-runner-summary"
     reference:
       paths:
-        - "external/assay-kit/src/runner/summary.ts"
-        - "external/assay-kit/src/runner/index.ts"
+        - "external/assay-kit/packages/assay-kit/src/runner/summary.ts"
+        - "external/assay-kit/packages/assay-kit/src/runner/index.ts"
   - id: "q-metrics-latency"
     reference:
       paths:
-        - "external/assay-kit/src/metrics/latency.ts"
-        - "external/assay-kit/src/metrics/index.ts"
+        - "external/assay-kit/packages/assay-kit/src/metrics/latency.ts"
+        - "external/assay-kit/packages/assay-kit/src/metrics/index.ts"
   - id: "q-metrics-ranking"
     reference:
       paths:
-        - "external/assay-kit/src/metrics/ranking.ts"
-        - "external/assay-kit/src/metrics/combined.ts"
+        - "external/assay-kit/packages/assay-kit/src/metrics/ranking.ts"
+        - "external/assay-kit/packages/assay-kit/src/metrics/combined.ts"
   - id: "q-utils-glob"
     reference:
       paths:
-        - "external/assay-kit/src/utils/glob.ts"
-        - "external/assay-kit/src/utils/index.ts"
+        - "external/assay-kit/packages/assay-kit/src/utils/glob.ts"
+        - "external/assay-kit/packages/assay-kit/src/utils/index.ts"
   - id: "q-errors-timeout"
     reference:
       paths:
-        - "external/assay-kit/src/errors/timeout-error.ts"
-        - "external/assay-kit/src/errors/index.ts"
+        - "external/assay-kit/packages/assay-kit/src/errors/timeout-error.ts"
+        - "external/assay-kit/packages/assay-kit/src/errors/index.ts"
   - id: "q-types-query"
     reference:
       paths:
-        - "external/assay-kit/src/types/query.ts"
-        - "external/assay-kit/src/types/index.ts"
+        - "external/assay-kit/packages/assay-kit/src/types/query.ts"
+        - "external/assay-kit/packages/assay-kit/src/types/index.ts"
   - id: "q-types-dataset"
     reference:
       paths:
-        - "external/assay-kit/src/types/dataset.ts"
-        - "external/assay-kit/src/types/index.ts"
+        - "external/assay-kit/packages/assay-kit/src/types/dataset.ts"
+        - "external/assay-kit/packages/assay-kit/src/types/index.ts"
   - id: "q-reporting-json"
     reference:
       paths:
-        - "external/assay-kit/src/reporting/json.ts"
-        - "external/assay-kit/src/reporting/index.ts"
+        - "external/assay-kit/packages/assay-kit/src/reporting/json.ts"
+        - "external/assay-kit/packages/assay-kit/src/reporting/index.ts"

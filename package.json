@@ -69,6 +69,8 @@
     "assay:compare": "tsx scripts/assay/run-comparison.ts",
     "assay:compare:help": "tsx scripts/assay/run-comparison.ts --help",
     "assay:baseline": "tsx scripts/assay/baseline.ts",
+    "assay:profile-matrix": "tsx scripts/assay/run-profile-matrix.ts",
+    "assay:report-matrix": "tsx scripts/assay/report-matrix.ts",
     "check": "pnpm run lint && pnpm run test",
     "prepublishOnly": "pnpm run build"
   },

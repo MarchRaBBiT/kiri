@@ -10,10 +10,14 @@ import type {
   Metrics,
   Query,
   Dataset,
-} from "../../external/assay-kit/src/index.ts";
-import { precisionAtK, recallAtK } from "../../external/assay-kit/src/index.ts";
+} from "../../external/assay-kit/packages/assay-kit/src/index.ts";
+import {
+  evaluateRetrieval,
+  type RetrievalMetrics,
+} from "../../external/assay-kit/packages/assay-kit/src/index.ts";
 
 const MAX_QUERY_HINTS = 8;
+const TIMESTAMP_INTERVAL_MS = 10; // Interval between simulated result timestamps for metrics calculation
 
 export interface KiriAdapterConfig {
   limit?: number;
@@ -21,9 +25,14 @@ export interface KiriAdapterConfig {
   boostProfile?: string;
 }
 
+interface ExpectedItem {
+  path: string;
+  relevance: number;
+}
+
 interface KiriQueryMetadata extends Record<string, unknown> {
   hints?: string[];
-  expected?: string[];
+  expected?: (string | ExpectedItem)[]; // Support both old and new formats
 }
 
 type KiriQuery = Query<Record<string, unknown>, KiriQueryMetadata>;
@@ -58,6 +67,21 @@ function normalizeQueryHints(hints?: unknown): string[] {
   return normalized;
 }
 
+/**
+ * Prepares artifacts for the KIRI context_bundle API call.
+ *
+ * **Important**: hints are passed as "artifacts" to the MCP context_bundle tool.
+ * The KIRI server prioritizes files/keywords in artifacts.hints when ranking results.
+ * This can significantly boost certain files in search results.
+ *
+ * **Best Practice**: Ensure hints align with expected results to avoid misleading rankings.
+ * Misaligned hints can cause NDCG to drop significantly (e.g., 0.871 → 0.098, -89%).
+ *
+ * See docs/testing.md#データセット設計のベストプラクティス for details.
+ *
+ * @param metadata - Query metadata containing hints array
+ * @returns Artifacts object with hints array (max 8 items), or undefined if no hints
+ */
 function buildArtifactsFromMetadata(
   metadata?: KiriQueryMetadata
 ): ContextBundleArtifactsPayload | undefined {
@@ -179,17 +203,47 @@ export class KiriSearchAdapter implements SearchAdapter<KiriQuery, Metrics> {
       const k = this.config.limit;
       const expectedPaths = this.getExpectedPaths(query);
 
-      const precision = precisionAtK(retrievedPaths, expectedPaths, k);
-      const recall = recallAtK(retrievedPaths, expectedPaths, k);
+      // Build relevance grades map for NDCG calculation
+      const { relevanceGrades, relevantPaths } = this.buildRelevanceGrades(query);
+
+      // Use evaluateRetrieval() to calculate comprehensive metrics including MRR and NDCG
+      const evaluateOptions: {
+        items: Array<{ id: string; timestampMs: number }>;
+        relevant: string[];
+        k: number;
+        startTimestampMs: number;
+        relevanceGrades?: Map<string, number>;
+      } = {
+        items: retrievedPaths.map((path, i) => ({
+          id: path,
+          timestampMs: startTime + i * TIMESTAMP_INTERVAL_MS,
+        })),
+        relevant: relevanceGrades.size > 0 ? relevantPaths : expectedPaths,
+        k,
+        startTimestampMs: startTime,
+      };
+
+      if (relevanceGrades.size > 0) {
+        evaluateOptions.relevanceGrades = relevanceGrades;
+      }
+
+      const retrievalMetrics: RetrievalMetrics = evaluateRetrieval(evaluateOptions);
 
       return {
         latencyMs,
-        precision,
-        recall,
+        precision: retrievalMetrics.precisionAtK,
+        recall: retrievalMetrics.recallAtK,
         extras: {
           resultCount: retrievedPaths.length,
           serverPort: this.port,
           k,
+          // Include additional IR metrics
+          mrr: retrievalMetrics.mrr,
+          map: retrievalMetrics.map,
+          hitsAtK: retrievalMetrics.hitsAtK,
+          f1: retrievalMetrics.f1,
+          tffu: retrievalMetrics.timeToFirstUseful,
+          ndcg: retrievalMetrics.ndcg ?? 0, // Add NDCG (default to 0 if undefined)
         },
       };
     } catch (error) {
@@ -363,11 +417,74 @@ export class KiriSearchAdapter implements SearchAdapter<KiriQuery, Metrics> {
     return [];
   }
 
+  /**
+   * Builds relevance grades map from query metadata for NDCG calculation.
+   *
+   * Supports both old format (string array) and new format (object array with relevance).
+   * Validates types and relevance ranges (0-3).
+   *
+   * @param query - Query with metadata.expected
+   * @returns Object containing relevanceGrades map and relevantPaths array
+   */
+  private buildRelevanceGrades(query: KiriQuery): {
+    relevanceGrades: Map<string, number>;
+    relevantPaths: string[];
+  } {
+    const relevanceGrades = new Map<string, number>();
+    const relevantPaths: string[] = [];
+
+    const expected = query.metadata?.expected;
+    if (!Array.isArray(expected)) {
+      return { relevanceGrades, relevantPaths };
+    }
+
+    for (const item of expected) {
+      if (typeof item === "object" && "path" in item && "relevance" in item) {
+        const path = item.path;
+        const relevance = item.relevance;
+
+        // Validate types
+        if (typeof path !== "string" || typeof relevance !== "number") {
+          console.warn(
+            `Invalid expected item in query ${query.id}: path=${path}, relevance=${relevance}`
+          );
+          continue;
+        }
+
+        // Validate relevance range (0-3)
+        if (relevance < 0 || relevance > 3) {
+          console.warn(`Relevance out of range (0-3) in query ${query.id}: ${relevance}`);
+          continue;
+        }
+
+        relevanceGrades.set(path, relevance);
+        if (relevance > 0) {
+          relevantPaths.push(path);
+        }
+      } else if (typeof item === "string") {
+        // Backward compatibility: string items are treated as relevance=1
+        relevanceGrades.set(item, 1);
+        relevantPaths.push(item);
+      }
+    }
+
+    return { relevanceGrades, relevantPaths };
+  }
+
   private getExpectedPaths(query: KiriQuery): string[] {
     const expected = query.metadata?.expected;
-    if (Array.isArray(expected)) {
-      return expected as string[];
+    if (!Array.isArray(expected)) {
+      return [];
     }
-    return [];
+
+    const paths: string[] = [];
+    for (const item of expected) {
+      if (typeof item === "string") {
+        paths.push(item);
+      } else if (typeof item === "object" && "path" in item) {
+        paths.push(item.path as string);
+      }
+    }
+    return paths;
   }
 }

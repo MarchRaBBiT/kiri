@@ -73,29 +73,29 @@ function validateWeights(weights: unknown, profileName: string): ScoringWeights 
     }
   }
 
-  if (obj.docPenaltyMultiplier > 1) {
+  if ((obj.docPenaltyMultiplier as number) > 1) {
     throw new Error(
       `Profile '${profileName}' has docPenaltyMultiplier > 1 (${obj.docPenaltyMultiplier}). Penalties must be ≤ 1.`
     );
   }
-  if (obj.configPenaltyMultiplier > 1) {
+  if ((obj.configPenaltyMultiplier as number) > 1) {
     throw new Error(
       `Profile '${profileName}' has configPenaltyMultiplier > 1 (${obj.configPenaltyMultiplier}). Penalties must be ≤ 1.`
     );
   }
-  if (obj.implBoostMultiplier < 1) {
+  if ((obj.implBoostMultiplier as number) < 1) {
     throw new Error(
       `Profile '${profileName}' has implBoostMultiplier < 1 (${obj.implBoostMultiplier}). Boost multipliers must be ≥ 1.`
     );
   }
 
   const totalWeight =
-    obj.textMatch +
-    obj.pathMatch +
-    obj.editingPath +
-    obj.dependency +
-    obj.proximity +
-    obj.structural;
+    (obj.textMatch as number) +
+    (obj.pathMatch as number) +
+    (obj.editingPath as number) +
+    (obj.dependency as number) +
+    (obj.proximity as number) +
+    (obj.structural as number);
 
   if (totalWeight < 2 || totalWeight > 15) {
     console.warn(

@@ -7,6 +7,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2025-11-19
+
+### ⚠️ BREAKING CHANGES
+
+**Scoring system migrated from absolute penalties to multiplicative penalties** ([#35](https://github.com/CAPHTECH/kiri/issues/35))
+
+This is a fundamental change to how file penalties are calculated and applied. The new model:
+
+- Replaces absolute penalties (`-100`) with multiplicative penalties (e.g., `×0.01` for 99% reduction)
+- Makes all penalties composable and predictable when combined with boost profiles
+- Introduces a score threshold filter (`SCORE_FILTER_THRESHOLD`) to remove extremely low-scored files
+
+#### Migration Guide
+
+**For users with custom scoring profiles:**
+
+Add the following three new fields to your `scoring-profiles.yml`:
+
+```yaml
+your-profile:
+  # ... existing fields ...
+  blacklistPenaltyMultiplier: 0.01 # 99% reduction for blacklisted directories
+  testPenaltyMultiplier: 0.02 # 98% reduction for test files
+  lockPenaltyMultiplier: 0.01 # 99% reduction for lock files
+```
+
+If these fields are omitted, default values (shown above) will be automatically applied for backward compatibility.
+
+**For programmatic users:**
+
+The `ScoringWeights` interface now includes three additional required fields. However, the system provides default values if they are missing, so existing code will continue to work without modification.
+
+#### New Environment Variable
+
+- **`KIRI_SCORE_THRESHOLD`** (default: `0.05`): Controls the minimum score threshold for including files in results. Files with scores below this value (after all multiplicative penalties) are filtered out. Adjust this if you need to include more heavily penalized files.
+
+#### Evaluation Results
+
+Comparison between absolute penalty model (v0.10.0) and multiplicative penalty model (v1.0.0):
+
+| Metric           | v0.10.0    | v1.0.0     | Change                  |
+| ---------------- | ---------- | ---------- | ----------------------- |
+| Success Rate     | 100% (5/5) | 100% (5/5) | ✅ Maintained           |
+| Avg Latency      | 181ms      | 175ms      | ✅ **-3.3%** (improved) |
+| Context Coverage | 85%        | 85%        | ✅ Maintained           |
+| Path Overlap     | 72%        | 72%        | ✅ Maintained           |
+
+**Result**: The new model maintains search quality while slightly improving performance.
+
+### Added
+
+- **Multiplicative penalty system** ([#35](https://github.com/CAPHTECH/kiri/issues/35))
+  - New `ScoringWeights` fields: `blacklistPenaltyMultiplier`, `testPenaltyMultiplier`, `lockPenaltyMultiplier`
+  - Score filtering threshold (`SCORE_FILTER_THRESHOLD`) to remove files with `score < 0.05`
+  - Configurable via `KIRI_SCORE_THRESHOLD` environment variable
+  - Backward compatible: default values provided for new fields
+- **Low-value file penalties restored**
+  - Syntax grammar files (`.tmlanguage`, `.plist`)
+  - Performance data dumps (`.perf.data`)
+  - Legal/inventory files (`ThirdPartyNotices`, `cgmanifest.json`)
+  - Migration files (`migrate`, `migration` in path)
+  - All penalized with `configPenaltyMultiplier` (95% reduction)
+
+### Changed
+
+- **Scoring model fundamentals**
+  - Absolute penalties (`-100`) → Multiplicative penalties (`×0.01` for blacklist, `×0.02` for tests, `×0.01` for locks)
+  - Blacklisted directories now use `blacklistPenaltyMultiplier` instead of hard-coded `-100`
+  - Test files use `testPenaltyMultiplier` instead of hard-coded `×0.2`
+  - All penalties are now composable and work predictably with boost profiles
+- **Profile-specific behavior removed**
+  - Eliminated special case for `boost_profile="docs"` in `applyAdditiveFilePenalties()`
+  - Simplified control flow: penalties are always multiplicative, profile adjustments are declarative
+  - `denylistOverrides` in `BoostProfileConfig` now handles profile-specific directory allowlists
+
+## [0.10.1] - Unreleased
+
 ### Added
 
 - Re-architected `context_bundle` のアーティファクトヒント処理をフェーズ化し、path/directory/dependency/substring それぞれに why タグを残すようにした。`KIRI_HINT_LOG=1` 時のみ `hint_expansion` に展開ログを保存し、`dictionary:hint:*` で辞書経由の昇格を可視化。

@@ -197,48 +197,152 @@ filesSearch({ query: "authentication", boost_profile: "none" });
 // → ファイルタイプ関係なく、BM25スコアのみ
 ```
 
-### ブラックリスト動作（v0.9.0+）
+### 乗算ペナルティモデル（v1.0.0+）
 
-以下のディレクトリはデフォルトプロファイルで強いペナルティ（score = -100）が適用されます:
+**v1.0.0で絶対ペナルティ(`-100`)から乗算ペナルティ(`×0.01`など)に移行しました。**
 
-| ディレクトリ        | `"default"` プロファイル | `"docs"` プロファイル | `"balanced"` プロファイル (v0.9.10+) | 説明                                     |
-| ------------------- | ------------------------ | --------------------- | ------------------------------------ | ---------------------------------------- |
-| `docs/`             | ❌ score = -100          | ✅ **除外可能**       | ✅ **除外可能**                      | ドキュメント専用ディレクトリ             |
-| `tests/`, `test/`   | ❌ score = -100          | ❌ score = -100       | ❌ score = -100                      | テストファイル（常にペナルティ）         |
-| `node_modules/`     | ❌ score = -100          | ❌ score = -100       | ❌ score = -100                      | 依存関係（常にペナルティ）               |
-| `.git/`, `.cursor/` | ❌ score = -100          | ❌ score = -100       | ❌ score = -100                      | メタデータディレクトリ（常にペナルティ） |
-| `dist/`, `build/`   | ❌ score = -100          | ❌ score = -100       | ❌ score = -100                      | ビルド成果物（常にペナルティ）           |
-| `coverage/`, `tmp/` | ❌ score = -100          | ❌ score = -100       | ❌ score = -100                      | 一時ファイル（常にペナルティ）           |
+この変更により、ペナルティが予測可能で組み合わせ可能になり、boost_profileとの相互作用が明確になりました。
 
-**重要な動作変更:**
+#### スコアフィルタリング
 
-- ✅ **v0.9.0**: `boost_profile: "docs"` を指定すると `docs/` ディレクトリのブラックリストが解除される
-- ✅ **v0.9.10**: `boost_profile: "balanced"` でも `docs/` ディレクトリが検索可能になる
-- 他のブラックリストディレクトリ（`tests/`、`node_modules/` など）は常にペナルティが適用されます
+乗算ペナルティ適用後、スコアが非常に低いファイル（デフォルト: `< 0.05`）は結果から除外されます:
+
+```typescript
+// 環境変数で調整可能
+export KIRI_SCORE_THRESHOLD=0.1  // より厳しいフィルタリング（デフォルト: 0.05）
+```
+
+#### ペナルティ係数（ScoringWeights）
+
+`config/scoring-profiles.yml` で各プロファイルごとに設定可能:
+
+| フィールド                   | デフォルト値 | 説明                                                          |
+| ---------------------------- | ------------ | ------------------------------------------------------------- |
+| `blacklistPenaltyMultiplier` | `0.01`       | ブラックリストディレクトリに99%削減（スコア×0.01）            |
+| `testPenaltyMultiplier`      | `0.02`       | テストファイルに98%削減（スコア×0.02）                        |
+| `lockPenaltyMultiplier`      | `0.01`       | Lockファイル（package-lock.jsonなど）に99%削減                |
+| `configPenaltyMultiplier`    | `0.05`       | 設定ファイルに95%削減（構造的ノイズが多いファイル用）         |
+| `docPenaltyMultiplier`       | `0.5`        | ドキュメントファイル（\*.md）に50%削減（defaultプロファイル） |
+| `implBoostMultiplier`        | `1.3`        | 実装ファイル（src/\*.ts）に30%ブースト                        |
+
+**ペナルティ適用の例:**
+
+```typescript
+// ファイル: node_modules/lodash/index.js
+// 基本スコア: 5.0
+// blacklistPenaltyMultiplier: 0.01
+// 最終スコア: 5.0 × 0.01 = 0.05 → フィルタリングされる（threshold未満）
+
+// ファイル: tests/unit/auth.spec.ts
+// 基本スコア: 4.0
+// testPenaltyMultiplier: 0.02
+// 最終スコア: 4.0 × 0.02 = 0.08 → フィルタリングされる
+
+// ファイル: src/auth/login.ts
+// 基本スコア: 4.0
+// implBoostMultiplier: 1.3
+// 最終スコア: 4.0 × 1.3 = 5.2 → 上位にランク
+```
+
+#### ブラックリスト動作
+
+以下のディレクトリには強い乗算ペナルティ（`blacklistPenaltyMultiplier`）が適用されます:
+
+| ディレクトリ        | デフォルト係数    | `"docs"`プロファイル | `"balanced"`プロファイル | 説明                                     |
+| ------------------- | ----------------- | -------------------- | ------------------------ | ---------------------------------------- |
+| `docs/`             | `×0.01` (99%削減) | ✅ **除外免除**      | ✅ **除外免除**          | ドキュメント専用ディレクトリ             |
+| `tests/`, `test/`   | `×0.01` (99%削減) | `×0.01` (99%削減)    | `×0.01` (99%削減)        | テストファイル（常にペナルティ）         |
+| `node_modules/`     | `×0.01` (99%削減) | `×0.01` (99%削減)    | `×0.01` (99%削減)        | 依存関係（常にペナルティ）               |
+| `.git/`, `.cursor/` | `×0.01` (99%削減) | `×0.01` (99%削減)    | `×0.01` (99%削減)        | メタデータディレクトリ（常にペナルティ） |
+| `dist/`, `build/`   | `×0.01` (99%削減) | `×0.01` (99%削減)    | `×0.01` (99%削減)        | ビルド成果物（常にペナルティ）           |
+| `coverage/`, `tmp/` | `×0.01` (99%削減) | `×0.01` (99%削減)    | `×0.01` (99%削減)        | 一時ファイル（常にペナルティ）           |
+
+**重要な動作変更（v1.0.0）:**
+
+- ✅ **乗算ペナルティ**: 絶対ペナルティ(`-100`)の代わりに乗算係数を使用
+- ✅ **組み合わせ可能**: 複数のペナルティ/ブーストが予測可能に組み合わさる
+- ✅ **フィルタリング**: スコア < `KIRI_SCORE_THRESHOLD`（デフォルト: 0.05）のファイルは除外
+- ✅ **プロファイル免除**: `denylistOverrides`でプロファイルごとにディレクトリ免除を制御
 
 **使用例:**
 
 ```typescript
-// デフォルトプロファイル: docs/ はブラックリスト
+// デフォルトプロファイル: docs/ に99%ペナルティ適用
 contextBundle({ goal: "feature guide" });
-// → docs/guide.md は除外される（score = -100）
+// → docs/guide.md のスコアは 0.01倍になり、多くの場合フィルタリングされる
 
-// docsプロファイル: docs/ のブラックリストを解除
+// docsプロファイル: docs/ の免除
 contextBundle({ goal: "feature guide", boost_profile: "docs" });
-// → docs/guide.md が正常にランク付けされる（✅ v0.9.0で修正）
+// → docs/guide.md が正常にランク付けされる
+
+// カスタムしきい値: より寛容に
+// export KIRI_SCORE_THRESHOLD=0.001
+contextBundle({ goal: "feature guide" });
+// → 低スコアのファイルも含まれるようになる
 ```
 
 ## スコア計算例
 
-`context_bundle` で使用される総合スコアは以下の要素から計算されます:
+`context_bundle` で使用される総合スコアは以下の3フェーズで計算されます（v1.0.0+）:
+
+### フェーズ1: 加算的スコアリング（Additive Scoring）
 
 ```
-score = textMatch * (keyword_matches + phrase_matches * 2.0)  -- テキストマッチ（フレーズは2倍）
-      + pathMatch * path_boost                                 -- パスベースブースト
-      + editingPath * editing_boost                            -- 編集中ファイル
-      + dependency * dep_score                                 -- 依存関係
-      + proximity * proximity_score                            -- 近接度（同ディレクトリ）
-      + structural * semantic_sim                              -- 構造的類似度（LSHベース）
+baseScore = textMatch * (keyword_matches + phrase_matches * 2.0)  -- テキストマッチ（フレーズは2倍）
+          + pathMatch * path_boost                                 -- パスベースブースト
+          + editingPath * editing_boost                            -- 編集中ファイル
+          + dependency * dep_score                                 -- 依存関係
+          + proximity * proximity_score                            -- 近接度（同ディレクトリ）
+          + structural * semantic_sim                              -- 構造的類似度（LSHベース）
+```
+
+### フェーズ2: 乗算的ペナルティ/ブースト（Multiplicative Penalties/Boosts）
+
+```
+scoreMultiplier = 1.0
+if (blacklisted directory):
+    scoreMultiplier *= blacklistPenaltyMultiplier  -- 例: ×0.01 (99%削減)
+else if (test file):
+    scoreMultiplier *= testPenaltyMultiplier        -- 例: ×0.02 (98%削減)
+else if (lock file):
+    scoreMultiplier *= lockPenaltyMultiplier        -- 例: ×0.01 (99%削減)
+else if (doc file):
+    scoreMultiplier *= docPenaltyMultiplier         -- 例: ×0.5 (50%削減、defaultプロファイル)
+else if (impl file):
+    scoreMultiplier *= implBoostMultiplier          -- 例: ×1.3 (30%ブースト)
+```
+
+### フェーズ3: 最終スコアとフィルタリング
+
+```
+finalScore = baseScore * scoreMultiplier
+
+if (finalScore < SCORE_FILTER_THRESHOLD):
+    exclude from results  -- デフォルト: < 0.05
+```
+
+**例:**
+
+```typescript
+// ファイル: src/auth/login.ts
+// baseScore: 4.0 (テキストマッチ + パスマッチ)
+// implBoostMultiplier: 1.3
+// finalScore: 4.0 × 1.3 = 5.2 ✅ 上位にランク
+
+// ファイル: docs/setup.md
+// baseScore: 3.5
+// docPenaltyMultiplier: 0.5 (defaultプロファイル)
+// finalScore: 3.5 × 0.5 = 1.75 ✅ ランクは下がるが含まれる
+
+// ファイル: tests/auth.spec.ts
+// baseScore: 4.0
+// testPenaltyMultiplier: 0.02
+// finalScore: 4.0 × 0.02 = 0.08 ✅ わずかに閾値を超えて含まれる
+
+// ファイル: node_modules/lodash/index.js
+// baseScore: 2.0
+// blacklistPenaltyMultiplier: 0.01
+// finalScore: 2.0 × 0.01 = 0.02 ❌ 閾値未満で除外
 ```
 
 ### スコアリングプロファイル

@@ -216,6 +216,8 @@ const METADATA_FILTER_MATCH_WEIGHT = 0.1;
 const METADATA_HINT_BONUS = 0.25;
 const INBOUND_LINK_WEIGHT = 0.2;
 
+// TODO: Issue - グローバルミュータブル変数による並行処理の競合状態リスク
+// これらの変数はServerContextに移動し、起動時に一度だけチェックするべき
 let metadataTablesMissing = false;
 let linkTableMissing = false;
 
@@ -680,6 +682,7 @@ const HINT_DICTIONARY_LIMIT = Math.max(
   0,
   Number.parseInt(process.env.KIRI_HINT_DICTIONARY_LIMIT ?? "2", 10)
 );
+// TODO: Issue - グローバルミュータブル変数による並行処理の競合状態リスク
 let hintLogTableMissing = false;
 let hintDictionaryTableMissing = false;
 
@@ -2069,8 +2072,12 @@ function parseInlineMetadataFilters(query: string): {
 
 function buildMetadataFilterConditions(
   filters: MetadataFilter[],
-  alias = "f"
+  alias: "f" | "mk" = "f"
 ): Array<{ sql: string; params: unknown[] }> {
+  // SQL Injection対策: aliasをリテラル型で制限し、念のため検証
+  if (!["f", "mk"].includes(alias)) {
+    throw new Error(`Invalid SQL alias: ${alias}`);
+  }
   const clauses: Array<{ sql: string; params: unknown[] }> = [];
   for (const filter of filters) {
     if (!filter.key || filter.values.length === 0) {

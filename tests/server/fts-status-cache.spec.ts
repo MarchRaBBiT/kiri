@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import { ensureBaseSchema, ensureRepoMetaColumns } from "../../src/indexer/schema.js";
 import { type ServerContext } from "../../src/server/context.js";
-import { filesSearch } from "../../src/server/handlers.js";
+import { checkTableAvailability, filesSearch } from "../../src/server/handlers.js";
 import { WarningManager } from "../../src/server/rpc.js";
 import { createServerServices } from "../../src/server/services/index.js";
 import { DuckDBClient } from "../../src/shared/duckdb.js";
@@ -32,6 +32,7 @@ describe("FTS status cache invalidation", () => {
          VALUES (1, 'src/hello.ts', 'blob-1', '.ts', 'typescript', FALSE, CURRENT_TIMESTAMP)`
       );
 
+      const tableAvailability = await checkTableAvailability(db);
       const warningManager = new WarningManager();
       const context: ServerContext = {
         db,
@@ -44,6 +45,7 @@ describe("FTS status cache invalidation", () => {
           anyDirty: false,
           lastChecked: Date.now(),
         },
+        tableAvailability,
         warningManager,
       };
 

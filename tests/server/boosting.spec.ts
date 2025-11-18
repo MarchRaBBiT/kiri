@@ -6,7 +6,12 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { runIndexer } from "../../src/indexer/cli.js";
 import { ServerContext } from "../../src/server/context.js";
-import { contextBundle, filesSearch, resolveRepoId } from "../../src/server/handlers.js";
+import {
+  checkTableAvailability,
+  contextBundle,
+  filesSearch,
+  resolveRepoId,
+} from "../../src/server/handlers.js";
 import { WarningManager } from "../../src/server/rpc.js";
 import { createServerServices } from "../../src/server/services/index.js";
 import { DuckDBClient } from "../../src/shared/duckdb.js";
@@ -47,10 +52,12 @@ describe("Unified Boosting Logic (v0.7.0+)", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
+    const tableAvailability = await checkTableAvailability(db);
     const context: ServerContext = {
       db,
       repoId,
       services: createServerServices(db),
+      tableAvailability,
       warningManager: new WarningManager(),
     };
 
@@ -102,10 +109,12 @@ describe("Unified Boosting Logic (v0.7.0+)", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
+    const tableAvailability = await checkTableAvailability(db);
     const context: ServerContext = {
       db,
       repoId,
       services: createServerServices(db),
+      tableAvailability,
       warningManager: new WarningManager(),
     };
 
@@ -159,10 +168,12 @@ describe("Unified Boosting Logic (v0.7.0+)", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
+    const tableAvailability = await checkTableAvailability(db);
     const context: ServerContext = {
       db,
       repoId,
       services: createServerServices(db),
+      tableAvailability,
       warningManager: new WarningManager(),
     };
 
@@ -218,10 +229,12 @@ describe("Unified Boosting Logic (v0.7.0+)", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
+    const tableAvailability = await checkTableAvailability(db);
     const context: ServerContext = {
       db,
       repoId,
       services: createServerServices(db),
+      tableAvailability,
       warningManager: new WarningManager(),
     };
 
@@ -258,10 +271,12 @@ describe("Unified Boosting Logic (v0.7.0+)", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
+    const tableAvailability = await checkTableAvailability(db);
     const context: ServerContext = {
       db,
       repoId,
       services: createServerServices(db),
+      tableAvailability,
       warningManager: new WarningManager(),
     };
 
@@ -295,10 +310,12 @@ describe("Unified Boosting Logic (v0.7.0+)", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
+    const tableAvailability = await checkTableAvailability(db);
     const context: ServerContext = {
       db,
       repoId,
       services: createServerServices(db),
+      tableAvailability,
       warningManager: new WarningManager(),
     };
 
@@ -350,10 +367,12 @@ describe("Unified Boosting Logic (v0.7.0+)", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
+    const tableAvailability = await checkTableAvailability(db);
     const context: ServerContext = {
       db,
       repoId,
       services: createServerServices(db),
+      tableAvailability,
       warningManager: new WarningManager(),
     };
 
@@ -397,10 +416,12 @@ describe("Unified Boosting Logic (v0.7.0+)", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
+    const tableAvailability = await checkTableAvailability(db);
     const context: ServerContext = {
       db,
       repoId,
       services: createServerServices(db),
+      tableAvailability,
       warningManager: new WarningManager(),
     };
 
@@ -440,10 +461,12 @@ describe("Unified Boosting Logic (v0.7.0+)", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
+    const tableAvailability = await checkTableAvailability(db);
     const context: ServerContext = {
       db,
       repoId,
       services: createServerServices(db),
+      tableAvailability,
       warningManager: new WarningManager(),
     };
 
@@ -490,10 +513,12 @@ describe("Unified Boosting Logic (v0.7.0+)", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
+    const tableAvailability = await checkTableAvailability(db);
     const context: ServerContext = {
       db,
       repoId,
       services: createServerServices(db),
+      tableAvailability,
       warningManager: new WarningManager(),
     };
 
@@ -553,10 +578,12 @@ describe("Unified Boosting Logic (v0.7.0+)", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
+    const tableAvailability = await checkTableAvailability(db);
     const context: ServerContext = {
       db,
       repoId,
       services: createServerServices(db),
+      tableAvailability,
       warningManager: new WarningManager(),
     };
 
@@ -601,10 +628,12 @@ describe("Unified Boosting Logic (v0.7.0+)", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
+    const tableAvailability = await checkTableAvailability(db);
     const context: ServerContext = {
       db,
       repoId,
       services: createServerServices(db),
+      tableAvailability,
       warningManager: new WarningManager(),
     };
 
@@ -646,10 +675,12 @@ describe("Unified Boosting Logic (v0.7.0+)", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
+    const tableAvailability = await checkTableAvailability(db);
     const context: ServerContext = {
       db,
       repoId,
       services: createServerServices(db),
+      tableAvailability,
       warningManager: new WarningManager(),
     };
 
@@ -700,10 +731,12 @@ describe("Unified Boosting Logic (v0.7.0+)", () => {
     cleanupTargets.push({ dispose: async () => await db.close() });
 
     const repoId = await resolveRepoId(db, repo.path);
+    const tableAvailability = await checkTableAvailability(db);
     const context: ServerContext = {
       db,
       repoId,
       services: createServerServices(db),
+      tableAvailability,
       warningManager: new WarningManager(),
     };
 

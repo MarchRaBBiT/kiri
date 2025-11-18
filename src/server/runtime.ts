@@ -7,7 +7,7 @@ import { ensureDbParentDir, normalizeDbPath, getRepoPathCandidates } from "../sh
 import { bootstrapServer, type BootstrapOptions } from "./bootstrap.js";
 import { createServerContext, FtsStatusCache, ServerContext } from "./context.js";
 import { DegradeController } from "./fallbacks/degradeController.js";
-import { resolveRepoId } from "./handlers.js";
+import { checkTableAvailability, resolveRepoId } from "./handlers.js";
 import { MetricsRegistry } from "./observability/metrics.js";
 import { WarningManager } from "./rpc.js";
 import { createServerServices } from "./services/index.js";
@@ -102,6 +102,9 @@ export async function createServerRuntime(options: CommonServerOptions): Promise
 
     const warningManager = new WarningManager();
 
+    // Phase 4: Check table availability at startup
+    const tableAvailability = await checkTableAvailability(db);
+
     const context = createServerContext({
       db,
       repoId,
@@ -110,6 +113,7 @@ export async function createServerRuntime(options: CommonServerOptions): Promise
         fts: hasFTS,
       },
       ftsStatusCache: ftsStatus,
+      tableAvailability,
       warningManager,
     });
 

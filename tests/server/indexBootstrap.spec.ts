@@ -84,6 +84,91 @@ describe("ensureDatabaseIndexed", () => {
       );
       expect(metadataRecords[0]?.count).toBeGreaterThan(0);
 
+      // Verify document_metadata_kv table was created
+      const kvTables = await dbClient2.all<{ table_name: string }>(
+        `SELECT table_name FROM duckdb_tables() WHERE table_name = 'document_metadata_kv'`
+      );
+      expect(kvTables.length).toBe(1);
+
+      // Verify index was created
+      const indexes = await dbClient2.all<{ index_name: string }>(
+        `SELECT index_name FROM duckdb_indexes() WHERE index_name = 'idx_document_metadata_key'`
+      );
+      expect(indexes.length).toBe(1);
+
+      // Verify kv data was extracted
+      const kvRecords = await dbClient2.all<{ count: number }>(
+        `SELECT COUNT(*) as count FROM document_metadata_kv`
+      );
+      expect(kvRecords[0]?.count).toBeGreaterThan(0);
+
+      await dbClient2.close();
+    } finally {
+      await repo.cleanup();
+      await db.cleanup();
+    }
+  });
+
+  it("skips reindex when files exist and metadata is already populated", async () => {
+    const { DuckDBClient } = await import("../../src/shared/duckdb.js");
+    const { ensureBaseSchema, ensureRepoMetaColumns, ensureDocumentMetadataTables } = await import(
+      "../../src/indexer/schema.js"
+    );
+
+    const repo = await createTempRepo({
+      "docs/README.md": "---\ntitle: Test\n---\n# Hello\n",
+    });
+    const db = await createTempDbPath();
+
+    try {
+      // Step 1: Create a database with both files AND populated document_metadata (simulates migrated version)
+      const dbClient = await DuckDBClient.connect({ databasePath: db.path });
+      await ensureBaseSchema(dbClient);
+      await ensureRepoMetaColumns(dbClient);
+      await ensureDocumentMetadataTables(dbClient);
+
+      // Insert a file record
+      await dbClient.run(`INSERT INTO repo (root) VALUES (?)`, [repo.path]);
+      const repoResult = await dbClient.all<{ id: number }>(`SELECT id FROM repo WHERE root = ?`, [
+        repo.path,
+      ]);
+      const repoId = repoResult[0]?.id;
+      expect(repoId).toBeDefined();
+
+      await dbClient.run(
+        `INSERT INTO file (repo_id, path, blob_hash, ext, lang, is_binary, mtime) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [repoId, "docs/README.md", "test-hash", ".md", "markdown", false, new Date().toISOString()]
+      );
+
+      // Insert document_metadata record (simulates already migrated state)
+      await dbClient.run(
+        `INSERT INTO document_metadata (repo_id, path, source, data) VALUES (?, ?, ?, ?)`,
+        [repoId, "docs/README.md", "front_matter", JSON.stringify({ title: "Test" })]
+      );
+
+      await dbClient.close();
+
+      // Step 2: Run ensureDatabaseIndexed - should NOT trigger reindex since metadata is populated
+      const startTime = Date.now();
+      const result = await ensureDatabaseIndexed(repo.path, db.path, false, false);
+      const duration = Date.now() - startTime;
+
+      expect(result).toBe(true);
+      // Should complete quickly (< 1000ms) since no reindexing occurred
+      expect(duration).toBeLessThan(1000);
+
+      // Step 3: Verify no reindex occurred by checking the file count hasn't changed
+      const dbClient2 = await DuckDBClient.connect({ databasePath: db.path });
+      const fileCount = await dbClient2.all<{ count: number }>(
+        `SELECT COUNT(*) as count FROM file`
+      );
+      expect(fileCount[0]?.count).toBe(1); // Still just 1 file, no reindexing added more
+
+      const metadataCount = await dbClient2.all<{ count: number }>(
+        `SELECT COUNT(*) as count FROM document_metadata`
+      );
+      expect(metadataCount[0]?.count).toBe(1); // Still just 1 record, no reindexing added more
+
       await dbClient2.close();
     } finally {
       await repo.cleanup();

@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   ensureBaseSchema,
@@ -559,14 +559,15 @@ describe("isDocumentMetadataEmpty", () => {
   });
 
   it("returns true when document_metadata table exists but is empty", async () => {
-    // Create the document_metadata table
+    // Create the document_metadata table (matching actual schema)
     await db.run(`
       CREATE TABLE document_metadata (
-        id INTEGER PRIMARY KEY,
-        repo_id INTEGER NOT NULL,
-        path TEXT NOT NULL,
-        source TEXT NOT NULL,
-        data TEXT NOT NULL
+        repo_id INTEGER,
+        path TEXT,
+        source TEXT,
+        data JSON,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (repo_id, path, source)
       )
     `);
 
@@ -589,7 +590,7 @@ describe("isDocumentMetadataEmpty", () => {
 
     await db.run(
       `INSERT INTO document_metadata (repo_id, path, source, data) VALUES (?, ?, ?, ?)`,
-      [1, "test.md", "frontmatter", JSON.stringify({ title: "Test" })]
+      [1, "test.md", "front_matter", JSON.stringify({ title: "Test" })]
     );
 
     const result = await isDocumentMetadataEmpty(db);

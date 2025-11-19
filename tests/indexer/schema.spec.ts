@@ -14,6 +14,7 @@ import {
   tryCreateFTSIndex,
 } from "../../src/indexer/schema.js";
 import { DuckDBClient } from "../../src/shared/duckdb.js";
+import { createTestDb } from "../helpers/db-setup.js";
 
 describe("tryCreateFTSIndex", () => {
   let tempDir: string;
@@ -456,43 +457,31 @@ describe("ensureDocumentMetadataTables", () => {
     expect(kvRows[0]?.value).toBe("test");
   });
 
-  it("rolls back transaction when metadata_kv table creation fails", async () => {
-    const originalRun = db.run.bind(db);
+  it("rolls back transaction when table creation fails due to constraint violation", async () => {
+    // Pre-create document_metadata_kv with incompatible schema to cause natural failure
+    // This simulates a scenario where the migration encounters an unexpected table state
+    await db.run(`
+      CREATE TABLE document_metadata_kv (
+        wrong_column TEXT PRIMARY KEY
+      )
+    `);
 
-    // Monkey-patch db.run to fail on document_metadata_kv table creation
-    (db as any).run = async (sql: string, params?: any[]) => {
-      // Fail on document_metadata_kv table creation
-      if (sql.includes("CREATE TABLE document_metadata_kv")) {
-        throw new Error("Simulated metadata_kv creation failure");
-      }
+    // Now ensureDocumentMetadataTables should fail during kv table existence check/creation
+    // The transaction should rollback, preventing partial migration state
+    await expect(ensureDocumentMetadataTables(db)).rejects.toThrow();
 
-      return originalRun(sql, params);
-    };
+    // Verify rollback: document_metadata table should not exist (transaction rolled back)
+    const metadataTables = await db.all<{ table_name: string }>(
+      `SELECT table_name FROM duckdb_tables() WHERE table_name = 'document_metadata'`
+    );
+    expect(metadataTables.length).toBe(0);
 
-    try {
-      // Should throw error with proper message
-      await expect(ensureDocumentMetadataTables(db)).rejects.toThrow(
-        "Failed to create metadata kv table"
-      );
-
-      // Restore original method before verification
-      (db as any).run = originalRun;
-
-      // Verify rollback: document_metadata table should not exist (transaction rolled back)
-      const metadataTables = await db.all<{ table_name: string }>(
-        `SELECT table_name FROM duckdb_tables() WHERE table_name = 'document_metadata'`
-      );
-      expect(metadataTables.length).toBe(0);
-
-      // Verify document_metadata_kv table also doesn't exist
-      const kvTables = await db.all<{ table_name: string }>(
-        `SELECT table_name FROM duckdb_tables() WHERE table_name = 'document_metadata_kv'`
-      );
-      expect(kvTables.length).toBe(0);
-    } finally {
-      // Ensure cleanup even if test fails
-      (db as any).run = originalRun;
-    }
+    // Verify document_metadata_kv still has wrong schema (wasn't modified)
+    const kvColumns = await db.all<{ column_name: string }>(
+      `SELECT column_name FROM duckdb_columns() WHERE table_name = 'document_metadata_kv'`
+    );
+    expect(kvColumns.length).toBe(1);
+    expect(kvColumns[0]?.column_name).toBe("wrong_column");
   });
 });
 

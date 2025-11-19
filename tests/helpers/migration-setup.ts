@@ -7,6 +7,11 @@ import {
 
 import { createTempRepo } from "./test-repo.js";
 import { createTempDbPath } from "./db-setup.js";
+import {
+  buildInsertStatement,
+  createDocumentMetadataRecord,
+  createFileRecord,
+} from "./fixtures.js";
 
 /**
  * Options for creating migration test scenarios
@@ -75,17 +80,16 @@ export async function createMigrationTestScenario(options: MigrationScenarioOpti
       throw new Error("Failed to create repo record");
     }
 
-    await dbClient.run(
-      `INSERT INTO file (repo_id, path, blob_hash, ext, lang, is_binary, mtime) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [repoId, "docs/README.md", "test-hash", ".md", "markdown", false, new Date().toISOString()]
-    );
+    // Use fixture factory to create file record (maintains consistency with schema changes)
+    const fileRecord = createFileRecord(repoId);
+    const fileInsert = buildInsertStatement("file", fileRecord);
+    await dbClient.run(fileInsert.sql, fileInsert.values);
 
     // If metadata tables exist, populate them to simulate migrated state
     if (options.withMetadata) {
-      await dbClient.run(
-        `INSERT INTO document_metadata (repo_id, path, source, data) VALUES (?, ?, ?, ?)`,
-        [repoId, "docs/README.md", "front_matter", JSON.stringify({ title: "Test" })]
-      );
+      const metadataRecord = createDocumentMetadataRecord(repoId);
+      const metadataInsert = buildInsertStatement("document_metadata", metadataRecord);
+      await dbClient.run(metadataInsert.sql, metadataInsert.values);
     }
 
     return { repo, db, repoId };

@@ -458,6 +458,11 @@ describe("ensureDocumentMetadataTables", () => {
   });
 
   it("rolls back transaction when table creation fails due to constraint violation", async () => {
+    // IMPORTANT: This test assumes ensureDocumentMetadataTables() wraps ALL DDL operations
+    // in a single explicit transaction using db.transaction(() => {...}).
+    // If the implementation changes to auto-commit per statement, this test will produce
+    // false positives and must be revised to test transaction behavior more directly.
+
     // Pre-create document_metadata_kv with incompatible schema to cause natural failure
     // This simulates a scenario where the migration encounters an unexpected table state
     await db.run(`
@@ -467,7 +472,7 @@ describe("ensureDocumentMetadataTables", () => {
     `);
 
     // Now ensureDocumentMetadataTables should fail during kv table existence check/creation
-    // The transaction should rollback, preventing partial migration state
+    // The transaction should rollback atomically, preventing partial migration state
     await expect(ensureDocumentMetadataTables(db)).rejects.toThrow();
 
     // Verify rollback: document_metadata table should not exist (transaction rolled back)

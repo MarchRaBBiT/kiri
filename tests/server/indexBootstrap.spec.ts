@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ensureDatabaseIndexed } from "../../src/server/indexBootstrap.js";
+import { DuckDBClient } from "../../src/shared/duckdb.js";
 import { acquireLock, releaseLock } from "../../src/shared/utils/lockfile.js";
 import { createTempDbPath } from "../helpers/db-setup.js";
 import { createMigrationTestScenario } from "../helpers/migration-setup.js";
@@ -27,8 +28,6 @@ describe("ensureDatabaseIndexed", () => {
   });
 
   it("detects migration and triggers reindex when files exist but metadata is empty", async () => {
-    const { DuckDBClient } = await import("../../src/shared/duckdb.js");
-
     // Create a database with files but without document_metadata tables (simulates old version)
     const { repo, db } = await createMigrationTestScenario({ withMetadata: false });
 
@@ -76,8 +75,6 @@ describe("ensureDatabaseIndexed", () => {
   });
 
   it("skips reindex when files exist and metadata is already populated", async () => {
-    const { DuckDBClient } = await import("../../src/shared/duckdb.js");
-
     // Create a database with both files AND populated document_metadata (simulates migrated version)
     const { repo, db } = await createMigrationTestScenario({ withMetadata: true });
 
@@ -106,43 +103,45 @@ describe("ensureDatabaseIndexed", () => {
     }
   });
 
-  it("handles concurrent migration attempts with file locking", async () => {
-    // Create old schema database that needs migration
-    const { repo, db } = await createMigrationTestScenario({ withMetadata: false });
+  describe("concurrent access", () => {
+    let processExitSpy: ReturnType<typeof vi.spyOn>;
 
-    try {
-      // Manually acquire lock to simulate another process already running migration
-      const lockfilePath = `${db.path}.lock`;
-      acquireLock(lockfilePath);
+    beforeEach(() => {
+      // Mock process.exit to prevent test runner from terminating
+      processExitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+        throw new Error(`process.exit(${code ?? 0}) called`);
+      }) as never);
+    });
+
+    afterEach(() => {
+      processExitSpy.mockRestore();
+    });
+
+    it("handles concurrent migration attempts with file locking", async () => {
+      // Create old schema database that needs migration
+      const { repo, db } = await createMigrationTestScenario({ withMetadata: false });
 
       try {
-        // This should fail with a specific error about another process running
-        // The process.exit(1) behavior means we can't easily test this in-process
-        // Instead, we verify the lock mechanism works by catching the error
-        let errorThrown = false;
-        try {
-          await ensureDatabaseIndexed(repo.path, db.path, false, false);
-        } catch (error) {
-          errorThrown = true;
-          // In real execution, LockfileError causes process.exit(1)
-          // Here we just verify an error was thrown
-          expect(error).toBeDefined();
-        }
+        // Manually acquire lock to simulate another process already running migration
+        const lockfilePath = `${db.path}.lock`;
+        acquireLock(lockfilePath);
 
-        // If we're still here (not exited), verify error was thrown
-        // Note: In production, this would exit, but in tests it might throw instead
-        if (!errorThrown) {
-          // The test environment may handle this differently
-          // At minimum, ensureDatabaseIndexed should not succeed
-          console.warn("Lock contention test did not throw as expected in test environment");
+        try {
+          // Should reject due to lock contention
+          await expect(ensureDatabaseIndexed(repo.path, db.path, false, false)).rejects.toThrow(
+            /process\.exit|lock|already running/i
+          );
+
+          // Verify process.exit(1) was called in production code
+          expect(processExitSpy).toHaveBeenCalledWith(1);
+        } finally {
+          // Always release the lock we acquired
+          releaseLock(lockfilePath);
         }
       } finally {
-        // Always release the lock we acquired
-        releaseLock(lockfilePath);
+        await repo.cleanup();
+        await db.cleanup();
       }
-    } finally {
-      await repo.cleanup();
-      await db.cleanup();
-    }
+    });
   });
 });

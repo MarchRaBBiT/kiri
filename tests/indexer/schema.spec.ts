@@ -14,7 +14,6 @@ import {
   tryCreateFTSIndex,
 } from "../../src/indexer/schema.js";
 import { DuckDBClient } from "../../src/shared/duckdb.js";
-import { createTestDb } from "../helpers/db-setup.js";
 
 describe("tryCreateFTSIndex", () => {
   let tempDir: string;

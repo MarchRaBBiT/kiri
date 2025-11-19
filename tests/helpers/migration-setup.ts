@@ -1,17 +1,17 @@
-import { DuckDBClient } from "../../src/shared/duckdb.js";
 import {
   ensureBaseSchema,
   ensureDocumentMetadataTables,
   ensureRepoMetaColumns,
 } from "../../src/indexer/schema.js";
+import { DuckDBClient } from "../../src/shared/duckdb.js";
 
-import { createTempRepo } from "./test-repo.js";
 import { createTempDbPath } from "./db-setup.js";
 import {
   buildInsertStatement,
   createDocumentMetadataRecord,
   createFileRecord,
 } from "./fixtures.js";
+import { createTempRepo } from "./test-repo.js";
 
 /**
  * Options for creating migration test scenarios

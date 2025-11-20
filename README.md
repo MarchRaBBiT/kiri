@@ -43,6 +43,27 @@ npm --version   # Should be >= v9.0.0
 git --version   # Should be >= v2.0
 ```
 
+## ⚠️ Troubleshooting
+
+### Migration or Database Issues
+
+If you encounter issues after upgrading (database corruption, migration failures, etc.), the simplest solution is to delete the database and let KIRI recreate it:
+
+```bash
+# For MCP users (Claude Code, Codex CLI, etc.)
+# 1. Restart your MCP client to stop the KIRI server
+# 2. Delete the database
+rm -rf .kiri/
+# 3. Restart your MCP client - KIRI will automatically reindex
+
+# For CLI/Daemon users
+pkill -f "kiri.*daemon"  # Stop daemon if running
+rm -rf .kiri/            # Delete database
+kiri --repo . --db .kiri/index.duckdb --full  # Reindex
+```
+
+> **Note**: Deleting the database is safe - it only removes the index, not your source code. KIRI will automatically rebuild the index on next startup. For MCP users, no manual reindexing is needed.
+
 ## 🚀 Quick Start for MCP Users
 
 ### Step 1: Install KIRI

@@ -1285,6 +1285,13 @@ async function executeQuery(
   const rawResult = await server.call(tool, params, timeoutMs);
   const durationMs = Number((process.hrtime.bigint() - startTime) / 1000000n);
 
+  if (process.env.KIRI_TRACE_QUERY === query.id) {
+    console.log(
+      `[trace] rawResult for ${query.id}:`,
+      JSON.stringify(rawResult, null, 2).substring(0, 500)
+    );
+  }
+
   if (isWarmup) {
     return {
       id: query.id,

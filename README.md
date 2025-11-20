@@ -20,11 +20,24 @@
 - **📝 Phrase-Aware**: Recognizes compound terms (kebab-case, snake_case) for precise matching
 - **🔒 Concurrency-Safe** _(v0.9.7+)_: Per-database queues, canonicalized DuckDB paths, and bootstrap-safe locking prevent FTS rebuild conflicts and keep locks consistent across symlinks—even on first run
 
-## 🆕 What’s New in v0.9.8
+## 🆕 What's New in v0.11.0
 
-- First-time bootstrap now skips redundant DuckDB locking, so `kiri` / `kiri-server` can index fresh repositories without deadlocking on their own locks.
-- Added regression coverage (`tests/server/indexBootstrap.spec.ts`) to ensure repeated `ensureDatabaseIndexed` calls reuse the lock cleanly.
-- All reliability upgrades from v0.9.7 (automatic ILIKE degrade during FTS rebuilds, canonicalized DB paths, expanded verify suite) remain in effect.
+### 📄 Document Metadata & Search
+
+- **Automatic YAML Front-Matter Extraction**: Markdown files with YAML front-matter are now automatically parsed and indexed into `document_metadata` tables
+- **Rich Metadata Filtering**: Search documents by custom metadata using `meta.<key>:<value>` or `frontmatter.<key>:<value>` syntax (e.g., `meta.id:runbook-001`)
+- **Auto-Migration**: Existing databases automatically get `document_metadata` and `document_metadata_kv` tables on upgrade - no manual intervention needed
+- **Improved Docs Search**: Documentation search precision improved with metadata-aware ranking
+
+### ⚠️ Breaking Changes
+
+- **Multiplicative Penalty System**: File penalties migrated from absolute (`-100`) to multiplicative (`×0.01` for 99% reduction). Custom scoring profiles need to add `blacklistPenaltyMultiplier`, `testPenaltyMultiplier`, and `lockPenaltyMultiplier` fields. See [CHANGELOG](CHANGELOG.md#0110) for migration guide.
+
+### 🎯 Search Improvements
+
+- **Hint Expansion System**: Re-architected `context_bundle` artifact hints with dictionary-based promotion and phase tracking
+- **Config File Noise Reduction**: Enhanced penalty for config files (99% reduction), improving token savings from 93.8% to 95.0%
+- **Evaluation Metrics**: Added R@5 metrics and expanded Golden Set for better search quality tracking
 
 ## ⚙️ Prerequisites
 

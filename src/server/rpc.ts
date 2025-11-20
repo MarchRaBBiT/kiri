@@ -324,8 +324,8 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     name: "files_search",
     description:
       "Token-aware substring search for precise identifiers, error messages, or import fragments. Prefer this tool when you already know the exact string you need to locate; use `context_bundle` for exploratory work.\n\n" +
-      "Returns an array of `{path, matchLine, lang, ext, score}` objects with optional `preview`; the tool never mutates the repo. Set `compact: true` to omit previews entirely for maximum token savings. Empty queries raise an MCP error prompting you to provide a concrete keyword. If DuckDB is unavailable but the server runs with `--allow-degrade`, the same array shape is returned using filesystem-based fallbacks (with `lang`/`ext` set to null).\n\n" +
-      'Example: files_search({query: "AuthenticationError", path_prefix: "src/auth/"}) narrows to auth handlers. Invalid: files_search({query: ""}) reports that the query must be non-empty.\n\n' +
+      "Returns an array of `{path, matchLine, lang, ext, score}` objects with optional `preview`; the tool never mutates the repo. Set `compact: true` to omit previews entirely for maximum token savings. Empty queries raise an MCP error unless `metadata_filters` are provided. If DuckDB is unavailable but the server runs with `--allow-degrade`, the same array shape is returned using filesystem-based fallbacks (with `lang`/`ext` set to null).\n\n" +
+      'Example: files_search({query: "", metadata_filters: { "docmeta.category": "operations" }}) lists runbooks for the operations category. Invalid: files_search({}) reports that either query or metadata_filters must be supplied.\n\n' +
       "Metadata filtering:\n" +
       "- Inline `tag:` / `category:` / `service:` tokens are parsed out of the query and treated as metadata hints, so docs and neighboring implementation stay ranked together.\n" +
       "- The `metadata_filters` object accepts string or string[] values and supports the same prefixes/aliases as context_bundle (meta., metadata., docmeta., frontmatter., fm., yaml., json.). Use `docmeta.*` when you need doc-only matches; `meta.*` keeps implementations eligible.\n" +

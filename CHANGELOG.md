@@ -7,7 +7,86 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.0.0] - 2025-11-19
+## [0.11.0] - 2025-11-20
+
+### ⚠️ BREAKING CHANGES
+
+**Scoring system migrated from absolute penalties to multiplicative penalties**
+
+This is a fundamental change to how file penalties are calculated and applied:
+
+- Replaces absolute penalties (`-100`) with multiplicative penalties (e.g., `×0.01` for 99% reduction)
+- Makes all penalties composable and predictable when combined with boost profiles
+- Introduces score threshold filter (`SCORE_FILTER_THRESHOLD`) to remove extremely low-scored files
+
+**Migration Guide:**
+
+For users with custom scoring profiles, add these fields to `scoring-profiles.yml`:
+
+```yaml
+your-profile:
+  blacklistPenaltyMultiplier: 0.01 # 99% reduction for blacklisted directories
+  testPenaltyMultiplier: 0.02 # 98% reduction for test files
+  lockPenaltyMultiplier: 0.01 # 99% reduction for lock files
+```
+
+**New Environment Variable:**
+
+- `KIRI_SCORE_THRESHOLD` (default: `0.05`): Minimum score threshold for including files in results
+
+### Added
+
+- **Document Metadata自動マイグレーション**: 既存のデータベースに`document_metadata`テーブルを自動的に作成・適用
+- **Multiplicative penalty system**: New `ScoringWeights` fields for configurable file penalties
+- **Hint expansion system**: Re-architected `context_bundle` artifact hints with phase-based processing
+  - `hint_expansion` and `hint_dictionary` tables for hint tracking
+  - Dictionary-based hint promotion with `dictionary:hint:*` tags
+  - Diagnostic tools: `dump-hints.ts`, `build-hint-dictionary.ts`, `cleanup-hints.ts`
+- **Evaluation improvements**:
+  - R@5 metrics in `scripts/eval/run-golden.ts`
+  - `--min-r5` and `--max-startup-ms` options
+  - Markdown output with startup time and R@5 tracking
+- **Configuration**: `KIRI_SERVER_COMMAND` environment variable for MCP server binary switching
+- **Low-value file penalties**: Restored penalties for syntax grammars, performance dumps, legal files, migrations
+- **マイグレーション検証ツール**: `scripts/check-migration.ts` for database migration status checking
+- **Test coverage**: Comprehensive migration detection tests (PR #102)
+
+### Fixed
+
+- **Config file noise reduction**: Enhanced `configPenaltyMultiplier` from 0.05 to 0.01 (99% reduction)
+  - Added `eslint.config.js`, `.tmLanguage.json`, `.nls.json`, `/cli/` to config patterns
+  - Token Savings improved from 93.8% to 95.0% (+1.2%)
+- **Server stability**:
+  - Eliminate race condition from global mutable state
+  - Prevent SQL injection in metadata filter alias parameter
+  - Improve `checkTableAvailability` robustness
+- **Database**: デーモン終了時のデータベース破損問題を解決
+- **Error handling**: DuckDBクライアントのエラーハンドリングを改善
+- **Lint**: デバッグスクリプトのlint問題を修正 (`scripts/debug/test-vscode-query.ts`)
+- **Validation**: Require at least one expected item per query
+- **Type safety**: Resolve TypeScript compilation errors and add backward compatibility
+- **Security**: Enhance security and error handling for metadata ingestion
+- **Performance**: Optimize file deletion and prevent blob table bloat
+- **Data integrity**: Prevent data orphaning in repo deduplication
+
+### Changed
+
+- **Scoring model fundamentals**:
+  - Absolute penalties (`-100`) → Multiplicative penalties (`×0.01` for blacklist, `×0.02` for tests)
+  - Blacklisted directories use `blacklistPenaltyMultiplier` instead of hard-coded `-100`
+  - Test files use `testPenaltyMultiplier` instead of hard-coded `×0.2`
+  - All penalties are composable and work predictably with boost profiles
+- **Profile behavior**: Eliminated special case for `boost_profile="docs"`, simplified to declarative model
+- **Evaluation baseline** (2025-11-17): P@10 = 0.136, R@5 = 0.966, TFFU = 0ms, Token Savings = 94.7%
+- **Golden set corrected**: Removed 5 non-existent paths (35 → 30), R@5 improved from 0.852 to 0.966 (+13.4%)
+- **Formatting**: Added `tmp/` to `.prettierignore` for temporary files
+- **Dependencies**: Updated assay-kit submodule to latest upstream
+
+### Deprecated
+
+_The following entries (v1.0.0, v0.10.1) were planned but not released. Their changes are consolidated into v0.11.0 above._
+
+## ~~[1.0.0]~~ - Not Released
 
 ### ⚠️ BREAKING CHANGES
 

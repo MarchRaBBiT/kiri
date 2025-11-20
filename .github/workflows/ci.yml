@@ -42,6 +42,12 @@ jobs:
         if: env.HAS_ASSAY_KIT_TOKEN == 'true'
         run: corepack enable
 
+      - name: Install assay-kit dependencies
+        if: env.HAS_ASSAY_KIT_TOKEN == 'true'
+        run: |
+          cd external/assay-kit
+          pnpm install --no-frozen-lockfile
+
       - name: Install dependencies
         if: env.HAS_ASSAY_KIT_TOKEN == 'true'
         run: pnpm install --no-frozen-lockfile

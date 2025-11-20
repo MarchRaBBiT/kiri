@@ -3,6 +3,132 @@ import { normalizeRepoPath } from "../shared/utils/path.js";
 
 import { mergeRepoRecords } from "./migrations/repo-merger.js";
 
+/**
+ * Document metadata tables migration error
+ * Provides detailed information about which migration step failed
+ */
+class MigrationError extends Error {
+  constructor(
+    message: string,
+    public readonly step: "metadata_table" | "metadata_kv_table" | "index",
+    public override readonly cause?: Error
+  ) {
+    super(message);
+    this.name = "MigrationError";
+
+    // Set cause for better error chaining (Node.js 16.9.0+)
+    if (cause) {
+      this.cause = cause;
+    }
+
+    // Capture stack trace for debugging
+    if (Error.captureStackTrace) {
+      Error.captureStackTrace(this, MigrationError);
+    }
+  }
+}
+
+/**
+ * Execute a migration step with error wrapping
+ * Catches errors and wraps them in MigrationError with step context
+ */
+async function executeStep<T>(
+  step: "metadata_table" | "metadata_kv_table" | "index",
+  fn: () => Promise<T>
+): Promise<T> {
+  try {
+    return await fn();
+  } catch (error) {
+    const stepName = step.replace(/_/g, " ");
+    throw new MigrationError(
+      `Failed to create ${stepName}. Re-run migration or check database permissions.`,
+      step,
+      error instanceof Error ? error : undefined
+    );
+  }
+}
+
+/**
+ * Column definition for schema validation
+ */
+interface ColumnDefinition {
+  name: string;
+  type: string;
+  pk?: boolean; // PRIMARY KEY constraint
+}
+
+/**
+ * Validate table schema using PRAGMA table_info
+ * Compares actual schema with expected column definitions
+ *
+ * @param db DuckDB client
+ * @param tableName Table name to validate
+ * @param expectedColumns Expected column definitions
+ * @throws MigrationError if schema doesn't match expectations
+ */
+async function validateTableSchema(
+  db: DuckDBClient,
+  tableName: string,
+  expectedColumns: ColumnDefinition[],
+  step: "metadata_table" | "metadata_kv_table" | "index"
+): Promise<void> {
+  try {
+    // Get actual schema using PRAGMA table_info
+    const actualColumns = await db.all<{
+      cid: number;
+      name: string;
+      type: string;
+      notnull: number;
+      dflt_value: string | null;
+      pk: number;
+    }>(`PRAGMA table_info('${tableName}')`);
+
+    // Build map of actual columns for lookup
+    const actualMap = new Map(
+      actualColumns.map((col) => [col.name, { type: col.type.toUpperCase(), pk: col.pk > 0 }])
+    );
+
+    // Validate each expected column
+    for (const expected of expectedColumns) {
+      const actual = actualMap.get(expected.name);
+
+      if (!actual) {
+        throw new Error(`Column '${expected.name}' missing in table '${tableName}'`);
+      }
+
+      // Normalize types for comparison (e.g., "INTEGER" vs "INT", "TEXT" vs "VARCHAR")
+      const expectedTypeNorm = expected.type.toUpperCase();
+      const actualTypeNorm = actual.type;
+
+      // Type validation with normalization
+      const typeMatches =
+        expectedTypeNorm === actualTypeNorm ||
+        (expectedTypeNorm === "INTEGER" &&
+          (actualTypeNorm === "INT" || actualTypeNorm === "BIGINT")) ||
+        (expectedTypeNorm === "TEXT" &&
+          (actualTypeNorm === "VARCHAR" || actualTypeNorm === "STRING"));
+
+      if (!typeMatches) {
+        throw new Error(
+          `Column '${expected.name}' in table '${tableName}' has type '${actual.type}', expected '${expected.type}'`
+        );
+      }
+
+      // PRIMARY KEY validation
+      if (expected.pk && !actual.pk) {
+        throw new Error(`Column '${expected.name}' in table '${tableName}' should be PRIMARY KEY`);
+      }
+    }
+  } catch (error) {
+    const stepName = step.replace(/_/g, " ");
+    throw new MigrationError(
+      `Schema validation failed for ${stepName}. ${error instanceof Error ? error.message : "Unknown error"}`,
+      step,
+      error instanceof Error ? error : undefined
+    );
+  }
+}
+
 export async function ensureBaseSchema(db: DuckDBClient): Promise<void> {
   await db.run(`
     CREATE SEQUENCE IF NOT EXISTS repo_id_seq START 1
@@ -119,32 +245,8 @@ export async function ensureBaseSchema(db: DuckDBClient): Promise<void> {
     )
   `);
 
-  await db.run(`
-    CREATE TABLE IF NOT EXISTS document_metadata (
-      repo_id INTEGER,
-      path TEXT,
-      source TEXT,
-      data JSON,
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      PRIMARY KEY (repo_id, path, source)
-    )
-  `);
-
-  await db.run(`
-    CREATE TABLE IF NOT EXISTS document_metadata_kv (
-      repo_id INTEGER,
-      path TEXT,
-      source TEXT,
-      key TEXT,
-      value TEXT,
-      PRIMARY KEY (repo_id, path, source, key, value)
-    )
-  `);
-
-  await db.run(`
-    CREATE INDEX IF NOT EXISTS idx_document_metadata_key
-      ON document_metadata_kv(repo_id, key)
-  `);
+  // Document metadata tables (delegated to dedicated migration function)
+  await ensureDocumentMetadataTables(db);
 
   await db.run(`
     CREATE TABLE IF NOT EXISTS markdown_link (
@@ -622,6 +724,151 @@ export async function rebuildGlobalFTS(
     console.warn("Failed to rebuild FTS index:", error);
     return false;
   }
+}
+
+/**
+ * Check if document_metadata table is empty
+ * Used to detect if migration needs to trigger a full reindex
+ *
+ * @param db - DuckDB client
+ * @returns true if table exists but is empty, false otherwise
+ */
+export async function isDocumentMetadataEmpty(db: DuckDBClient): Promise<boolean> {
+  // Check if document_metadata table exists
+  const tables = await db.all<{ table_name: string }>(
+    `SELECT table_name FROM duckdb_tables() WHERE table_name = 'document_metadata'`
+  );
+
+  if (tables.length === 0) {
+    // Table doesn't exist yet
+    return false;
+  }
+
+  // Count records in document_metadata table
+  const result = await db.all<{ count: number }>(`SELECT COUNT(*) as count FROM document_metadata`);
+
+  // Defensive: check array element exists and has valid count
+  const firstRow = result[0];
+  if (!firstRow || typeof firstRow.count !== "number") {
+    return false;
+  }
+
+  return firstRow.count === 0;
+}
+
+/**
+ * document_metadata関連テーブルを追加（マイグレーション＋新規DB用）
+ * 既存DBとの互換性のため、テーブルが存在しない場合のみ作成
+ *
+ * Usage:
+ * - Called by ensureBaseSchema() for new databases (replaces duplicate DDL)
+ * - Called by CLI migration for existing databases
+ *
+ * Migration Strategy:
+ * 1. Check if document_metadata table exists
+ * 2. Create document_metadata table if missing
+ * 3. Create document_metadata_kv table if missing
+ * 4. Create index on document_metadata_kv if missing
+ *
+ * Safety Guarantees:
+ * - Idempotent: Safe to run multiple times (checks for existing tables/indexes)
+ * - Non-destructive: Only creates missing schema objects, never modifies existing data
+ * - Backward compatible: Old code without metadata awareness still works
+ *
+ * Performance:
+ * - O(1) for existence checks
+ * - O(1) for table creation (no data migration needed)
+ * - O(1) for index creation (table is initially empty)
+ *
+ * @param db - DuckDBクライアント
+ * @throws Error if migration fails
+ */
+export async function ensureDocumentMetadataTables(db: DuckDBClient): Promise<void> {
+  // トランザクション境界: 3つのDDL操作を単一のatomic操作として実行
+  // 失敗時は自動的にロールバックされ、部分的な状態が残らない
+  await db.transaction(async () => {
+    // 1. document_metadataテーブルの存在確認
+    const metadataTableExists = await db.all<{ table_name: string }>(
+      `SELECT table_name FROM duckdb_tables() WHERE table_name = 'document_metadata'`
+    );
+
+    if (metadataTableExists.length === 0) {
+      await executeStep("metadata_table", async () => {
+        await db.run(`
+          CREATE TABLE document_metadata (
+            repo_id INTEGER,
+            path TEXT,
+            source TEXT,
+            data JSON,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (repo_id, path, source)
+          )
+        `);
+      });
+    }
+
+    // 2. document_metadata_kvテーブルの存在確認
+    const kvTableExists = await db.all<{ table_name: string }>(
+      `SELECT table_name FROM duckdb_tables() WHERE table_name = 'document_metadata_kv'`
+    );
+
+    if (kvTableExists.length === 0) {
+      await executeStep("metadata_kv_table", async () => {
+        await db.run(`
+          CREATE TABLE document_metadata_kv (
+            repo_id INTEGER,
+            path TEXT,
+            source TEXT,
+            key TEXT,
+            value TEXT,
+            PRIMARY KEY (repo_id, path, source, key, value)
+          )
+        `);
+      });
+    }
+
+    // 3. インデックスの存在確認と作成
+    const indexExists = await db.all<{ index_name: string }>(
+      `SELECT index_name FROM duckdb_indexes() WHERE index_name = 'idx_document_metadata_key'`
+    );
+
+    if (indexExists.length === 0) {
+      await executeStep("index", async () => {
+        await db.run(`
+          CREATE INDEX idx_document_metadata_key
+            ON document_metadata_kv(repo_id, key)
+        `);
+      });
+    }
+
+    // 4. スキーマ検証: 作成されたテーブルが期待通りの構造を持つことを確認
+    // 検証はトランザクション内で行い、不整合があればロールバック
+    await validateTableSchema(
+      db,
+      "document_metadata",
+      [
+        { name: "repo_id", type: "INTEGER" },
+        { name: "path", type: "TEXT" },
+        { name: "source", type: "TEXT" },
+        { name: "data", type: "JSON" },
+        { name: "updated_at", type: "TIMESTAMP" },
+      ],
+      "metadata_table"
+    );
+
+    await validateTableSchema(
+      db,
+      "document_metadata_kv",
+      [
+        { name: "repo_id", type: "INTEGER" },
+        { name: "path", type: "TEXT" },
+        { name: "source", type: "TEXT" },
+        { name: "key", type: "TEXT" },
+        { name: "value", type: "TEXT" },
+      ],
+      "metadata_kv_table"
+    );
+  });
 }
 
 /**

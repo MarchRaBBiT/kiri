@@ -6,7 +6,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   ensureBaseSchema,
+  ensureDocumentMetadataTables,
   ensureRepoMetaColumns,
+  isDocumentMetadataEmpty,
   rebuildFTSIfNeeded,
   setFTSDirty,
   tryCreateFTSIndex,
@@ -363,5 +365,228 @@ describe("setFTSDirty", () => {
        WHERE table_name = 'repo' AND column_name = 'fts_dirty'`
     );
     expect(columns.length).toBe(1);
+  });
+});
+
+describe("ensureDocumentMetadataTables", () => {
+  let tempDir: string;
+  let db: DuckDBClient;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "kiri-test-"));
+    const dbPath = join(tempDir, "test.duckdb");
+    db = await DuckDBClient.connect({ databasePath: dbPath });
+  });
+
+  afterEach(async () => {
+    if (db) {
+      await db.close();
+    }
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("creates document_metadata table when it does not exist", async () => {
+    await ensureDocumentMetadataTables(db);
+
+    const tables = await db.all<{ table_name: string }>(
+      `SELECT table_name FROM duckdb_tables() WHERE table_name = 'document_metadata'`
+    );
+    expect(tables.length).toBe(1);
+  });
+
+  it("creates document_metadata_kv table when it does not exist", async () => {
+    await ensureDocumentMetadataTables(db);
+
+    const tables = await db.all<{ table_name: string }>(
+      `SELECT table_name FROM duckdb_tables() WHERE table_name = 'document_metadata_kv'`
+    );
+    expect(tables.length).toBe(1);
+  });
+
+  it("creates index on document_metadata_kv", async () => {
+    await ensureDocumentMetadataTables(db);
+
+    const indexes = await db.all<{ index_name: string }>(
+      `SELECT index_name FROM duckdb_indexes() WHERE index_name = 'idx_document_metadata_key'`
+    );
+    expect(indexes.length).toBe(1);
+  });
+
+  it("is idempotent - running twice does not fail", async () => {
+    await ensureDocumentMetadataTables(db);
+    await ensureDocumentMetadataTables(db);
+
+    const metadataTables = await db.all<{ table_name: string }>(
+      `SELECT table_name FROM duckdb_tables() WHERE table_name = 'document_metadata'`
+    );
+    expect(metadataTables.length).toBe(1);
+
+    const kvTables = await db.all<{ table_name: string }>(
+      `SELECT table_name FROM duckdb_tables() WHERE table_name = 'document_metadata_kv'`
+    );
+    expect(kvTables.length).toBe(1);
+  });
+
+  it("preserves existing data when run on existing tables", async () => {
+    await ensureDocumentMetadataTables(db);
+
+    // Insert test data
+    await db.run(
+      `INSERT INTO document_metadata (repo_id, path, source, data) VALUES (1, 'test.md', 'front_matter', '{"title":"test"}')`
+    );
+    await db.run(
+      `INSERT INTO document_metadata_kv (repo_id, path, source, key, value) VALUES (1, 'test.md', 'front_matter', 'title', 'test')`
+    );
+
+    // Run migration again
+    await ensureDocumentMetadataTables(db);
+
+    // Verify data is preserved
+    const metadataRows = await db.all<{ path: string }>(
+      `SELECT path FROM document_metadata WHERE repo_id = 1`
+    );
+    expect(metadataRows.length).toBe(1);
+    expect(metadataRows[0]?.path).toBe("test.md");
+
+    const kvRows = await db.all<{ key: string; value: string }>(
+      `SELECT key, value FROM document_metadata_kv WHERE repo_id = 1`
+    );
+    expect(kvRows.length).toBe(1);
+    expect(kvRows[0]?.key).toBe("title");
+    expect(kvRows[0]?.value).toBe("test");
+  });
+
+  it("rolls back transaction when table creation fails due to constraint violation", async () => {
+    // IMPORTANT: This test assumes ensureDocumentMetadataTables() wraps ALL DDL operations
+    // in a single explicit transaction using db.transaction(() => {...}).
+    // If the implementation changes to auto-commit per statement, this test will produce
+    // false positives and must be revised to test transaction behavior more directly.
+
+    // Pre-create document_metadata_kv with incompatible schema to cause natural failure
+    // This simulates a scenario where the migration encounters an unexpected table state
+    await db.run(`
+      CREATE TABLE document_metadata_kv (
+        wrong_column TEXT PRIMARY KEY
+      )
+    `);
+
+    // Now ensureDocumentMetadataTables should fail during kv table existence check/creation
+    // The transaction should rollback atomically, preventing partial migration state
+    await expect(ensureDocumentMetadataTables(db)).rejects.toThrow();
+
+    // Verify rollback: document_metadata table should not exist (transaction rolled back)
+    const metadataTables = await db.all<{ table_name: string }>(
+      `SELECT table_name FROM duckdb_tables() WHERE table_name = 'document_metadata'`
+    );
+    expect(metadataTables.length).toBe(0);
+
+    // Verify document_metadata_kv still has wrong schema (wasn't modified)
+    const kvColumns = await db.all<{ column_name: string }>(
+      `SELECT column_name FROM duckdb_columns() WHERE table_name = 'document_metadata_kv'`
+    );
+    expect(kvColumns.length).toBe(1);
+    expect(kvColumns[0]?.column_name).toBe("wrong_column");
+  });
+});
+
+describe("ensureBaseSchema integration", () => {
+  let tempDir: string;
+  let db: DuckDBClient;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "kiri-test-"));
+    const dbPath = join(tempDir, "test.duckdb");
+    db = await DuckDBClient.connect({ databasePath: dbPath });
+  });
+
+  afterEach(async () => {
+    if (db) {
+      await db.close();
+    }
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("creates document_metadata tables via ensureDocumentMetadataTables()", async () => {
+    await ensureBaseSchema(db);
+
+    // Verify document_metadata table was created
+    const metadataTables = await db.all<{ table_name: string }>(
+      `SELECT table_name FROM duckdb_tables() WHERE table_name = 'document_metadata'`
+    );
+    expect(metadataTables.length).toBe(1);
+
+    // Verify document_metadata_kv table was created
+    const kvTables = await db.all<{ table_name: string }>(
+      `SELECT table_name FROM duckdb_tables() WHERE table_name = 'document_metadata_kv'`
+    );
+    expect(kvTables.length).toBe(1);
+
+    // Verify index was created
+    const indexes = await db.all<{ index_name: string }>(
+      `SELECT index_name FROM duckdb_indexes() WHERE index_name = 'idx_document_metadata_key'`
+    );
+    expect(indexes.length).toBe(1);
+  });
+});
+
+describe("isDocumentMetadataEmpty", () => {
+  let tempDir: string;
+  let db: DuckDBClient;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "kiri-test-"));
+    const dbPath = join(tempDir, "test.duckdb");
+    db = await DuckDBClient.connect({ databasePath: dbPath });
+  });
+
+  afterEach(async () => {
+    if (db) {
+      await db.close();
+    }
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("returns false when document_metadata table does not exist", async () => {
+    const result = await isDocumentMetadataEmpty(db);
+    expect(result).toBe(false);
+  });
+
+  it("returns true when document_metadata table exists but is empty", async () => {
+    // Create the document_metadata table (matching actual schema)
+    await db.run(`
+      CREATE TABLE document_metadata (
+        repo_id INTEGER,
+        path TEXT,
+        source TEXT,
+        data JSON,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (repo_id, path, source)
+      )
+    `);
+
+    const result = await isDocumentMetadataEmpty(db);
+    expect(result).toBe(true);
+  });
+
+  it("returns false when document_metadata table has records", async () => {
+    // Create and populate the document_metadata table (matching actual schema)
+    await db.run(`
+      CREATE TABLE document_metadata (
+        repo_id INTEGER,
+        path TEXT,
+        source TEXT,
+        data JSON,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (repo_id, path, source)
+      )
+    `);
+
+    await db.run(
+      `INSERT INTO document_metadata (repo_id, path, source, data) VALUES (?, ?, ?, ?)`,
+      [1, "test.md", "front_matter", JSON.stringify({ title: "Test" })]
+    );
+
+    const result = await isDocumentMetadataEmpty(db);
+    expect(result).toBe(false);
   });
 });

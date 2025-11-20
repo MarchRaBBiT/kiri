@@ -3542,6 +3542,12 @@ async function contextBundleImpl(
     const phrasePlaceholders = extractedTerms.phrases
       .map(() => "b.content ILIKE '%' || ? || '%'")
       .join(" OR ");
+
+    // DEBUG: Log SQL query parameters for troubleshooting
+    console.log(
+      `[DEBUG contextBundle] Executing phrase match query with repo_id=${repoId}, phrases=${JSON.stringify(extractedTerms.phrases)}`
+    );
+
     const rows = await db.all<FileWithEmbeddingRow>(
       `
         SELECT f.path, f.lang, f.ext, f.is_binary, b.content, fe.vector_json, fe.dims AS vector_dims
@@ -3558,6 +3564,22 @@ async function contextBundleImpl(
       `,
       [repoId, ...extractedTerms.phrases, MAX_MATCHES_PER_KEYWORD * extractedTerms.phrases.length]
     );
+
+    // DEBUG: Log returned paths and verify they match expected repo_id
+    if (rows.length > 0) {
+      console.log(
+        `[DEBUG contextBundle] Phrase match returned ${rows.length} rows. Sample paths:`,
+        rows.slice(0, 3).map((r) => r.path)
+      );
+
+      // Verify repo_id of returned files
+      const pathsToCheck = rows.slice(0, 3).map((r) => r.path);
+      const verification = await db.all<{ path: string; repo_id: number }>(
+        `SELECT path, repo_id FROM file WHERE path IN (${pathsToCheck.map(() => "?").join(", ")}) LIMIT 3`,
+        pathsToCheck
+      );
+      console.log(`[DEBUG contextBundle] Repo ID verification:`, verification);
+    }
 
     for (const row of rows) {
       if (row.content === null) {

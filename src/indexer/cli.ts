@@ -23,6 +23,7 @@ import { mergeRepoRecords } from "./migrations/repo-merger.js";
 import { getIndexerQueue } from "./queue.js";
 import {
   ensureBaseSchema,
+  ensureDocumentMetadataTables,
   ensureNormalizedRootColumn,
   ensureRepoMetaColumns,
   rebuildFTSIfNeeded,
@@ -1576,6 +1577,8 @@ export async function runIndexer(options: IndexerOptions): Promise<void> {
       const dbClient = await DuckDBClient.connect({ databasePath, ensureDirectory: true });
       db = dbClient;
       await ensureBaseSchema(dbClient);
+      // Migration: Ensure document_metadata tables exist for existing DBs
+      await ensureDocumentMetadataTables(dbClient);
       // Phase 1: Ensure normalized_root column exists (Critical #1)
       await ensureNormalizedRootColumn(dbClient);
       // Phase 3: Ensure FTS metadata columns exist for existing DBs (migration)

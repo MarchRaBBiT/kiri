@@ -64,6 +64,11 @@ export async function createServerRuntime(options: CommonServerOptions): Promise
     const services = createServerServices(db);
     const repoId = await resolveRepoId(db, options.repoRoot, services);
 
+    // DEBUG: Log resolved repo_id for troubleshooting golden set evaluation
+    console.log(
+      `[DEBUG runtime] Resolved repo_id=${repoId} for repoRoot="${options.repoRoot}" (databasePath="${databasePath}")`
+    );
+
     // Phase 2: FTS拡張の利用可否を確認（作成はしない）
     let hasFTS = await checkFTSAvailability(db);
     const ftsStatus: FtsStatusCache = {

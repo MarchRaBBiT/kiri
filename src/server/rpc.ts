@@ -214,7 +214,12 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       "- 'docs': Prioritizes documentation (.md, .yaml) over implementation  \n" +
       "- 'balanced': Equal weight for both docs and implementation\n" +
       "- 'none': No file type boosting, pure BM25/keyword scoring\n\n" +
-      "Example: context_bundle({goal: 'state management design', boost_profile: 'balanced'})",
+      "Example: context_bundle({goal: 'state management design', boost_profile: 'balanced'})\n\n" +
+      "Metadata filtering:\n" +
+      "- Inline goal tokens such as `tag:observability`, `category:operations`, or `service:kiri` are stripped from the goal and applied as metadata hints so related docs surface alongside nearby implementation.\n" +
+      "- Provide an explicit `metadata_filters` object (e.g., { tags: ['observability'], 'docmeta.category': 'operations' }) to enforce structured filters; string or string[] values are accepted.\n" +
+      "- Supported prefixes include meta., metadata., docmeta., frontmatter., fm., yaml., and json., plus built-in aliases (tag/tags, category, service). `meta.*` behaves as a hint, while `docmeta.*`/`metadata.*` are strict doc-only filters.\n" +
+      "- Metadata filters refine and prioritize candidates but still require a concise goal; use `docmeta.*` when you need docs-only matches and `meta.*` to keep surrounding implementation eligible.",
     inputSchema: {
       type: "object",
       required: ["goal"],
@@ -277,6 +282,12 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
             },
           },
         },
+        metadata_filters: {
+          type: "object",
+          additionalProperties: true,
+          description:
+            "Structured metadata filters applied in addition to the goal text. Keys may use prefixes (meta./metadata./docmeta./frontmatter./fm./yaml./json.) or aliases (tag/tags, category, service). Values can be strings or string arrays. Example: { tags: ['observability'], 'docmeta.category': 'operations' }.",
+        },
       },
     },
   },
@@ -313,11 +324,16 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     name: "files_search",
     description:
       "Token-aware substring search for precise identifiers, error messages, or import fragments. Prefer this tool when you already know the exact string you need to locate; use `context_bundle` for exploratory work.\n\n" +
-      "Returns an array of `{path, matchLine, lang, ext, score}` objects with optional `preview`; the tool never mutates the repo. Set `compact: true` to omit previews entirely for maximum token savings. Empty queries raise an MCP error prompting you to provide a concrete keyword. If DuckDB is unavailable but the server runs with `--allow-degrade`, the same array shape is returned using filesystem-based fallbacks (with `lang`/`ext` set to null).\n\n" +
-      'Example: files_search({query: "AuthenticationError", path_prefix: "src/auth/"}) narrows to auth handlers. Invalid: files_search({query: ""}) reports that the query must be non-empty.',
+      "Returns an array of `{path, matchLine, lang, ext, score}` objects with optional `preview`; the tool never mutates the repo. Set `compact: true` to omit previews entirely for maximum token savings. Empty queries raise an MCP error unless `metadata_filters` are provided. If DuckDB is unavailable but the server runs with `--allow-degrade`, the same array shape is returned using filesystem-based fallbacks (with `lang`/`ext` set to null).\n\n" +
+      'Example: files_search({query: "", metadata_filters: { "docmeta.category": "operations" }}) lists runbooks for the operations category. Invalid: files_search({}) reports that either query or metadata_filters must be supplied.\n\n' +
+      "Metadata filtering:\n" +
+      "- Inline `tag:` / `category:` / `service:` tokens are parsed out of the query and treated as metadata hints, so docs and neighboring implementation stay ranked together.\n" +
+      "- The `metadata_filters` object accepts string or string[] values and supports the same prefixes/aliases as context_bundle (meta., metadata., docmeta., frontmatter., fm., yaml., json.). Use `docmeta.*` when you need doc-only matches; `meta.*` keeps implementations eligible.\n" +
+      '- Either a textual query or `metadata_filters` (or both) is required. Metadata-only searches are supported (tests cover `query:""` + filters) and are ideal when discovering runbooks by tag/category.',
     inputSchema: {
       type: "object",
-      required: ["query"],
+      required: [],
+      anyOf: [{ required: ["query"] }, { required: ["metadata_filters"] }],
       additionalProperties: true,
       properties: {
         query: {
@@ -357,6 +373,12 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
           type: "boolean",
           description:
             "If true, omits previews to minimize response tokens. Pair with snippets_get for detail-on-demand workflows.",
+        },
+        metadata_filters: {
+          type: "object",
+          additionalProperties: true,
+          description:
+            "Structured metadata filters targeting YAML front matter or JSON docs. Keys may use meta./metadata./docmeta./frontmatter./fm./yaml./json. prefixes or aliases (tag/tags, category, service). Values accept strings or arrays. Example: { tags: ['observability'], 'docmeta.id': 'runbook-002' }.",
         },
       },
     },

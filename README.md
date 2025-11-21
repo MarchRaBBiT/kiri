@@ -92,6 +92,7 @@ npm install -g kiri-mcp-server
 ## 📚 Documentation
 
 - [Authoring Docs for KIRI Search](docs/documentation-best-practices.md) – best practices for writing metadata-rich, link-aware documentation so that `context_bundle` and the docs vs. docs-plain benchmark maintain high precision. Includes guidance on querying custom front-matter keys via `meta.<key>:<value>` (for example, `meta.id:runbook-001`).
+- [Path Penalties (User Guide)](docs/user/path-penalties.md) – `.kiri/config.yaml` と環境変数でパス倍率を設定する手順、優先順位、正規化ルール、適用タイミングをまとめたユーザー向けガイド。
 
 > **Note**: This installs the `kiri` command globally. You can verify with `kiri --version`.
 

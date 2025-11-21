@@ -203,6 +203,24 @@ filesSearch({ query: "authentication", boost_profile: "none" });
 
 この変更により、ペナルティが予測可能で組み合わせ可能になり、boost_profileとの相互作用が明確になりました。
 
+### パス乗算ペナルティのカスタマイズ（.kiri/config.yaml）
+
+`boost_profile` の既定 `pathMultipliers` に加えて、リポジトリ単位でパス倍率を上書きできます。
+
+```yaml
+# .kiri/config.yaml
+path_penalties:
+  - prefix: src/
+    multiplier: 1.4 # src/ を強める
+  - prefix: external/
+    multiplier: 0.3 # external/ を弱める
+```
+
+- 環境変数でも設定可能: `KIRI_PATH_PENALTY_src__core__=0.8`（`/` → `__` にエンコード）
+- マージ優先度: プロファイル定義 < 環境変数 < YAML（後勝ち）
+- プレフィックスは POSIX 化され、最長一致（Longest Prefix Wins）で適用される。
+- 正規化ルール: `\` は `/` に変換され、`..` やドライブレターは除去される（リポジトリ内相対パス前提）。
+
 #### スコアフィルタリング
 
 乗算ペナルティ適用後、スコアが非常に低いファイル（デフォルト: `< 0.05`）は結果から除外されます:

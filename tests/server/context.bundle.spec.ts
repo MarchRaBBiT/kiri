@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -159,6 +159,59 @@ describe("context_bundle", () => {
     expect(withHints.context).toHaveLength(1);
     expect(withHints.context[0]?.path).toBe("src/stats/rank-biserial.ts");
   }, 10000);
+
+  it("applies YAML/env path penalties when merging boost profile multipliers", async () => {
+    const repo = await createTempRepo({
+      "src/core/highlight.ts": `// highlight implementation in src\nexport const marker = "src";\nexport function choose() { return "src"; }\n`,
+      "external/pkg/highlight.ts": `// highlight implementation in external\nexport const marker = "external";\nexport function choose() { return "external"; }\n`,
+    });
+    cleanupTargets.push({ dispose: repo.cleanup });
+
+    const configDir = join(repo.path, ".kiri");
+    await mkdir(configDir, { recursive: true });
+    await writeFile(
+      join(configDir, "config.yaml"),
+      `path_penalties:
+  - prefix: src/
+    multiplier: 0.1
+  - prefix: external/
+    multiplier: 5
+`
+    );
+
+    const dbDir = await mkdtemp(join(tmpdir(), "kiri-db-"));
+    const dbPath = join(dbDir, "index.duckdb");
+    cleanupTargets.push({ dispose: async () => await rm(dbDir, { recursive: true, force: true }) });
+
+    await runIndexer({ repoRoot: repo.path, databasePath: dbPath, full: true });
+
+    const db = await DuckDBClient.connect({ databasePath: dbPath });
+    cleanupTargets.push({ dispose: async () => await db.close() });
+
+    const repoId = await resolveRepoId(db, repo.path);
+    const tableAvailability = await checkTableAvailability(db);
+    const context: ServerContext = {
+      db,
+      repoId,
+      services: createServerServices(db),
+      tableAvailability,
+      warningManager: new WarningManager(),
+    };
+
+    const originalCwd = process.cwd();
+    process.chdir(repo.path);
+    try {
+      const bundle = await contextBundle(context, {
+        goal: "highlight.ts implementation highlight",
+        limit: 2,
+      });
+
+      expect(bundle.context.length).toBeGreaterThan(0);
+      expect(bundle.context[0]?.path).toBe("external/pkg/highlight.ts");
+    } finally {
+      process.chdir(originalCwd);
+    }
+  }, 15000);
 
   it("applies metadata filters to context bundle", async () => {
     const repo = await createTempRepo({

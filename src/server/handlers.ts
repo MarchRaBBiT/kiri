@@ -10,8 +10,10 @@ import { expandAbbreviations } from "./abbreviations.js";
 import {
   type BoostProfileName,
   type BoostProfileConfig,
+  type PathMultiplier,
   getBoostProfile,
 } from "./boost-profiles.js";
+import { loadPathPenalties, mergePathPenaltyEntries } from "./config-loader.js";
 import { loadServerConfig } from "./config.js";
 import { FtsStatusCache, ServerContext, TableAvailability } from "./context.js";
 import { coerceProfileName, loadScoringProfile, type ScoringWeights } from "./scoring.js";
@@ -705,6 +707,7 @@ const MAX_DEPENDENCY_SEEDS = 8;
 const MAX_DEPENDENCY_SEEDS_QUERY_LIMIT = 100; // SQL injection防御用の上限
 const NEARBY_LIMIT = 6;
 const serverConfig = loadServerConfig();
+const mergedPathMultiplierCache = new Map<BoostProfileName, PathMultiplier[]>();
 const SUPPRESS_NON_CODE_ENABLED = serverConfig.features.suppressNonCode;
 const FINAL_RESULT_SUPPRESSION_ENABLED = serverConfig.features.suppressFinalResults;
 const CLAMP_SNIPPETS_ENABLED = serverConfig.features.clampSnippets;
@@ -3073,7 +3076,18 @@ export async function filesSearch(
   const boostProfile: BoostProfileName =
     params.boost_profile ??
     (hasHintMetadataFilters ? "balanced" : hasStrictMetadataFilters ? "docs" : "default");
-  const profileConfig = getBoostProfile(boostProfile);
+  const baseProfileConfig = getBoostProfile(boostProfile);
+  const cachedMerged = mergedPathMultiplierCache.get(boostProfile);
+  const mergedPathMultipliers =
+    cachedMerged ??
+    mergePathPenaltyEntries(baseProfileConfig.pathMultipliers, [], serverConfig.pathPenalties);
+  if (!cachedMerged) {
+    mergedPathMultiplierCache.set(boostProfile, mergedPathMultipliers);
+  }
+  const profileConfig: BoostProfileConfig = {
+    ...baseProfileConfig,
+    pathMultipliers: mergedPathMultipliers,
+  };
   const weights = loadScoringProfile(null);
   const options = parseOutputOptions(params);
   const previewQuery = hasTextQuery
@@ -3535,7 +3549,11 @@ async function contextBundleImpl(
   const boostProfile: BoostProfileName =
     params.boost_profile ??
     (hasHintMetadataFilters ? "balanced" : hasStrictMetadataFilters ? "docs" : "default");
-  const profileConfig = getBoostProfile(boostProfile);
+  const baseProfileConfig = getBoostProfile(boostProfile);
+  const profileConfig: BoostProfileConfig = {
+    ...baseProfileConfig,
+    pathMultipliers: loadPathPenalties(baseProfileConfig.pathMultipliers),
+  };
 
   // フレーズマッチング（高い重み: textMatch × 2）- 統合クエリでパフォーマンス改善
   if (extractedTerms.phrases.length > 0) {

@@ -11,6 +11,11 @@
  * - none: No file type boosting (pure keyword scoring)
  */
 
+export interface PathMultiplier {
+  prefix: string;
+  multiplier: number;
+}
+
 /**
  * Boost profile configuration
  * Defines how different file types should be ranked
@@ -37,7 +42,7 @@ export interface BoostProfileConfig {
    * Path-specific multipliers (e.g., src/app/ gets higher boost than src/)
    * Array is sorted by prefix length (longest first) to ensure correct matching priority
    */
-  pathMultipliers: Array<{ prefix: string; multiplier: number }>;
+  pathMultipliers: PathMultiplier[];
 
   /**
    * Skip additive penalty for config files (-1.5 score penalty)

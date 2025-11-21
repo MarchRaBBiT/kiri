@@ -1,5 +1,8 @@
 import process from "node:process";
 
+import type { PathMultiplier } from "./boost-profiles.js";
+import { loadPathPenalties } from "./config-loader.js";
+
 export interface ServerConfig {
   features: {
     suppressNonCode: boolean;
@@ -42,6 +45,7 @@ export interface ServerConfig {
     pathMissDelta: number;
     largeFileDelta: number;
   };
+  pathPenalties: PathMultiplier[];
 }
 
 let cachedConfig: ServerConfig | null = null;
@@ -117,6 +121,16 @@ function validateServerConfig(config: ServerConfig): void {
   if (penalties.pathMissDelta > 0 || penalties.largeFileDelta > 0) {
     throw new Error("Penalty deltas should be <= 0 (they reduce scores)");
   }
+  for (const entry of config.pathPenalties) {
+    if (!entry.prefix || typeof entry.prefix !== "string") {
+      throw new Error("Path penalty prefix must be a non-empty string");
+    }
+    if (!Number.isFinite(entry.multiplier) || entry.multiplier < 0) {
+      throw new Error(
+        `Path penalty multiplier for ${entry.prefix} must be a non-negative finite number`
+      );
+    }
+  }
 }
 
 export function loadServerConfig(): ServerConfig {
@@ -135,6 +149,8 @@ export function loadServerConfig(): ServerConfig {
   const substringEnabled = envFlagEnabled(process.env.KIRI_HINT_ENABLE_SUBSTRING, true);
 
   const hintsEnabled = directoryEnabled || dependencyEnabled || semanticEnabled;
+
+  const pathPenalties = loadPathPenalties();
 
   const config: ServerConfig = {
     features: {
@@ -195,6 +211,7 @@ export function loadServerConfig(): ServerConfig {
       pathMissDelta: parseEnvFloat(process.env.KIRI_PATH_MISS_DELTA, -0.5),
       largeFileDelta: parseEnvFloat(process.env.KIRI_LARGE_FILE_DELTA, -0.8),
     },
+    pathPenalties,
   };
 
   validateServerConfig(config);

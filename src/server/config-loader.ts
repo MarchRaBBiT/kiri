@@ -7,6 +7,7 @@ import { z } from "zod";
 import type { PathMultiplier } from "./boost-profiles.js";
 
 const ENV_PREFIX = "KIRI_PATH_PENALTY_";
+const penaltyCache = new Map<string, PathMultiplier[]>();
 
 const PathPenaltySchema = z.object({
   prefix: z.string().trim().min(1, "prefix is required"),
@@ -126,9 +127,20 @@ export function loadPathPenalties(
   basePathMultipliers: PathMultiplier[] = [],
   cwd: string = process.cwd()
 ): PathMultiplier[] {
+  const envEntries = Object.entries(process.env)
+    .filter(([key]) => key.startsWith(ENV_PREFIX))
+    .sort(([a], [b]) => a.localeCompare(b));
+  const cacheKey = JSON.stringify({ cwd, base: basePathMultipliers, env: envEntries });
+  const cached = penaltyCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
   const envPenalties = parseEnvPathPenalties();
   const yamlPenalties = readYamlConfig(cwd);
-  return mergePathPenalties([basePathMultipliers, envPenalties, yamlPenalties]);
+  const merged = mergePathPenalties([basePathMultipliers, envPenalties, yamlPenalties]);
+  penaltyCache.set(cacheKey, merged);
+  return merged;
 }
 
 /** Test helper: merge logic without disk/env side effects */

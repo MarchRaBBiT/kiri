@@ -12,6 +12,7 @@ import {
   type BoostProfileConfig,
   getBoostProfile,
 } from "./boost-profiles.js";
+import { loadPathPenalties } from "./config-loader.js";
 import { loadServerConfig } from "./config.js";
 import { FtsStatusCache, ServerContext, TableAvailability } from "./context.js";
 import { coerceProfileName, loadScoringProfile, type ScoringWeights } from "./scoring.js";
@@ -3073,7 +3074,11 @@ export async function filesSearch(
   const boostProfile: BoostProfileName =
     params.boost_profile ??
     (hasHintMetadataFilters ? "balanced" : hasStrictMetadataFilters ? "docs" : "default");
-  const profileConfig = getBoostProfile(boostProfile);
+  const baseProfileConfig = getBoostProfile(boostProfile);
+  const profileConfig: BoostProfileConfig = {
+    ...baseProfileConfig,
+    pathMultipliers: loadPathPenalties(baseProfileConfig.pathMultipliers),
+  };
   const weights = loadScoringProfile(null);
   const options = parseOutputOptions(params);
   const previewQuery = hasTextQuery
@@ -3535,7 +3540,11 @@ async function contextBundleImpl(
   const boostProfile: BoostProfileName =
     params.boost_profile ??
     (hasHintMetadataFilters ? "balanced" : hasStrictMetadataFilters ? "docs" : "default");
-  const profileConfig = getBoostProfile(boostProfile);
+  const baseProfileConfig = getBoostProfile(boostProfile);
+  const profileConfig: BoostProfileConfig = {
+    ...baseProfileConfig,
+    pathMultipliers: loadPathPenalties(baseProfileConfig.pathMultipliers),
+  };
 
   // フレーズマッチング（高い重み: textMatch × 2）- 統合クエリでパフォーマンス改善
   if (extractedTerms.phrases.length > 0) {

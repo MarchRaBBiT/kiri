@@ -434,6 +434,7 @@ export interface ContextBundleParams {
   includeTokensEstimate?: boolean; // If true, compute tokens_estimate (slower)
   metadata_filters?: Record<string, string | string[]>;
   requestId?: string; // Optional request ID for tracing/debugging
+  path_prefix?: string;
 }
 
 export interface ContextBundleItem {
@@ -1387,6 +1388,28 @@ function ensureCandidate(map: Map<string, CandidateInfo>, filePath: string): Can
   return candidate;
 }
 
+function normalizePathPrefix(rawPrefix: string): string {
+  // Normalize, strip leading slashes/dots, and ensure trailing slash for exact prefix match
+  const normalized = path.posix.normalize(rawPrefix.replace(/\\/g, "/"));
+  const stripped = normalized.replace(/^\.\//, "").replace(/^\/+/, "");
+  if (stripped === "" || stripped === ".") {
+    return "";
+  }
+  return stripped.endsWith("/") ? stripped : `${stripped}/`;
+}
+
+function normalizeFilePath(filePath: string): string {
+  return path.posix.normalize(filePath.replace(/\\/g, "/")).replace(/^\/+/, "");
+}
+
+function pathMatchesPrefix(filePath: string, normalizedPrefix?: string): boolean {
+  if (!normalizedPrefix) {
+    return true;
+  }
+  const normalizedPath = normalizeFilePath(filePath);
+  return normalizedPath.startsWith(normalizedPrefix);
+}
+
 interface ExpandHintParams {
   db: DuckDBClient;
   tableAvailability: TableAvailability;
@@ -2270,7 +2293,8 @@ async function fetchMetadataOnlyCandidates(
   tableAvailability: TableAvailability,
   repoId: number,
   filters: MetadataFilter[],
-  limit: number
+  limit: number,
+  pathPrefix?: string
 ): Promise<FileRow[]> {
   if (!tableAvailability.hasMetadataTables || filters.length === 0 || limit <= 0) {
     return [];
@@ -2279,6 +2303,10 @@ async function fetchMetadataOnlyCandidates(
   const filterClauses = buildMetadataFilterConditions(filters);
   const whereClauses = ["f.repo_id = ?"];
   const params: unknown[] = [repoId];
+  if (pathPrefix) {
+    whereClauses.push("f.path LIKE ?");
+    params.push(`${pathPrefix}%`);
+  }
   for (const clause of filterClauses) {
     whereClauses.push(clause.sql);
     params.push(...clause.params);
@@ -2314,7 +2342,8 @@ async function fetchMetadataKeywordMatches(
   keywords: string[],
   filters: MetadataFilter[],
   limit: number,
-  excludePaths: Set<string>
+  excludePaths: Set<string>,
+  pathPrefix?: string
 ): Promise<FileRow[]> {
   if (!tableAvailability.hasMetadataTables || keywords.length === 0 || limit <= 0) {
     return [];
@@ -2323,6 +2352,11 @@ async function fetchMetadataKeywordMatches(
   const keywordClauses = keywords.map(() => "mk.value ILIKE ?").join(" OR ");
   const params: unknown[] = [repoId, ...keywords.map((kw) => `%${kw}%`)];
   const whereClauses = ["mk.repo_id = ?", `(${keywordClauses})`];
+
+  if (pathPrefix) {
+    whereClauses.push("f.path LIKE ?");
+    params.push(`${pathPrefix}%`);
+  }
 
   if (excludePaths.size > 0) {
     const placeholders = Array.from(excludePaths)
@@ -3026,6 +3060,9 @@ export async function filesSearch(
     hasTextQuery = cleanedQuery.length > 0;
   }
 
+  const pathPrefix =
+    params.path_prefix && params.path_prefix.length > 0 ? params.path_prefix : undefined;
+
   const metadataValueSeed = metadataFilters
     .flatMap((filter) => filter.values)
     .map((value) => value.trim())
@@ -3142,7 +3179,8 @@ export async function filesSearch(
       context.tableAvailability,
       repoId,
       metadataFilters,
-      limit * 2
+      limit * 2,
+      pathPrefix
     );
     for (const row of metadataOnlyRows) {
       row.score = 1 + metadataFilters.length * 0.2;
@@ -3163,7 +3201,8 @@ export async function filesSearch(
         metadataKeywords,
         metadataFilters,
         limit * 2,
-        excludePaths
+        excludePaths,
+        pathPrefix
       );
       candidateRows.push(...metadataRows);
     }
@@ -3610,6 +3649,10 @@ async function contextBundleImpl(
   const substringHints = hintBuckets.substringHints;
   const includeTokensEstimate = params.includeTokensEstimate === true;
   const isCompact = params.compact === true;
+  const pathPrefix =
+    params.path_prefix && params.path_prefix.length > 0
+      ? normalizePathPrefix(params.path_prefix)
+      : undefined;
 
   // 項目2: トークンバジェット保護警告
   // 大量データ+非コンパクトモード+トークン推定なしの場合に警告
@@ -3692,6 +3735,13 @@ async function contextBundleImpl(
       `Executing phrase match query with repo_id=${repoId}, phrases=${JSON.stringify(extractedTerms.phrases)}`
     );
 
+    const phraseWhereClauses = ["f.repo_id = ?", "f.is_binary = FALSE", `(${phrasePlaceholders})`];
+    const phraseParams: unknown[] = [repoId, ...extractedTerms.phrases];
+    if (pathPrefix) {
+      phraseWhereClauses.push("f.path LIKE ?");
+      phraseParams.push(`${pathPrefix}%`);
+    }
+
     const rows = await db.all<FileWithEmbeddingRow>(
       `
         SELECT f.path, f.lang, f.ext, f.is_binary, b.content, fe.vector_json, fe.dims AS vector_dims
@@ -3700,13 +3750,12 @@ async function contextBundleImpl(
         LEFT JOIN file_embedding fe
           ON fe.repo_id = f.repo_id
          AND fe.path = f.path
-        WHERE f.repo_id = ?
-          AND f.is_binary = FALSE
-          AND (${phrasePlaceholders})
+        WHERE ${phraseWhereClauses.join(`
+          AND `)}
         ORDER BY f.path
         LIMIT ?
       `,
-      [repoId, ...extractedTerms.phrases, MAX_MATCHES_PER_KEYWORD * extractedTerms.phrases.length]
+      [...phraseParams, MAX_MATCHES_PER_KEYWORD * extractedTerms.phrases.length]
     );
 
     // DEBUG: Log returned paths and verify they match expected repo_id
@@ -3786,6 +3835,17 @@ async function contextBundleImpl(
     const keywordPlaceholders = extractedTerms.keywords
       .map(() => "b.content ILIKE '%' || ? || '%'")
       .join(" OR ");
+    const keywordWhereClauses = [
+      "f.repo_id = ?",
+      "f.is_binary = FALSE",
+      `(${keywordPlaceholders})`,
+    ];
+    const keywordParams: unknown[] = [repoId, ...extractedTerms.keywords];
+    if (pathPrefix) {
+      keywordWhereClauses.push("f.path LIKE ?");
+      keywordParams.push(`${pathPrefix}%`);
+    }
+
     const rows = await db.all<FileWithEmbeddingRow>(
       `
         SELECT f.path, f.lang, f.ext, f.is_binary, b.content, fe.vector_json, fe.dims AS vector_dims
@@ -3794,13 +3854,12 @@ async function contextBundleImpl(
         LEFT JOIN file_embedding fe
           ON fe.repo_id = f.repo_id
          AND fe.path = f.path
-        WHERE f.repo_id = ?
-          AND f.is_binary = FALSE
-          AND (${keywordPlaceholders})
+        WHERE ${keywordWhereClauses.join(`
+          AND `)}
         ORDER BY f.path
         LIMIT ?
       `,
-      [repoId, ...extractedTerms.keywords, MAX_MATCHES_PER_KEYWORD * extractedTerms.keywords.length]
+      [...keywordParams, MAX_MATCHES_PER_KEYWORD * extractedTerms.keywords.length]
     );
 
     for (const row of rows) {
@@ -4115,6 +4174,9 @@ async function contextBundleImpl(
   const materializeCandidates = async (): Promise<CandidateInfo[]> => {
     const result: CandidateInfo[] = [];
     for (const candidate of candidates.values()) {
+      if (!pathMatchesPrefix(candidate.path, pathPrefix)) {
+        continue;
+      }
       if (isSuppressedPath(candidate.path)) {
         continue;
       }
@@ -4153,7 +4215,8 @@ async function contextBundleImpl(
       context.tableAvailability,
       repoId,
       metadataFilters,
-      limit * 2
+      limit * 2,
+      pathPrefix
     );
     if (metadataRows.length === 0) {
       return;

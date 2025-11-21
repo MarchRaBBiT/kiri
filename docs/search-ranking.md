@@ -124,7 +124,7 @@ contextBundle({ goal: "lambda/page-agent/handler request processing error handli
 
 ### ファイルタイプブースト
 
-`boost_profile` パラメータで4つのモードを選択可能:
+`boost_profile` パラメータで代表的なモードを選択可能:
 
 #### boost_profile: "default" (デフォルト)
 
@@ -177,6 +177,20 @@ contextBundle({ goal: "lambda/page-agent/handler request processing error handli
 
 ファイルタイプによるブースト無効、純粋なBM25スコアのみ
 
+#### boost_profile: "vscode" (NEW)
+
+VS Code リポジトリのように `src/vs/**` と `extensions/**` が巨大なケース向けの専用プロファイル。
+
+- `src/vs/workbench/**`, `src/vs/platform/**`: 大幅ブースト（×2.5 以上）
+- `extensions/**`: 中程度ブースト（×1.9）でエクステンション実装を浮上
+- `cli/**`, `.eslint-plugin-local/**`: 強い減衰（×0.3 以下）でノイズを除去
+- `docs/` は denylist 解除せず、通例どおり `docs` プロファイルを併用
+
+**使用ケース:**
+
+- VS Code ワークツリーで `registerWorkbenchContribution` 等を検索する際に CLI 実装が先に出てしまう場合
+- 大規模モノレポで「特定ディレクトリのみを優遇・その他を減衰」したい場合
+
 ### 使用例
 
 ```typescript
@@ -195,6 +209,13 @@ contextBundle({ goal: "authentication design docs/auth/README.md", boost_profile
 // 純粋なBM25スコア
 filesSearch({ query: "authentication", boost_profile: "none" });
 // → ファイルタイプ関係なく、BM25スコアのみ
+
+// VS Code コードパスを優先
+contextBundle({
+  goal: "registerWorkbenchContribution workbench part",
+  boost_profile: "vscode",
+});
+// → src/vs/workbench/** が上位に、cli/ や .eslint-plugin-local は抑制
 ```
 
 ### 乗算ペナルティモデル（v1.0.0+）
@@ -519,3 +540,8 @@ SELECT DISTINCT path FROM walk;
 3. **再ランキング**: VSS が有効な場合のみ `semantic_rerank` を適用する。
 4. **断片化**: シンボル境界で行範囲を最小化し重複を統合する。
 5. **出力生成**: why（根拠タグ、最大10件）を付与し、`includeTokensEstimate: true` が指定されたときのみ tokens_estimate を添えて返却する。
+
+## 運用メモ（Precision調整の注意）
+
+- path_penalties は `.kiri/config.yml` または `config/kiri.yml` で上書き可能。拡張ディレクトリや fixtures/datasets を強く減衰させるときは Recall 影響を確認すること。
+- fallback:path の候補は text evidence が無い場合に除外されるよう設定してある（KEEP=8）。TRACE で `penalty:fallback-no-text` が多いときはパスヒントを追加するのが効果的。

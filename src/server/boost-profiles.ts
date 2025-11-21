@@ -63,7 +63,8 @@ export type BoostProfileName =
   | "api"
   | "editor"
   | "testfail"
-  | "typeerror";
+  | "typeerror"
+  | "vscode";
 
 /**
  * Boost profile definitions
@@ -243,6 +244,29 @@ export const BOOST_PROFILES: Record<BoostProfileName, BoostProfileConfig> = {
       { prefix: "src/interfaces/", multiplier: 2.5 },
       { prefix: "src/models/", multiplier: 1.8 },
       { prefix: "src/", multiplier: 0.6 }, // 抑制: 1.0 → 0.6
+    ],
+  },
+
+  vscode: {
+    denylistOverrides: ["extensions/"],
+    fileTypeMultipliers: {
+      doc: 0.6,
+      impl: 1.35,
+      config: 0.05,
+    },
+    pathMultipliers: [
+      { prefix: "src/vs/workbench/contrib/", multiplier: 2.8 },
+      { prefix: "src/vs/workbench/", multiplier: 2.6 },
+      { prefix: "src/vs/platform/", multiplier: 2.5 },
+      { prefix: "src/vs/editor/", multiplier: 2.4 },
+      { prefix: "src/vs/base/", multiplier: 2.3 },
+      { prefix: "src/vs/", multiplier: 2.1 },
+      // VS Code extensions are often noisy for repo-level queries; keep but suppress
+      { prefix: "extensions/", multiplier: 0.1 },
+      { prefix: "src/", multiplier: 0.8 },
+      { prefix: "cli/src/", multiplier: 0.25 },
+      { prefix: "cli/", multiplier: 0.3 },
+      { prefix: ".eslint-plugin-local/", multiplier: 0.15 },
     ],
   },
 };

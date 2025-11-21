@@ -86,7 +86,7 @@ queries:
         - "external/assay-kit/packages/assay-kit/src/stats/mann-whitney.ts"
       expected:
         - "external/assay-kit/packages/assay-kit/src/stats/mann-whitney.ts"
-        - "external/assay-kit/packages/assay-kit/src/stats/rank-biserial.ts"
+        - "external/assay-kit/packages/assay-kit/src/stats/effect-size.ts"
   - id: "q-performance"
     text: "orchestrator orchestratorMain runtime/workerPool.ts scheduling latency"
     goal: "Locate orchestrator bottleneck hot path for perf triage"
@@ -101,7 +101,7 @@ queries:
         - "external/assay-kit/packages/assay-kit/src/tuning/orchestrator.ts"
       expected:
         - "external/assay-kit/packages/assay-kit/src/tuning/orchestrator.ts"
-        - "external/assay-kit/packages/assay-kit/src/runtime/worker-pool.ts"
+        - "external/assay-kit/packages/assay-kit/src/runner/index.ts"
   - id: "q-metrics"
     text: "precision recall calculation utility functions"
     goal: "Find shared precision/recall helpers"
@@ -432,12 +432,12 @@ expected:
     reference:
       paths:
         - "external/assay-kit/packages/assay-kit/src/stats/mann-whitney.ts"
-        - "external/assay-kit/packages/assay-kit/src/stats/rank-biserial.ts"
+        - "external/assay-kit/packages/assay-kit/src/stats/effect-size.ts"
   - id: "q-performance"
     reference:
       paths:
         - "external/assay-kit/packages/assay-kit/src/tuning/orchestrator.ts"
-        - "external/assay-kit/packages/assay-kit/src/runtime/worker-pool.ts"
+        - "external/assay-kit/packages/assay-kit/src/runner/index.ts"
   - id: "q-metrics"
     reference:
       paths:

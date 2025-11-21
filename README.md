@@ -795,11 +795,11 @@ See [docs/architecture.md](docs/architecture.md) for detailed technical informat
 
 ### Performance
 
-| Metric                        | Target | Current       |
-| ----------------------------- | ------ | ------------- |
-| **Time to First Result**      | ≤ 1.0s | ✅ 0.8s       |
-| **Precision @ 10**            | ≥ 0.7  | ✅ 0.75       |
-| **Token Reduction (compact)** | ≥ 90%  | ✅ 95% (v0.8) |
+| Metric                        | Target | Current                                                                                 |
+| ----------------------------- | ------ | --------------------------------------------------------------------------------------- |
+| **Time to First Result**      | ≤ 1.0s | ✅ 0.8s                                                                                 |
+| **Precision @ 10**            | ≥ 0.7  | ⚠️ 0.25 (2025-11-21, dataset v2025-11-docs-plain, K=10, see var/eval/2025-11-21-k10.md) |
+| **Token Reduction (compact)** | ≥ 90%  | ✅ 95% (v0.8)                                                                           |
 
 ### Evaluation & Quality Assurance
 

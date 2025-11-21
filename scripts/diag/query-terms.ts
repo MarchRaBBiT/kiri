@@ -58,7 +58,7 @@ function extractPathSegments(paths: string[] | undefined): string[] {
   const segments: string[] = [];
   for (const path of paths) {
     const parts = path
-      .split(/[\/.]/)
+      .split(/[/.]/)
       .map((part) => part.trim())
       .filter((part) => part.length >= 3);
     segments.push(...parts);

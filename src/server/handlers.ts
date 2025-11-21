@@ -3950,7 +3950,12 @@ async function contextBundleImpl(
 
     if (fallbackRows.length > PATH_FALLBACK_KEEP) {
       const fallbackOnly = Array.from(candidates.entries())
-        .filter(([_, candidate]) => candidate.reasons.has("fallback:path"))
+        .filter(
+          ([_, candidate]) =>
+            candidate.reasons.has("fallback:path") &&
+            candidate.keywordHits.size === 0 &&
+            candidate.phraseHits === 0
+        )
         .sort((a, b) => b[1].score - a[1].score);
 
       const toDrop = fallbackOnly.slice(PATH_FALLBACK_KEEP);

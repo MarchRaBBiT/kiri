@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import packageJson from "../../package.json" with { type: "json" };
 import { maskValue } from "../shared/security/masker.js";
 

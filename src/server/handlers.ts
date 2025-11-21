@@ -433,6 +433,7 @@ export interface ContextBundleParams {
   compact?: boolean; // If true, omit preview field to reduce token usage
   includeTokensEstimate?: boolean; // If true, compute tokens_estimate (slower)
   metadata_filters?: Record<string, string | string[]>;
+  requestId?: string; // Optional request ID for tracing/debugging
 }
 
 export interface ContextBundleItem {
@@ -1377,7 +1378,7 @@ function ensureCandidate(map: Map<string, CandidateInfo>, filePath: string): Can
       pathMatchHits: 0, // Issue #68: Track path match count
       keywordHits: new Set<string>(),
       phraseHits: 0,
-      pathFallbackReason: undefined,
+      // pathFallbackReason は optional なので省略（exactOptionalPropertyTypes対応）
       fallbackTextHits: 0,
       penalties: [], // Issue #68: Penalty log for telemetry
     };

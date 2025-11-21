@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2025-11-21
+
+### Added
+
+- **ContextBundleParams.requestId**: Optional request ID for tracing/debugging support
+
+### Fixed
+
+- **TypeScript type errors**: Fixed `exactOptionalPropertyTypes` compatibility by omitting `pathFallbackReason` in CandidateInfo initialization
+- **Search precision**: Trim only fallback-only candidates to improve search accuracy
+- **Tokenizer expansion**: Added camelCase/snake_case variant support
+
+### Changed
+
+- **Path penalties configuration**: Support merging path penalties from config files
+- **Documentation**: Added path penalties user and developer guides (EN/JA)
+
 ## [0.11.0] - 2025-11-20
 
 ### ⚠️ BREAKING CHANGES

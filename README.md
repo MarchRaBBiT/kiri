@@ -2,7 +2,7 @@
 
 > Intelligent code context extraction for LLMs via Model Context Protocol
 
-[![Version](https://img.shields.io/badge/version-0.11.0-blue.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-0.12.0-blue.svg)](package.json)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.6-blue.svg)](https://www.typescriptlang.org/)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
@@ -20,24 +20,22 @@
 - **📝 Phrase-Aware**: Recognizes compound terms (kebab-case, snake_case) for precise matching
 - **🔒 Concurrency-Safe** _(v0.9.7+)_: Per-database queues, canonicalized DuckDB paths, and bootstrap-safe locking prevent FTS rebuild conflicts and keep locks consistent across symlinks—even on first run
 
-## 🆕 What's New in v0.11.0
+## 🆕 What's New in v0.12.0
 
-### 📄 Document Metadata & Search
+### 🔧 Improvements
 
-- **Automatic YAML Front-Matter Extraction**: Markdown files with YAML front-matter are now automatically parsed and indexed into `document_metadata` tables
-- **Rich Metadata Filtering**: Search documents by custom metadata using `meta.<key>:<value>` or `frontmatter.<key>:<value>` syntax (e.g., `meta.id:runbook-001`)
-- **Auto-Migration**: Existing databases automatically get `document_metadata` and `document_metadata_kv` tables on upgrade - no manual intervention needed
-- **Improved Docs Search**: Documentation search precision improved with metadata-aware ranking
+- **Request Tracing**: Added optional `requestId` parameter to `context_bundle` for debugging and tracing
+- **Tokenizer Enhancement**: Improved keyword extraction with camelCase/snake_case variant support
+- **Path Penalties**: Configurable path penalties via config files for fine-tuned search results
 
-### ⚠️ Breaking Changes
+### 🐛 Bug Fixes
 
-- **Multiplicative Penalty System**: File penalties migrated from absolute (`-100`) to multiplicative (`×0.01` for 99% reduction). Custom scoring profiles need to add `blacklistPenaltyMultiplier`, `testPenaltyMultiplier`, and `lockPenaltyMultiplier` fields. See [CHANGELOG](CHANGELOG.md#0110) for migration guide.
+- **TypeScript Compatibility**: Fixed build errors related to `exactOptionalPropertyTypes`
+- **Search Precision**: Improved candidate trimming to only affect fallback-only results
 
-### 🎯 Search Improvements
+### 📚 Documentation
 
-- **Hint Expansion System**: Re-architected `context_bundle` artifact hints with dictionary-based promotion and phase tracking
-- **Config File Noise Reduction**: Enhanced penalty for config files (99% reduction), improving token savings from 93.8% to 95.0%
-- **Evaluation Metrics**: Added R@5 metrics and expanded Golden Set for better search quality tracking
+- Added path penalties user and developer guides (EN/JA)
 
 ## ⚙️ Prerequisites
 

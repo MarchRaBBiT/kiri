@@ -8,52 +8,51 @@ tags:
 service: "kiri"
 ---
 
-# パス乗算ペナルティ設定ガイド（ユーザー向け）
+# Path Penalties User Guide
 
-## 目的
+## Goal
 
-リポジトリ固有の重要／不要ディレクトリをスコアリングで優先・抑制するために、`path_penalties` を設定します。
+Tune ranking for repository-specific directories by applying multiplicative path multipliers.
 
-## 設定方法（推奨: YAML）
+## Recommended Setup (YAML)
 
-`.kiri/config.yaml` をリポジトリルートに作成:
+Create `.kiri/config.yaml` at the repo root:
 
 ```yaml
 path_penalties:
   - prefix: src/
-    multiplier: 1.4 # src を強める
+    multiplier: 1.4 # boost src
   - prefix: external/
-    multiplier: 0.3 # external を弱める
+    multiplier: 0.3 # down-weight external
 ```
 
-## 環境変数での上書き
+## Environment Variable Override
 
-- 形式: `KIRI_PATH_PENALTY_<PREFIX_ENCODING>=<multiplier>`
-- `/` は `__` にエンコード。例: `KIRI_PATH_PENALTY_src__api__=0.8`
+- Format: `KIRI_PATH_PENALTY_<PREFIX_ENCODING>=<multiplier>`
+- Encode `/` as `__`. Example: `KIRI_PATH_PENALTY_src__api__=0.8`
 
-## 優先順位（後勝ち）
+## Precedence (last wins)
 
-`boost_profile` 定義 < 環境変数 < `.kiri/config.yaml`
+`boost_profile` defaults < Environment variables < `.kiri/config.yaml`
 
-## 正規化ルール
+## Normalization Rules
 
-- `\` を `/` に変換し POSIX 形式へ統一。
-- `../` やドライブレター（`C:\` など）は除去（リポジトリ相対のみ許容）。
-- 末尾 `/` は元が付いていた場合のみ保持。
+- Convert `\` to `/` (POSIX style).
+- Strip drive letters and reject paths containing `..` (repo-relative only).
+- Preserve trailing `/` only if provided.
 
-## 適用と反映タイミング
+## Application & Refresh
 
-- KIRI サーバー起動時に読み込み。
-- プロセス起動後に `.kiri/config.yaml` や環境変数を変更した場合は、**サーバー/デーモンの再起動が必要**（キャッシュ済みのため）。
+- Loaded at server/daemon start.
+- After editing `.kiri/config.yaml` or env vars, **restart the server/daemon** to refresh (values are cached in-process).
 
-## 確認手順（最小）
+## Quick Verification
 
-1. `.kiri/config.yaml` を設定
-2. サーバー/デーモンを再起動 (`kiri --repo . --db .kiri/index.duckdb --watch` など)
-3. `context_bundle` / `files_search` でパスに応じた順位変化を確認
+1. Add `.kiri/config.yaml`
+2. Restart server/daemon (`kiri --repo . --db .kiri/index.duckdb --watch`, etc.)
+3. Run `context_bundle` or `files_search` and confirm ranking shifts for the targeted paths.
 
-## トラブルシュート
+## Troubleshooting
 
-- エラー例: `Path penalty prefix "..." must not contain ".."`  
-  → `..` を含むパスは拒否されます。リポジトリ相対で指定してください。
-- 反映されない: 設定変更後はサーバーを再起動してください（キャッシュが効きます）。
+- Error: `Path penalty prefix "..." must not contain ".."` → remove `..`; only repo-relative paths are allowed.
+- Not applied: restart the process to drop caches after config changes.

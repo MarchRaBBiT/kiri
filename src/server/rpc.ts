@@ -261,6 +261,12 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
           description:
             'File type boosting mode: "default" prioritizes implementation files (src/app/, src/components/), "docs" prioritizes documentation (*.md), "balanced" applies equal weight to both docs and implementation, "none" disables boosting. Default is "default".',
         },
+        path_prefix: {
+          type: "string",
+          pattern: "^(?!.*\\.\\.)[A-Za-z0-9_./\\-]+/?$",
+          description:
+            "Filter by path prefix (e.g., 'docs/', 'src/server/'). Path traversal ('..') is not allowed.",
+        },
         artifacts: {
           type: "object",
           additionalProperties: true,
@@ -652,6 +658,14 @@ function parseContextBundleParams(input: unknown, context: ServerContext): Conte
           `Valid profiles are: ${Object.keys(BOOST_PROFILES).join(", ")}`
       );
     }
+  }
+
+  if (typeof record.path_prefix === "string") {
+    if (record.path_prefix.includes("..")) {
+      throw new Error("path_prefix cannot contain '..' (path traversal not allowed)");
+    }
+    const normalizedPrefix = record.path_prefix.replace(/\\/g, "/").replace(/^\/+/, "");
+    params.path_prefix = normalizedPrefix;
   }
 
   // Parse compact parameter (default: true for token efficiency)

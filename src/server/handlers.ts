@@ -434,6 +434,7 @@ export interface ContextBundleParams {
   includeTokensEstimate?: boolean; // If true, compute tokens_estimate (slower)
   metadata_filters?: Record<string, string | string[]>;
   requestId?: string; // Optional request ID for tracing/debugging
+  path_prefix?: string;
 }
 
 export interface ContextBundleItem {
@@ -1385,6 +1386,14 @@ function ensureCandidate(map: Map<string, CandidateInfo>, filePath: string): Can
     map.set(filePath, candidate);
   }
   return candidate;
+}
+
+function pathMatchesPrefix(filePath: string, pathPrefix?: string): boolean {
+  if (!pathPrefix) {
+    return true;
+  }
+  const normalizedPath = filePath.replace(/\\/g, "/").replace(/^\/+/, "");
+  return normalizedPath.startsWith(pathPrefix);
 }
 
 interface ExpandHintParams {
@@ -3610,6 +3619,10 @@ async function contextBundleImpl(
   const substringHints = hintBuckets.substringHints;
   const includeTokensEstimate = params.includeTokensEstimate === true;
   const isCompact = params.compact === true;
+  const pathPrefix =
+    params.path_prefix && params.path_prefix.length > 0
+      ? params.path_prefix.replace(/\\/g, "/").replace(/^\/+/, "")
+      : undefined;
 
   // 項目2: トークンバジェット保護警告
   // 大量データ+非コンパクトモード+トークン推定なしの場合に警告
@@ -4115,6 +4128,9 @@ async function contextBundleImpl(
   const materializeCandidates = async (): Promise<CandidateInfo[]> => {
     const result: CandidateInfo[] = [];
     for (const candidate of candidates.values()) {
+      if (!pathMatchesPrefix(candidate.path, pathPrefix)) {
+        continue;
+      }
       if (isSuppressedPath(candidate.path)) {
         continue;
       }

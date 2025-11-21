@@ -701,6 +701,7 @@ export interface SemanticRerankResult {
 const DEFAULT_SEARCH_LIMIT = 50;
 const DEFAULT_BUNDLE_LIMIT = 7; // Reduced from 12 to optimize token usage
 const MAX_BUNDLE_LIMIT = 20;
+const TRACE_SEARCH = process.env.KIRI_TRACE_SEARCH === "1";
 const MAX_KEYWORDS = 12;
 const MAX_MATCHES_PER_KEYWORD = 40;
 const MAX_DEPENDENCY_SEEDS = 8;
@@ -718,6 +719,16 @@ const SAFE_PATH_PATTERN = /^[a-zA-Z0-9_.\-/]+$/;
 const HINT_PRIORITY_TEXT_MULTIPLIER = serverConfig.hints.priority.textMultiplier;
 const HINT_PRIORITY_PATH_MULTIPLIER = serverConfig.hints.priority.pathMultiplier;
 const HINT_PRIORITY_BASE_BONUS = serverConfig.hints.priority.baseBonus;
+const PATH_FALLBACK_LIMIT = 40;
+const PATH_FALLBACK_TERMS_LIMIT = 5;
+const PATH_FALLBACK_KEEP = 8;
+const AUTO_PATH_SEGMENT_LIMIT = 4;
+
+function traceSearch(message: string, ...args: unknown[]): void {
+  if (TRACE_SEARCH) {
+    console.log(`[TRACE context_bundle] ${message}`, ...args);
+  }
+}
 
 const HINT_DIR_LIMIT = serverConfig.hints.directory.limit;
 const HINT_DIR_MAX_FILES = serverConfig.hints.directory.maxFiles;
@@ -1142,6 +1153,10 @@ interface CandidateInfo {
   embedding: number[] | null;
   semanticSimilarity: number | null;
   pathMatchHits: number; // Track path match count for path-miss penalty (Issue #68)
+  keywordHits: Set<string>;
+  phraseHits: number;
+  pathFallbackReason?: "no-string-match" | "low-candidates" | "supplemental";
+  fallbackTextHits: number;
   penalties: PenaltyImpact[]; // Penalty log for telemetry (Issue #68)
 }
 
@@ -1318,7 +1333,30 @@ function extractKeywords(text: string): ExtractedTerms {
     }
   }
 
+  addKeywordDerivedPathSegments(result);
   return result;
+}
+
+function addKeywordDerivedPathSegments(result: ExtractedTerms): void {
+  if (result.pathSegments.length >= AUTO_PATH_SEGMENT_LIMIT) {
+    return;
+  }
+  const additional: string[] = [];
+  for (const keyword of result.keywords) {
+    if (keyword.length < 3 || STOP_WORDS.has(keyword)) {
+      continue;
+    }
+    if (result.pathSegments.includes(keyword) || additional.includes(keyword)) {
+      continue;
+    }
+    additional.push(keyword);
+    if (result.pathSegments.length + additional.length >= AUTO_PATH_SEGMENT_LIMIT) {
+      break;
+    }
+  }
+  if (additional.length > 0) {
+    result.pathSegments.push(...additional);
+  }
 }
 
 function ensureCandidate(map: Map<string, CandidateInfo>, filePath: string): CandidateInfo {
@@ -1337,6 +1375,10 @@ function ensureCandidate(map: Map<string, CandidateInfo>, filePath: string): Can
       embedding: null,
       semanticSimilarity: null,
       pathMatchHits: 0, // Issue #68: Track path match count
+      keywordHits: new Set<string>(),
+      phraseHits: 0,
+      pathFallbackReason: undefined,
+      fallbackTextHits: 0,
       penalties: [], // Issue #68: Penalty log for telemetry
     };
     map.set(filePath, candidate);
@@ -2538,6 +2580,71 @@ function applyFileTypeBoost(
   return baseScore * multiplier;
 }
 
+function applyCoverageBoost(
+  candidate: CandidateInfo,
+  extractedTerms: ExtractedTerms,
+  weights: ScoringWeights
+): void {
+  // Skip for pure path-fallback candidates without text evidence
+  if (
+    candidate.reasons.has("fallback:path") &&
+    candidate.keywordHits.size === 0 &&
+    candidate.phraseHits === 0
+  ) {
+    return;
+  }
+
+  // Coverage boost is only meaningful for text/phrase evidence; skip if no text evidence at all
+  if (candidate.keywordHits.size === 0 && candidate.phraseHits === 0) {
+    return;
+  }
+
+  if (extractedTerms.keywords.length > 0 && candidate.keywordHits.size > 0) {
+    const coverage = candidate.keywordHits.size / extractedTerms.keywords.length;
+    const bonus = coverage * weights.textMatch * 0.4;
+    candidate.score += bonus;
+    candidate.reasons.add(`coverage:keywords:${coverage.toFixed(2)}`);
+  }
+
+  if (extractedTerms.phrases.length > 0 && candidate.phraseHits > 0) {
+    const phraseCoverage = Math.min(1, candidate.phraseHits / extractedTerms.phrases.length);
+    const bonus = phraseCoverage * weights.textMatch * 0.6;
+    candidate.score += bonus;
+    candidate.reasons.add(`coverage:phrases:${phraseCoverage.toFixed(2)}`);
+  }
+}
+
+async function fetchPathFallbackCandidates(
+  db: DuckDBClient,
+  repoId: number,
+  terms: string[],
+  limit: number
+): Promise<FileWithEmbeddingRow[]> {
+  if (terms.length === 0 || limit <= 0) {
+    return [];
+  }
+
+  const filters = terms.map(() => "f.path ILIKE ?").join(" OR ");
+  const params: unknown[] = [repoId, ...terms.map((term) => `%${term}%`), limit];
+
+  return await db.all<FileWithEmbeddingRow>(
+    `
+      SELECT f.path, f.lang, f.ext, f.is_binary, b.content, fe.vector_json, fe.dims AS vector_dims
+      FROM file f
+      JOIN blob b ON b.hash = f.blob_hash
+      LEFT JOIN file_embedding fe
+        ON fe.repo_id = f.repo_id
+       AND fe.path = f.path
+      WHERE f.repo_id = ?
+        AND f.is_binary = FALSE
+        AND (${filters})
+      ORDER BY f.path
+      LIMIT ?
+    `,
+    params
+  );
+}
+
 /**
  * パスベースのスコアリングを適用（加算的ブースト）
  * goalのキーワード/フレーズがファイルパスに含まれる場合にスコアを加算
@@ -2756,6 +2863,20 @@ function applyFileTypeMultipliers(
 ): void {
   const fileName = path.split("/").pop() ?? "";
   const lowerPath = path.toLowerCase();
+
+  // Very low value: schemas, fixtures, testdata, examples, baseline
+  const schemaJson = lowerPath.endsWith(".schema.json") || lowerPath.includes("/schemas/");
+  const isFixture =
+    lowerPath.includes("/fixtures/") ||
+    lowerPath.includes("/fixture/") ||
+    lowerPath.includes("/testdata/");
+  const isExample = lowerPath.includes("/examples/") || lowerPath.includes("/example/");
+  const isBaseline = lowerPath.includes("baseline") || lowerPath.includes("golden");
+  if (schemaJson || isFixture || isExample || isBaseline) {
+    candidate.scoreMultiplier *= weights.configPenaltyMultiplier;
+    candidate.reasons.add("penalty:low-value-file");
+    return;
+  }
 
   // ✅ Step 1: Low-value files (v1.0.0: syntax/perf/legal/migration)
   // Apply configPenaltyMultiplier (strong penalty) to rarely useful file types
@@ -3527,6 +3648,10 @@ async function contextBundleImpl(
   const queryEmbedding = generateEmbedding(semanticSeed)?.values ?? null;
 
   const extractedTerms = extractKeywords(semanticSeed);
+  const segmentPreview = extractedTerms.pathSegments.slice(0, AUTO_PATH_SEGMENT_LIMIT).join(",");
+  traceSearch(
+    `terms repo=${repoId} id=${params.requestId ?? "n/a"} keywords=${extractedTerms.keywords.length} phrases=${extractedTerms.phrases.length} pathSegments=${extractedTerms.pathSegments.length} segs=[${segmentPreview}]`
+  );
 
   // フォールバック: editing_pathからキーワードを抽出
   if (
@@ -3562,8 +3687,8 @@ async function contextBundleImpl(
       .join(" OR ");
 
     // DEBUG: Log SQL query parameters for troubleshooting
-    console.log(
-      `[DEBUG contextBundle] Executing phrase match query with repo_id=${repoId}, phrases=${JSON.stringify(extractedTerms.phrases)}`
+    traceSearch(
+      `Executing phrase match query with repo_id=${repoId}, phrases=${JSON.stringify(extractedTerms.phrases)}`
     );
 
     const rows = await db.all<FileWithEmbeddingRow>(
@@ -3585,9 +3710,11 @@ async function contextBundleImpl(
 
     // DEBUG: Log returned paths and verify they match expected repo_id
     if (rows.length > 0) {
-      console.log(
-        `[DEBUG contextBundle] Phrase match returned ${rows.length} rows. Sample paths:`,
-        rows.slice(0, 3).map((r) => r.path)
+      traceSearch(
+        `Phrase match returned ${rows.length} rows. Sample paths: ${rows
+          .slice(0, 3)
+          .map((r) => r.path)
+          .join(", ")}`
       );
 
       // Verify repo_id of returned files
@@ -3596,7 +3723,7 @@ async function contextBundleImpl(
         `SELECT path, repo_id FROM file WHERE path IN (${pathsToCheck.map(() => "?").join(", ")}) LIMIT 3`,
         pathsToCheck
       );
-      console.log(`[DEBUG contextBundle] Repo ID verification:`, verification);
+      traceSearch(`Repo ID verification`, verification);
     }
 
     for (const row of rows) {
@@ -3615,6 +3742,7 @@ async function contextBundleImpl(
       }
 
       const candidate = ensureCandidate(candidates, row.path);
+      candidate.phraseHits += matchedPhrases.length;
 
       // 各マッチしたフレーズに対してスコアリング
       for (const phrase of matchedPhrases) {
@@ -3648,6 +3776,8 @@ async function contextBundleImpl(
         });
       }
     }
+
+    traceSearch(`phrase search produced ${rows.length} rows, candidates=${candidates.size}`);
   }
 
   // キーワードマッチング（通常の重み）- 統合クエリでパフォーマンス改善
@@ -3693,6 +3823,7 @@ async function contextBundleImpl(
       for (const keyword of matchedKeywords) {
         candidate.score += weights.textMatch;
         candidate.reasons.add(`text:${keyword}`);
+        candidate.keywordHits.add(keyword);
       }
 
       // Apply boost profile once per file
@@ -3719,6 +3850,122 @@ async function contextBundleImpl(
           embedding: candidate.embedding,
         });
       }
+    }
+
+    traceSearch(`keyword search produced ${rows.length} rows, candidates=${candidates.size}`);
+  }
+
+  const fallbackTerms = Array.from(
+    new Set(
+      [...extractedTerms.phrases, ...extractedTerms.keywords, ...extractedTerms.pathSegments]
+        .map((term) => term.toLowerCase())
+        .filter((term) => term.length >= 3)
+    )
+  ).slice(0, PATH_FALLBACK_TERMS_LIMIT);
+
+  if (fallbackTerms.length > 0) {
+    const fallbackRows = await fetchPathFallbackCandidates(
+      db,
+      repoId,
+      fallbackTerms,
+      Math.min(limit * 2, PATH_FALLBACK_LIMIT)
+    );
+    const fallbackReason =
+      stringMatchSeeds.size === 0
+        ? "no-string-match"
+        : candidates.size < limit
+          ? "low-candidates"
+          : "supplemental";
+    traceSearch(
+      `path fallback triggered (${fallbackReason}) terms=${JSON.stringify(fallbackTerms)} rows=${fallbackRows.length}`
+    );
+    const fallbackWeight =
+      stringMatchSeeds.size === 0 ? weights.pathMatch * 0.75 : weights.pathMatch * 0.2;
+    for (const row of fallbackRows) {
+      const candidate = ensureCandidate(candidates, row.path);
+      candidate.pathFallbackReason = fallbackReason;
+      candidate.score += fallbackWeight;
+      candidate.reasons.add("fallback:path");
+      const contentLower = row.content?.toLowerCase() ?? "";
+      if (contentLower.length > 0) {
+        let textHits = 0;
+        for (const term of fallbackTerms) {
+          if (contentLower.includes(term)) {
+            textHits += 1;
+            candidate.keywordHits.add(term);
+          }
+        }
+        candidate.fallbackTextHits += textHits;
+        if (textHits > 0) {
+          const textBoost = textHits * weights.textMatch * 0.15;
+          candidate.score += textBoost;
+          candidate.reasons.add(`fallback:content:${textHits}`);
+        }
+      }
+      candidate.matchLine ??= 1;
+      candidate.lang ??= row.lang;
+      candidate.ext ??= row.ext;
+      candidate.totalLines ??= row.content?.split(/\r?\n/).length ?? null;
+      candidate.content ??= row.content;
+      candidate.embedding ??= parseEmbedding(row.vector_json ?? null, row.vector_dims ?? null);
+      if (boostProfile !== "none") {
+        applyBoostProfile(candidate, row, profileConfig, weights, extractedTerms);
+      }
+      stringMatchSeeds.add(row.path);
+      if (!fileCache.has(row.path) && row.content) {
+        fileCache.set(row.path, {
+          content: row.content,
+          lang: row.lang,
+          ext: row.ext,
+          totalLines: candidate.totalLines ?? 0,
+          embedding: candidate.embedding,
+        });
+      }
+    }
+
+    // Drop fallback-only candidates with zero text evidence before trimming
+    for (const [path, candidate] of Array.from(candidates.entries())) {
+      const isFallbackOnly =
+        candidate.reasons.has("fallback:path") &&
+        candidate.keywordHits.size === 0 &&
+        candidate.phraseHits === 0;
+      const hasTextEvidence = candidate.fallbackTextHits > 0;
+      if (isFallbackOnly && !hasTextEvidence) {
+        candidates.delete(path);
+      }
+    }
+
+    // Demote fallback-only hits without text evidence
+    for (const candidate of candidates.values()) {
+      const isFallbackOnly =
+        candidate.reasons.has("fallback:path") &&
+        candidate.keywordHits.size === 0 &&
+        candidate.phraseHits === 0;
+      const hasTextEvidence = candidate.fallbackTextHits > 0;
+      if (isFallbackOnly && !hasTextEvidence) {
+        candidate.scoreMultiplier *= 0.5;
+        candidate.reasons.add("penalty:fallback-no-text");
+      }
+    }
+
+    if (fallbackRows.length > PATH_FALLBACK_KEEP) {
+      const fallbackOnly = Array.from(candidates.entries())
+        .filter(([_, candidate]) => candidate.reasons.has("fallback:path"))
+        .sort((a, b) => b[1].score - a[1].score);
+
+      const toDrop = fallbackOnly.slice(PATH_FALLBACK_KEEP);
+      for (const [path] of toDrop) {
+        candidates.delete(path);
+      }
+      traceSearch(
+        `path fallback trimmed kept=${PATH_FALLBACK_KEEP} dropped=${toDrop.length} candidates=${candidates.size}`
+      );
+    }
+  }
+
+  if (extractedTerms.keywords.length > 0 || extractedTerms.phrases.length > 0) {
+    for (const candidate of candidates.values()) {
+      applyCoverageBoost(candidate, extractedTerms, weights);
     }
   }
 
@@ -3930,10 +4177,14 @@ async function contextBundleImpl(
   }
 
   let materializedCandidates = await materializeCandidates();
+  traceSearch(`materialized candidates: ${materializedCandidates.length}`);
 
   if (materializedCandidates.length === 0 && hasAnyMetadataFilters) {
     await addMetadataFallbackCandidates();
     materializedCandidates = await materializeCandidates();
+    traceSearch(
+      `materialized candidates after metadata fallback: ${materializedCandidates.length}`
+    );
   }
 
   if (materializedCandidates.length === 0) {
@@ -4096,6 +4347,14 @@ async function contextBundleImpl(
       }
       return b.score - a.score;
     });
+  if (TRACE_SEARCH) {
+    const sample = rankedCandidates.slice(0, 5).map((candidate) => ({
+      path: candidate.path,
+      score: Number(candidate.score.toFixed(3)),
+      reasons: Array.from(candidate.reasons).slice(0, 3),
+    }));
+    traceSearch(`ranked candidates=${rankedCandidates.length}`, sample);
+  }
 
   const prioritizedCandidates = prioritizeHintCandidates(
     rankedCandidates,

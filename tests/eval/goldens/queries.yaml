@@ -18,6 +18,9 @@ repos:
   kiri-docs-plain:
     repoPath: "tmp/docs-plain"
     dbPath: "tmp/docs-plain/.kiri/index.duckdb"
+  assay-kit:
+    repoPath: "external/assay-kit"
+    dbPath: "external/assay-kit/.kiri/index.duckdb"
 
 queries:
   - id: vscode-editor-contributions
@@ -26,6 +29,8 @@ queries:
     intent: "Find where workbench contributions are registered for editor"
     category: "editor"
     repo: "vscode"
+    params:
+      boostProfile: "vscode"
     expected:
       paths:
         - "src/vs/workbench/browser/workbench.ts"
@@ -44,6 +49,8 @@ queries:
     intent: "Locate TreeDataProvider API implementation"
     category: "api"
     repo: "vscode"
+    params:
+      boostProfile: "vscode"
     expected:
       paths:
         - "src/vs/workbench/api/common/extHostTreeViews.ts"
@@ -59,6 +66,8 @@ queries:
     intent: "Inspect debug adapter tracker service"
     category: "debug"
     repo: "vscode"
+    params:
+      boostProfile: "vscode"
     expected:
       paths:
         - "src/vs/workbench/contrib/debug/browser/debugAdapterManager.ts"
@@ -76,6 +85,8 @@ queries:
     intent: "Understand terminal shell integration prompt decoration"
     category: "feature"
     repo: "vscode"
+    params:
+      boostProfile: "vscode"
     expected:
       paths:
         - "src/vs/workbench/contrib/terminal/browser/terminalInstance.ts" # Primary: terminal instance implementation
@@ -99,6 +110,8 @@ queries:
     intent: "Trace notebook kernel service resolution logic"
     category: "api"
     repo: "vscode"
+    params:
+      boostProfile: "vscode"
     expected:
       paths:
         - "src/vs/workbench/contrib/notebook/browser/services/notebookKernelServiceImpl.ts"
@@ -121,6 +134,7 @@ queries:
     category: "feature"
     repo: "vscode"
     params:
+      boostProfile: "vscode"
       scoringProfile: "editor"
     expected:
       paths:
@@ -146,6 +160,8 @@ queries:
     intent: "Find color registry entries for workbench"
     category: "editor"
     repo: "vscode"
+    params:
+      boostProfile: "vscode"
     expected:
       paths:
         - "src/vs/platform/theme/common/colorRegistry.ts"
@@ -166,6 +182,8 @@ queries:
     intent: "Inspect file search implementation"
     category: "infra"
     repo: "vscode"
+    params:
+      boostProfile: "vscode"
     expected:
       paths:
         - "src/vs/workbench/services/search/node/ripgrepTextSearchEngine.ts"
@@ -187,6 +205,8 @@ queries:
     intent: "Understand extension activation event wiring"
     category: "api"
     repo: "vscode"
+    params:
+      boostProfile: "vscode"
     expected:
       paths:
         - "src/vs/workbench/api/common/extHostExtensionService.ts"
@@ -206,6 +226,8 @@ queries:
     intent: "Review settings sync merge logic"
     category: "feature"
     repo: "vscode"
+    params:
+      boostProfile: "vscode"
     expected:
       paths:
         - "src/vs/platform/userDataSync/common/settingsSync.ts"
@@ -232,6 +254,8 @@ queries:
     intent: "Inspect microtask queue tracer"
     category: "debug"
     repo: "vscode"
+    params:
+      boostProfile: "vscode"
     expected:
       paths:
         - "src/vs/platform/telemetry/common/telemetryUtils.ts"
@@ -250,6 +274,8 @@ queries:
     intent: "Understand task terminal shell integration run profiles"
     category: "feature"
     repo: "vscode"
+    params:
+      boostProfile: "vscode"
     expected:
       paths:
         - "src/vs/workbench/contrib/tasks/browser/terminalTaskSystem.ts"
@@ -419,3 +445,40 @@ queries:
     tags: ["docs", "testing", "plain"]
     requiresMetadata: true
     notes: "front matter なしでの Golden set クエリの比較。"
+
+  - id: assay-plugin-registry
+    query: "PluginRegistry registerPlugin dependency graph"
+    tool: "context_bundle"
+    intent: "Locate plugin registry bootstrap logic in assay-kit"
+    category: "assay"
+    repo: "assay-kit"
+    params:
+      boostProfile: "default"
+    expected:
+      paths:
+        - "packages/assay-kit/src/plugins/registry.ts"
+        - "packages/assay-kit/src/plugins/types.ts"
+        - "packages/assay-kit/src/plugins/logger.ts"
+        - "packages/assay-kit/src/plugins/dependencies.ts"
+    tags: ["plugin", "registry", "assay-kit"]
+    hints:
+      - "PluginRegistry"
+      - "registerPlugin"
+
+  - id: assay-dataset-loader
+    query: "loadDatasetFromYAML schema validation error"
+    tool: "context_bundle"
+    intent: "Find dataset loader and schema definition for assay-kit"
+    category: "assay"
+    repo: "assay-kit"
+    params:
+      boostProfile: "default"
+    expected:
+      paths:
+        - "packages/assay-kit/src/dataset/loader.ts"
+        - "packages/assay-kit/src/dataset/schemas/dataset.schema.ts"
+        - "packages/assay-kit/src/dataset/schemas/eval.schema.ts"
+    tags: ["dataset", "schema", "assay-kit"]
+    hints:
+      - "loadDatasetFromYAML"
+      - "dataset.schema.ts"

@@ -1,0 +1,25 @@
+path_penalties:
+  # Reduce noisy auxiliary packages
+  - prefix: ".eslint-plugin-local/"
+    multiplier: 0.1
+  - prefix: "cli/"
+    multiplier: 0.25
+  - prefix: "cli/src/"
+    multiplier: 0.2
+  - prefix: "extensions/"
+    multiplier: 0.15
+  - prefix: "tests/eval/"
+    multiplier: 0.05
+  - prefix: "datasets/"
+    multiplier: 0.05
+  - prefix: "tests/"
+    multiplier: 0.3
+  - prefix: "examples/"
+    multiplier: 0.1
+  - prefix: "fixtures/"
+    multiplier: 0.1
+  - prefix: "testdata/"
+    multiplier: 0.1
+  # Suppress repo-local baseline fixtures that surface via fallback
+  - prefix: "packages/assay-kit/baseline-tests"
+    multiplier: 0.05

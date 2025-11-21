@@ -1388,12 +1388,26 @@ function ensureCandidate(map: Map<string, CandidateInfo>, filePath: string): Can
   return candidate;
 }
 
-function pathMatchesPrefix(filePath: string, pathPrefix?: string): boolean {
-  if (!pathPrefix) {
+function normalizePathPrefix(rawPrefix: string): string {
+  // Normalize, strip leading slashes/dots, and ensure trailing slash for exact prefix match
+  const normalized = path.posix.normalize(rawPrefix.replace(/\\/g, "/"));
+  const stripped = normalized.replace(/^\.\//, "").replace(/^\/+/, "");
+  if (stripped === "" || stripped === ".") {
+    return "";
+  }
+  return stripped.endsWith("/") ? stripped : `${stripped}/`;
+}
+
+function normalizeFilePath(filePath: string): string {
+  return path.posix.normalize(filePath.replace(/\\/g, "/")).replace(/^\/+/, "");
+}
+
+function pathMatchesPrefix(filePath: string, normalizedPrefix?: string): boolean {
+  if (!normalizedPrefix) {
     return true;
   }
-  const normalizedPath = filePath.replace(/\\/g, "/").replace(/^\/+/, "");
-  return normalizedPath.startsWith(pathPrefix);
+  const normalizedPath = normalizeFilePath(filePath);
+  return normalizedPath.startsWith(normalizedPrefix);
 }
 
 interface ExpandHintParams {
@@ -3621,7 +3635,7 @@ async function contextBundleImpl(
   const isCompact = params.compact === true;
   const pathPrefix =
     params.path_prefix && params.path_prefix.length > 0
-      ? params.path_prefix.replace(/\\/g, "/").replace(/^\/+/, "")
+      ? normalizePathPrefix(params.path_prefix)
       : undefined;
 
   // 項目2: トークンバジェット保護警告

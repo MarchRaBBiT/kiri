@@ -399,6 +399,43 @@ describe("context_bundle", () => {
     expect(bundle.context.map((item) => item.path)).not.toContain("external/assay-kit/README.md");
   }, 10000);
 
+  it("normalizes path_prefix variants", async () => {
+    const repo = await createTempRepo({
+      "docs/guide.md": "# Architecture\nCore guide\n",
+      "external/assay-kit/README.md": "# Architecture\nExternal guide\n",
+    });
+    cleanupTargets.push({ dispose: repo.cleanup });
+
+    const dbDir = await mkdtemp(join(tmpdir(), "kiri-context-path-prefix-variants-"));
+    const dbPath = join(dbDir, "index.duckdb");
+    cleanupTargets.push({ dispose: async () => await rm(dbDir, { recursive: true, force: true }) });
+
+    await runIndexer({ repoRoot: repo.path, databasePath: dbPath, full: true });
+
+    const db = await DuckDBClient.connect({ databasePath: dbPath });
+    cleanupTargets.push({ dispose: async () => await db.close() });
+
+    const repoId = await resolveRepoId(db, repo.path);
+    const tableAvailability = await checkTableAvailability(db);
+    const context: ServerContext = {
+      db,
+      repoId,
+      services: createServerServices(db),
+      tableAvailability,
+      warningManager: new WarningManager(),
+    };
+
+    const bundle = await contextBundle(context, {
+      goal: "architecture guide",
+      boost_profile: "docs",
+      path_prefix: "//docs//",
+      limit: 5,
+    });
+
+    expect(bundle.context.length).toBeGreaterThan(0);
+    expect(bundle.context.every((item) => item.path.startsWith("docs/"))).toBe(true);
+  }, 10000);
+
   it("promotes dictionary entries when only substring hints are available", async () => {
     const repo = await createTempRepo({
       "src/stats/mann.ts": `export function mannWhitneyUTest(a: number[], b: number[]): number {

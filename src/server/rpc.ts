@@ -664,7 +664,9 @@ function parseContextBundleParams(input: unknown, context: ServerContext): Conte
     if (record.path_prefix.includes("..")) {
       throw new Error("path_prefix cannot contain '..' (path traversal not allowed)");
     }
-    const normalizedPrefix = record.path_prefix.replace(/\\/g, "/").replace(/^\/+/, "");
+    const normalizedPrefix = path.posix
+      .normalize(record.path_prefix.replace(/\\/g, "/"))
+      .replace(/^\/+/, "");
     params.path_prefix = normalizedPrefix;
   }
 

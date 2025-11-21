@@ -162,6 +162,57 @@ pnpm exec tsx scripts/docs/make-plain.ts --index
 
 `tests/eval/goldens/queries.yaml` の `kiri-docs-plain` エイリアスは上記 `tmp/docs-plain/` を参照しており、`pnpm run eval:golden` だけで「front matter あり/なし」両カテゴリのP@10やMetadata Pass Rateを計測できます。front matter 除去ロジックは YAML ブロックのみを削除し、本体コンテンツや Markdown リンクは変更されません。
 
+### ゴールデンセット実行前チェックリスト
+
+複数リポジトリを跨いだベンチマークでは、以下の手順を満たしていないとすべてのクエリが空振りします。CI/ローカルを問わず、実行前に毎回確認してください。
+
+1. **リポジトリを用意する**
+
+   ```bash
+   git submodule update --init external/assay-kit
+   git clone --depth 1 https://github.com/microsoft/vscode.git external/vscode
+   pnpm exec tsx scripts/docs/make-plain.ts --index
+   ```
+
+2. **DuckDB と security.lock を揃える**
+
+   ```bash
+   pnpm exec tsx src/indexer/cli.ts --repo . --db var/index.duckdb --full
+   pnpm exec tsx src/indexer/cli.ts --repo external/vscode --db external/vscode/.kiri/index.duckdb --full
+   pnpm exec tsx src/client/cli.ts security verify --db var/index.duckdb --security-lock var/security.lock --write-lock
+   pnpm exec tsx src/client/cli.ts security verify --db external/vscode/.kiri/index.duckdb --security-lock external/vscode/.kiri/security.lock --write-lock
+   pnpm exec tsx src/client/cli.ts security verify --db tmp/docs-plain/.kiri/index.duckdb --security-lock tmp/docs-plain/.kiri/security.lock --write-lock
+   ```
+
+   > `scripts/eval/run-golden.ts` は `security.lock` が存在しない場合に即時停止します。エラーメッセージに沿って上記コマンドを再実行してください。
+
+3. **インデックスカバレッジを確認する**
+
+   ```bash
+   pnpm exec tsx scripts/diag/index-coverage.ts --dataset datasets/kiri-ab.yaml --db var/index.duckdb
+   pnpm exec tsx scripts/diag/index-coverage.ts --dataset tests/eval/goldens/queries.yaml --db external/vscode/.kiri/index.duckdb
+   ```
+
+   期待される出力は `Missing on disk: 0 / Missing in DuckDB: 0` です。ヒットしないファイルがある場合は `.gitignore` や `.kiri` の生成を確認します。
+
+4. **スニペット/トークンを spot check する**
+
+   ```bash
+   # 期待ファイルの抜粋を確認
+   pnpm exec tsx scripts/diag/snippet-preview.ts --dataset datasets/kiri-ab.yaml --db var/index.duckdb --max-lines 6 | head -n 80
+
+   # クエリごとのキーワード・パス展開を確認
+   pnpm exec tsx scripts/diag/query-terms.ts --dataset tests/eval/goldens/queries.yaml --repo vscode
+   ```
+
+5. **ベンチマークを実行する**
+
+   ```bash
+   KIRI_ALLOW_UNSAFE_PATHS=1 pnpm run eval:golden -- --dataset datasets/kiri-ab.yaml --limit 50 --k 15
+   ```
+
+   `KIRI_ALLOW_UNSAFE_PATHS=1` を付与しないと `external/*` などリポジトリ外パスを参照できません。
+
 ### Assay Kit 連携（Phase 2 機能）
 
 - `pnpm run assay:evaluate` で `external/assay-kit/examples/kiri-integration/datasets/kiri-golden.yaml` を対象に Assay Runner を実行し、`var/assay/eval-YYYY-MM-DD.(json|md)` に結果を保存します。`KiriSearchAdapter` が内部で `kiri-server` を HTTP モードで起動し、warmup/リトライ/並列実行を Assay に委譲します。

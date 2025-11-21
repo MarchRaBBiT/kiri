@@ -15,7 +15,7 @@
 import { spawn, type ChildProcess, execSync } from "node:child_process";
 import { once } from "node:events";
 import { readFileSync, writeFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
-import { join, isAbsolute } from "node:path";
+import { join, isAbsolute, dirname } from "node:path";
 
 import { parse as parseYAML } from "yaml";
 
@@ -800,6 +800,28 @@ function resolveRepoTargets(
   return { repoMap, defaultRepoId };
 }
 
+function validateRepoConfigs(repoMap: Map<string, RepoRuntimeConfig>): void {
+  const setupDocs = "docs/testing.md#ゴールデンセット実行前チェックリスト";
+  for (const config of repoMap.values()) {
+    if (!existsSync(config.repoPath)) {
+      throw new Error(
+        `Repository '${config.id}' is missing at ${config.repoPath}. Follow ${setupDocs} to fetch the repo before running the benchmark.`
+      );
+    }
+    if (!existsSync(config.dbPath)) {
+      throw new Error(
+        `DuckDB for repository '${config.id}' is missing at ${config.dbPath}. Run 'pnpm exec tsx src/indexer/cli.ts --repo ${config.repoPath} --db ${config.dbPath} --full' as documented in ${setupDocs}.`
+      );
+    }
+    const lockPath = join(dirname(config.dbPath), "security.lock");
+    if (!existsSync(lockPath)) {
+      throw new Error(
+        `Security lock missing for '${config.id}' at ${lockPath}. Execute 'pnpm exec tsx src/client/cli.ts security verify --db ${config.dbPath} --security-lock ${lockPath} --write-lock' (see ${setupDocs}).`
+      );
+    }
+  }
+}
+
 function loadBaseline(): BaselineData {
   const path = join(process.cwd(), "tests", "eval", "goldens", "baseline.json");
   if (!existsSync(path)) {
@@ -857,6 +879,7 @@ async function main(): Promise<void> {
   // Start MCP server
   const server = new McpServerManager();
   const { repoMap, defaultRepoId } = resolveRepoTargets(goldenSet, options);
+  validateRepoConfigs(repoMap);
 
   const resolveQueryRepo = (query?: GoldenQuery): string => {
     const repoId = query?.repo ?? defaultRepoId;

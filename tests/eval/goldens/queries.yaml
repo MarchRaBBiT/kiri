@@ -477,8 +477,14 @@ queries:
       paths:
         - "packages/assay-kit/src/dataset/loader.ts"
         - "packages/assay-kit/src/dataset/schemas/dataset.schema.ts"
-        - "packages/assay-kit/src/dataset/schemas/eval.schema.ts"
+        - "packages/assay-kit/src/dataset/schemas/query.schema.ts"
     tags: ["dataset", "schema", "assay-kit"]
     hints:
+      - "packages/assay-kit/src/dataset/loader.ts"
+      - "packages/assay-kit/src/dataset/schemas/dataset.schema.ts"
+      - "packages/assay-kit/src/dataset/schemas/query.schema.ts"
       - "loadDatasetFromYAML"
-      - "dataset.schema.ts"
+      - "schema"
+      - "validation"
+      - "dataset"
+      - "loader"

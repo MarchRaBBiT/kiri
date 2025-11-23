@@ -2,10 +2,11 @@
 
 ## Modules
 
-| Module                    | Purpose                                                               |
-| ------------------------- | --------------------------------------------------------------------- |
-| `PathPenaltyMerge.tla`    | Models YAML/ENV/Profile path penalty merging, invariants、liveness。  |
-| `PathPenaltyEncoding.tla` | 別モジュール化したプレフィックスの encode / decode / 正規化ロジック。 |
+| Module                    | Purpose                                                                 |
+| ------------------------- | ----------------------------------------------------------------------- |
+| `PathPenaltyMerge.tla`    | Models YAML/ENV/Profile path penalty merging, invariants、liveness。    |
+| `PathPenaltyEncoding.tla` | 別モジュール化したプレフィックスの encode / decode / 正規化ロジック。   |
+| `AdaptiveK.tla`           | クエリカテゴリに応じた K 値決定ロジックとフォールバックの安全性を検証。 |
 
 ## 仕様→実装対応
 

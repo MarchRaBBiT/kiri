@@ -170,7 +170,7 @@ pnpm exec tsx scripts/docs/make-plain.ts --index
 
    ```bash
    git submodule update --init external/assay-kit
-   git clone --depth 1 https://github.com/microsoft/vscode.git external/vscode
+   scripts/setup-golden.sh
    pnpm exec tsx scripts/docs/make-plain.ts --index
    ```
 
@@ -178,22 +178,25 @@ pnpm exec tsx scripts/docs/make-plain.ts --index
 
    ```bash
    pnpm exec tsx src/indexer/cli.ts --repo . --db var/index.duckdb --full
-   pnpm exec tsx src/indexer/cli.ts --repo external/vscode --db external/vscode/.kiri/index.duckdb --full
-   pnpm exec tsx src/client/cli.ts security verify --db var/index.duckdb --security-lock var/security.lock --write-lock
-   pnpm exec tsx src/client/cli.ts security verify --db external/vscode/.kiri/index.duckdb --security-lock external/vscode/.kiri/security.lock --write-lock
-   pnpm exec tsx src/client/cli.ts security verify --db tmp/docs-plain/.kiri/index.duckdb --security-lock tmp/docs-plain/.kiri/security.lock --write-lock
    ```
 
-   > `scripts/eval/run-golden.ts` は `security.lock` が存在しない場合に即時停止します。エラーメッセージに沿って上記コマンドを再実行してください。
+# 上記スクリプトでインデックス生成＆セキュリティロック生成まで行われます
+
+pnpm exec tsx src/client/cli.ts security verify --db var/index.duckdb --security-lock var/security.lock --write-lock
+pnpm exec tsx src/client/cli.ts security verify --db tmp/docs-plain/.kiri/index.duckdb --security-lock tmp/docs-plain/.kiri/security.lock --write-lock
+
+````
+
+> `scripts/eval/run-golden.ts` は `security.lock` が存在しない場合に即時停止します。エラーメッセージに沿って上記コマンドを再実行してください。
 
 3. **インデックスカバレッジを確認する**
 
-   ```bash
-   pnpm exec tsx scripts/diag/index-coverage.ts --dataset datasets/kiri-ab.yaml --db var/index.duckdb
-   pnpm exec tsx scripts/diag/index-coverage.ts --dataset tests/eval/goldens/queries.yaml --db external/vscode/.kiri/index.duckdb
-   ```
+```bash
+pnpm exec tsx scripts/diag/index-coverage.ts --dataset datasets/kiri-ab.yaml --db var/index.duckdb
+pnpm exec tsx scripts/diag/index-coverage.ts --dataset tests/eval/goldens/queries.yaml --db external/vscode/.kiri/index.duckdb
+````
 
-   期待される出力は `Missing on disk: 0 / Missing in DuckDB: 0` です。ヒットしないファイルがある場合は `.gitignore` や `.kiri` の生成を確認します。
+期待される出力は `Missing on disk: 0 / Missing in DuckDB: 0` です。ヒットしないファイルがある場合は `.gitignore` や `.kiri` の生成を確認します。
 
 4. **スニペット/トークンを spot check する**
 

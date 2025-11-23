@@ -341,7 +341,6 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     inputSchema: {
       type: "object",
       required: [],
-      anyOf: [{ required: ["query"] }, { required: ["metadata_filters"] }],
       additionalProperties: true,
       properties: {
         query: {

@@ -114,6 +114,55 @@ describe("MCP標準エンドポイント", () => {
     expect(toolNames).toContain("files_search");
   });
 
+  it("tools/list で files_search の inputSchema に top-level anyOf/oneOf/allOf が含まれない", async () => {
+    const repo = await createTempRepo({
+      "src/app.ts": "export const app = () => 1;\n",
+    });
+    cleanupTargets.push({ dispose: repo.cleanup });
+
+    const dbDir = await mkdtemp(join(tmpdir(), "kiri-mcp-tools-schema-"));
+    cleanupTargets.push({ dispose: async () => await rm(dbDir, { recursive: true, force: true }) });
+
+    const dbPath = join(dbDir, "index.duckdb");
+    const lockPath = join(dbDir, "security.lock");
+    const { hash } = loadSecurityConfig();
+    updateSecurityLock(hash, lockPath);
+
+    await runIndexer({ repoRoot: repo.path, databasePath: dbPath, full: true });
+
+    const runtime = await createServerRuntime({
+      repoRoot: repo.path,
+      databasePath: dbPath,
+      securityLockPath: lockPath,
+    });
+    cleanupTargets.push({ dispose: async () => await runtime.close() });
+
+    const handler = createRpcHandler(runtime);
+    const request: JsonRpcRequest = { jsonrpc: "2.0", id: 3, method: "tools/list" };
+    const response = ensureResponse(await handler(request));
+
+    expect(response.statusCode).toBe(200);
+    const payload = response.response as JsonRpcSuccess;
+    const tools = (payload.result as Record<string, unknown>).tools as unknown[];
+    expect(Array.isArray(tools)).toBe(true);
+
+    const filesSearch = tools.find(
+      (tool) =>
+        tool &&
+        typeof tool === "object" &&
+        (tool as Record<string, unknown>).name === "files_search"
+    ) as Record<string, unknown> | undefined;
+
+    expect(filesSearch).toBeDefined();
+    const schema = filesSearch?.inputSchema as Record<string, unknown> | undefined;
+    expect(schema && typeof schema === "object").toBe(true);
+
+    const invalidKeys = ["anyOf", "oneOf", "allOf"].filter(
+      (key) => schema !== undefined && Object.prototype.hasOwnProperty.call(schema, key)
+    );
+    expect(invalidKeys).toHaveLength(0);
+  });
+
   it("resources/list が空配列を返しクライアント互換性を保つ", async () => {
     const repo = await createTempRepo({
       "src/app.ts": "export const app = () => 1;\n",

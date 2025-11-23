@@ -1322,10 +1322,14 @@ async function executeQuery(
   const scoringProfile = query.params?.scoringProfile;
   const timeoutMs = query.params?.timeoutMs || defaultParams.timeoutMs;
 
+  // AdaptiveKが有効な場合、categoryベースでK値を決定させるためlimitを省略
+  const adaptiveKEnabled = process.env.KIRI_ADAPTIVE_K_ENABLED === "1";
   const params: Record<string, unknown> = {
-    limit: k,
     boost_profile: boostProfile,
   };
+  if (!adaptiveKEnabled) {
+    params.limit = k;
+  }
 
   const artifacts: { hints?: string[] } = {};
   if (query.hints && query.hints.length > 0) {
@@ -1334,6 +1338,10 @@ async function executeQuery(
 
   if (isContextBundleTool) {
     params.goal = query.query;
+    // AdaptiveK: カテゴリをhandlerに渡してK値調整に使用
+    if (query.category) {
+      params.category = query.category;
+    }
     if (artifacts.hints) {
       params.artifacts = artifacts;
     }

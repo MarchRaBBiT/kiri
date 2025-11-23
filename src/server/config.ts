@@ -184,6 +184,11 @@ export function loadServerConfig(): ServerConfig {
   const adaptiveKPerformance = parseEnvNumber(process.env.KIRI_ADAPTIVE_K_PERFORMANCE, 20);
   const adaptiveKDefault = parseEnvNumber(process.env.KIRI_ADAPTIVE_K_DEFAULT, 10);
   const adaptiveKWhenDisabled = parseEnvNumber(process.env.KIRI_ADAPTIVE_K_DISABLED_VALUE, 10);
+  // 追加カテゴリ: golden評価で使用される分類
+  const adaptiveKDebug = parseEnvNumber(process.env.KIRI_ADAPTIVE_K_DEBUG, 15);
+  const adaptiveKApi = parseEnvNumber(process.env.KIRI_ADAPTIVE_K_API, 15);
+  const adaptiveKDocs = parseEnvNumber(process.env.KIRI_ADAPTIVE_K_DOCS, 8);
+  const adaptiveKFeature = parseEnvNumber(process.env.KIRI_ADAPTIVE_K_FEATURE, 10);
 
   const adaptiveK: AdaptiveKConfig = {
     enabled: adaptiveKEnabled,
@@ -195,6 +200,12 @@ export function loadServerConfig(): ServerConfig {
       integration: adaptiveKIntegration,
       testfail: adaptiveKTestfail,
       performance: adaptiveKPerformance,
+      // golden評価カテゴリ
+      debug: adaptiveKDebug,
+      api: adaptiveKApi,
+      docs: adaptiveKDocs,
+      "docs-plain": adaptiveKDocs,
+      feature: adaptiveKFeature,
     },
     kDefault: adaptiveKDefault,
     kWhenDisabled: adaptiveKWhenDisabled,

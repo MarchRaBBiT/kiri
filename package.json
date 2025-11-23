@@ -71,6 +71,7 @@
     "assay:baseline": "tsx scripts/assay/baseline.ts",
     "assay:profile-matrix": "tsx scripts/assay/run-profile-matrix.ts",
     "assay:report-matrix": "tsx scripts/assay/report-matrix.ts",
+    "check:adaptive-k": "tsx scripts/check-adaptive-k.ts",
     "check": "pnpm run lint && pnpm run test",
     "prepublishOnly": "pnpm run build"
   },
@@ -90,6 +91,7 @@
     "zod": "^4.1.12"
   },
   "devDependencies": {
+    "@aws-sdk/client-s3": "^3.937.0",
     "@types/node": "^22.7.4",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
@@ -100,9 +102,12 @@
     "execa": "^9.6.0",
     "fast-check": "^4.3.0",
     "lint-staged": "^15.2.10",
+    "nock": "^13",
+    "openai": "^4",
     "prettier": "^3.3.3",
     "simple-git-hooks": "^2.10.0",
     "tsx": "^4.16.5",
+    "undici": "^6",
     "vitest": "^2.0.5"
   },
   "simple-git-hooks": {

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { checkFTSSchemaExists } from "../indexer/schema.js";
+import { getAdaptiveK } from "../shared/adaptive-k.js";
 import { DuckDBClient } from "../shared/duckdb.js";
 import { generateEmbedding, structuralSimilarity } from "../shared/embedding.js";
 import { encode as encodeGPT, tokenizeText } from "../shared/tokenizer.js";
@@ -435,6 +436,7 @@ export interface ContextBundleParams {
   metadata_filters?: Record<string, string | string[]>;
   requestId?: string; // Optional request ID for tracing/debugging
   path_prefix?: string;
+  category?: string; // Query category for adaptive K (bugfix, testfail, etc.)
 }
 
 export interface ContextBundleItem {
@@ -3641,7 +3643,19 @@ async function contextBundleImpl(
     );
   }
 
-  const limit = normalizeBundleLimit(params.limit);
+  // AdaptiveK: カテゴリに基づいてK値を動的に調整
+  // params.categoryが指定されている場合はそれを使用、そうでなければデフォルト
+  const adaptiveK = getAdaptiveK(params.category, serverConfig.adaptiveK);
+  const requestedLimit = normalizeBundleLimit(params.limit);
+  // AdaptiveKが無効な場合はrequestLimitをそのまま使用
+  // AdaptiveKが有効な場合:
+  //   - ユーザー指定limitがなければadaptiveKを使用
+  //   - ユーザー指定がある場合は小さい方を採用（過剰取得防止）
+  const limit = serverConfig.adaptiveK.enabled
+    ? params.limit === undefined
+      ? adaptiveK
+      : Math.min(requestedLimit, adaptiveK)
+    : requestedLimit;
   const artifacts = params.artifacts ?? {};
   const artifactHints = normalizeArtifactHints(artifacts.hints);
   const hintBuckets = bucketArtifactHints(artifactHints);

@@ -1407,7 +1407,12 @@ async function executeQuery(
       : null;
   const hintCoverage = contextPayload ? computeHintCoverage(contextItems) : null;
 
-  type MinimalResultItem = { path?: string };
+  type MinimalResultItem = {
+    path?: string;
+    score?: number;
+    combined?: number;
+    base?: number;
+  };
   const resultItems: MinimalResultItem[] = Array.isArray(rawResult)
     ? (rawResult as MinimalResultItem[])
     : contextItems;
@@ -1422,8 +1427,8 @@ async function executeQuery(
     const topItems = resultItems.slice(0, options.inspectTop);
     console.log(`\n[inspect:${query.id}] top ${topItems.length} (tool=${tool})`);
     topItems.forEach((item, idx) => {
-      const path = (item as any).path ?? "<no-path>";
-      const score = (item as any).score ?? (item as any).combined ?? (item as any).base ?? "";
+      const path = item.path ?? "<no-path>";
+      const score = item.score ?? item.combined ?? item.base ?? "";
       const reasons = whyByPath[path] ?? [];
       console.log(`${idx + 1}. ${path}  score=${score}  reasons=${reasons.join("|")}`);
     });

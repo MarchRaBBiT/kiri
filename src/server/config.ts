@@ -1,9 +1,10 @@
 import process from "node:process";
 
-import type { PathMultiplier } from "./boost-profiles.js";
-import { loadPathPenalties } from "./config-loader.js";
 import type { AdaptiveKConfig } from "../shared/adaptive-k.js";
 import { validateAdaptiveKConfig } from "../shared/config-validate-adaptive-k.js";
+
+import type { PathMultiplier } from "./boost-profiles.js";
+import { loadPathPenalties } from "./config-loader.js";
 
 export interface ServerConfig {
   features: {

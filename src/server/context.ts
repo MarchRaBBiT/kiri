@@ -22,6 +22,7 @@ export interface ServerContext {
   repoId: number;
   services: ServerServices;
   databasePath?: string;
+  repoPath?: string;
   features?: {
     fts?: boolean; // FTS拡張が利用可能かどうか
   };
@@ -44,6 +45,7 @@ export function createServerContext(options: {
   repoId: number;
   services: ServerServices;
   databasePath?: string;
+  repoPath?: string;
   features?: { fts?: boolean };
   ftsStatusCache?: FtsStatusCache;
   tableAvailability: TableAvailability;
@@ -59,6 +61,10 @@ export function createServerContext(options: {
 
   if (options.databasePath !== undefined) {
     context.databasePath = options.databasePath;
+  }
+
+  if (options.repoPath !== undefined) {
+    context.repoPath = options.repoPath;
   }
 
   // exactOptionalPropertyTypes: true を満たすため、undefined の場合は代入しない

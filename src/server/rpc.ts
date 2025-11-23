@@ -861,6 +861,8 @@ export function createRpcHandler(
             serverInfo: SERVER_INFO,
             pid: process.pid,
             uptime: process.uptime(),
+            db: context.databasePath,
+            repo: context.repoPath,
           };
           break;
         }

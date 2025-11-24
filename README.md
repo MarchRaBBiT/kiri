@@ -2,7 +2,7 @@
 
 > Intelligent code context extraction for LLMs via Model Context Protocol
 
-[![Version](https://img.shields.io/badge/version-0.12.0-blue.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-0.13.0-blue.svg)](package.json)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.6-blue.svg)](https://www.typescriptlang.org/)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
@@ -20,22 +20,24 @@
 - **📝 Phrase-Aware**: Recognizes compound terms (kebab-case, snake_case) for precise matching
 - **🔒 Concurrency-Safe** _(v0.9.7+)_: Per-database queues, canonicalized DuckDB paths, and bootstrap-safe locking prevent FTS rebuild conflicts and keep locks consistent across symlinks—even on first run
 
-## 🆕 What's New in v0.12.0
+## 🆕 What's New in v0.13.0
+
+### ✨ New Features
+
+- **AdaptiveK Dynamic Clustering**: `context_bundle` now automatically adjusts result set size based on query characteristics (P@10 improved by 31%)
+- **Domain Terms Dictionary**: Enable domain-specific term expansion via `KIRI_ENABLE_DOMAIN_TERMS=1` environment variable
+- **Path Prefix Filter**: New `path_prefix` parameter for `context_bundle` to filter results by directory
 
 ### 🔧 Improvements
 
-- **Request Tracing**: Added optional `requestId` parameter to `context_bundle` for debugging and tracing
-- **Tokenizer Enhancement**: Improved keyword extraction with camelCase/snake_case variant support
-- **Path Penalties**: Configurable path penalties via config files for fine-tuned search results
+- **Boost Profiles**: Enhanced configuration capabilities and settings
+- **Evaluation Tools**: Added `--inspect-query` option to `run-golden.ts` for debugging
 
 ### 🐛 Bug Fixes
 
-- **TypeScript Compatibility**: Fixed build errors related to `exactOptionalPropertyTypes`
-- **Search Precision**: Improved candidate trimming to only affect fallback-only results
-
-### 📚 Documentation
-
-- Added path penalties user and developer guides (EN/JA)
+- **TypeScript Build**: Fixed type conversion issues in domain-terms and services modules
+- **Adaptive K Hardening**: Strengthened bounds checking and masked ping paths
+- **Schema Compliance**: Removed non-standard `anyOf` from files_search schema
 
 ## ⚙️ Prerequisites
 
@@ -916,8 +918,8 @@ Built with:
 
 ---
 
-**Status**: v0.8.0 (Beta) - Production-ready for MCP clients
+**Status**: v0.13.0 (Beta) - Production-ready for MCP clients
 
-**Breaking Changes in v0.8.0**: `compact` mode is now default. Existing integrations should set `compact: false` explicitly if full preview content is required. See [CHANGELOG.md](CHANGELOG.md) for migration guide.
+**New in v0.13.0**: AdaptiveK dynamic clustering improves search precision by 31%. Domain terms dictionary and path prefix filtering enable more targeted code exploration. See [CHANGELOG.md](CHANGELOG.md) for details.
 
 For questions or support, please open a [GitHub issue](https://github.com/CAPHTECH/kiri/issues).

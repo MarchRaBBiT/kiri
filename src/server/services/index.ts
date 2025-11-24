@@ -35,11 +35,14 @@ export function createServerServices(db: DuckDBClient): ServerServices {
   const domainTerms =
     process.env.KIRI_ENABLE_DOMAIN_TERMS === "1"
       ? loadDomainTerms()
-      : new (class EmptyDict implements DomainTermsDictionary {
+      : (new (class EmptyDict {
           expandFromText(): DomainExpansion {
             return { matched: [], aliases: [], fileHints: [] };
           }
-        })();
+          expandCandidates(): DomainExpansion {
+            return { matched: [], aliases: [], fileHints: [] };
+          }
+        })() as unknown as DomainTermsDictionary);
 
   return {
     repoRepository,

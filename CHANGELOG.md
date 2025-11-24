@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2025-11-24
+
+### Added
+
+- **AdaptiveK dynamic cluster sizing**: `context_bundle` now automatically adjusts result set size based on query characteristics
+  - Automatic category detection for query types
+  - P@10 improved by 31% through intelligent clustering
+  - Configurable limits with hardened safety bounds
+- **Domain Terms Dictionary support**: Enable domain-specific term expansion via `KIRI_ENABLE_DOMAIN_TERMS=1` environment variable
+  - YAML-based domain term configuration (`config/domain-terms.yml`)
+  - Automatic alias expansion for technical terminology
+  - Validation and strict schema checking
+- **`path_prefix` filter for `context_bundle`**: Filter results by directory path prefix
+  - Normalized path handling for consistent behavior
+  - Pushed filter into SQL queries for performance
+- **Evaluation improvements**:
+  - `--inspect-query` option for `run-golden.ts` to debug specific queries
+  - Improved assay-dataset-loader query P@10 from 0.10 to 0.30
+
+### Fixed
+
+- **TypeScript build errors**: Fixed `Set<string>` to `string[]` conversion in domain-terms.ts
+- **EmptyDict type assertion**: Fixed type compatibility for disabled domain terms dictionary
+- **Adaptive K limit hardening**: Strengthened bounds checking and masked ping paths
+- **files_search schema**: Removed non-standard `anyOf` from JSON schema
+- **path_prefix filter**: Fixed import path for validation and pushed filter into queries
+
+### Changed
+
+- **Boost profiles**: Enhanced configuration capabilities and settings
+- **Documentation**: Updated docs and moved PathPenalty formal specs to `docs/formal/`
+- **Toolchain**: Aligned mise toolchain with Node 20 LTS
+- **Dependencies**: Updated dependencies and tool configurations
+
 ## [0.12.0] - 2025-11-21
 
 ### Added

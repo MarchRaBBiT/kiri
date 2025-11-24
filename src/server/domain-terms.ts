@@ -113,7 +113,7 @@ function buildEntries(input: Record<string, Array<Record<string, unknown>>>): Do
           canonical,
           normalizedCanonical,
           aliases,
-          normalizedAliases,
+          normalizedAliases: Array.from(normalizedAliases),
           files,
           category,
         });

@@ -521,7 +521,7 @@ class McpServerManager {
     }
   }
 
-  async start(dbPath: string, repoPath: string, verbose: boolean): Promise<number> {
+  async start(dbPath: string, repoPath: string, verbose: boolean, attempts = 0): Promise<number> {
     if (this.serverProc) {
       await this.stop();
     }
@@ -596,11 +596,27 @@ class McpServerManager {
     try {
       await Promise.race([readyPromise, errorPromise]);
       await this.verifyServerIdentity(dbPath);
+      return Date.now() - startedAt;
     } catch (error) {
       await this.stop();
+      const isAddrInUse =
+        error instanceof Error &&
+        (error as NodeJS.ErrnoException).code === "EADDRINUSE" &&
+        attempts < 5;
+      if (isAddrInUse) {
+        if (verbose) {
+          console.warn(
+            `⚠️  Port ${this.assignedPort} in use, retrying with next port (attempt ${
+              attempts + 1
+            }/5)...`
+          );
+        }
+        // shift port and retry
+        this.portShift = (this.portShift + 1) % 1000;
+        return await this.start(dbPath, repoPath, verbose, attempts + 1);
+      }
       throw error;
     }
-    return Date.now() - startedAt;
   }
 
   private async waitForReady(verbose: boolean): Promise<void> {
@@ -1331,6 +1347,8 @@ async function executeQuery(
   };
   if (!adaptiveKEnabled) {
     params.limit = k;
+  } else {
+    params.category = query.category;
   }
 
   const artifacts: { hints?: string[] } = {};

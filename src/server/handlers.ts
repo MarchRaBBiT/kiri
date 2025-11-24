@@ -18,6 +18,7 @@ import { loadPathPenalties, mergePathPenaltyEntries } from "./config-loader.js";
 import { loadServerConfig } from "./config.js";
 import { FtsStatusCache, ServerContext, TableAvailability } from "./context.js";
 import { coerceProfileName, loadScoringProfile, type ScoringWeights } from "./scoring.js";
+import type { DomainFileHint } from "./domain-terms.js";
 import { createServerServices, ServerServices } from "./services/index.js";
 
 // Re-export extracted handlers for backward compatibility
@@ -499,6 +500,23 @@ function bucketArtifactHints(hints: string[]): ArtifactHintBuckets {
   return buckets;
 }
 
+function selectDomainPathHints(hints: DomainFileHint[]): DomainFileHint[] {
+  const selected: DomainFileHint[] = [];
+  for (const hint of hints) {
+    if (!SAFE_PATH_PATTERN.test(hint.path)) {
+      continue;
+    }
+    if (selected.some((entry) => entry.path === hint.path)) {
+      continue;
+    }
+    selected.push(hint);
+    if (selected.length >= DOMAIN_PATH_HINT_LIMIT) {
+      break;
+    }
+  }
+  return selected;
+}
+
 /**
  * AdaptiveK用カテゴリ自動検出
  *
@@ -782,6 +800,7 @@ const CLAMP_SNIPPETS_ENABLED = serverConfig.features.clampSnippets;
 const FALLBACK_SNIPPET_WINDOW = serverConfig.features.snippetWindow;
 const MAX_RERANK_LIMIT = 50;
 const MAX_ARTIFACT_HINTS = 8;
+const DOMAIN_PATH_HINT_LIMIT = MAX_ARTIFACT_HINTS;
 const SAFE_PATH_PATTERN = /^[a-zA-Z0-9_.\-/]+$/;
 const HINT_PRIORITY_TEXT_MULTIPLIER = serverConfig.hints.priority.textMultiplier;
 const HINT_PRIORITY_PATH_MULTIPLIER = serverConfig.hints.priority.pathMultiplier;
@@ -3768,6 +3787,16 @@ async function contextBundleImpl(
       .join(" ");
     keywordSources.push(filterSeed);
   }
+
+  const baseSeed = keywordSources.join(" ");
+  const domainExpansion =
+    process.env.KIRI_ENABLE_DOMAIN_TERMS === "1"
+      ? context.services.domainTerms.expandFromText(baseSeed)
+      : { matched: [], aliases: [], fileHints: [] };
+  if (domainExpansion.aliases.length > 0) {
+    keywordSources.push(domainExpansion.aliases.join(" "));
+  }
+
   const semanticSeed = keywordSources.join(" ");
   const queryEmbedding = generateEmbedding(semanticSeed)?.values ?? null;
 
@@ -4119,6 +4148,13 @@ async function contextBundleImpl(
     sourceHint: hintPath,
     origin: "artifact",
   }));
+  const domainPathTargets: ResolvedPathHint[] = selectDomainPathHints(
+    domainExpansion.fileHints
+  ).map((hint) => ({
+    path: hint.path,
+    sourceHint: hint.source,
+    origin: "dictionary",
+  }));
   const dictionaryPathTargets = await fetchDictionaryPathHints(
     db,
     context.tableAvailability,
@@ -4128,6 +4164,7 @@ async function contextBundleImpl(
   );
   const { list: resolvedPathHintTargets, meta: hintSeedMeta } = createHintSeedMeta([
     ...artifactPathTargets,
+    ...domainPathTargets,
     ...dictionaryPathTargets,
   ]);
 

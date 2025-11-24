@@ -1,0 +1,37 @@
+statistics:
+  - mann-whitney-u:
+      aliases:
+        - mannWhitneyU
+        - wilcoxon
+        - rank-sum
+      files:
+        - src/stats/mann.ts
+        - external/assay-kit/src/stats/mann-whitney.ts
+  - rank-biserial:
+      aliases:
+        - rankBiserialEffect
+        - effect-size
+        - correlation
+      files:
+        - src/stats/rank-biserial.ts
+        - external/assay-kit/src/stats/rank-biserial.ts
+
+orchestration:
+  - tuning-orchestrator:
+      aliases:
+        - TuningOrchestrator
+        - parameter-tuning
+        - optimization-orchestrator
+        - orchestrator
+      files:
+        - src/tuning/orchestrator.ts
+        - runner/index.ts
+
+architecture:
+  - plugin-registry:
+      aliases:
+        - PluginRegistry
+        - plugin-system
+        - registry
+      files:
+        - src/plugins/registry.ts

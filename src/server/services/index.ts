@@ -1,5 +1,6 @@
 import { DuckDBClient } from "../../shared/duckdb.js";
 
+import { loadDomainTerms, type DomainTermsDictionary } from "../domain-terms.js";
 import { RepoRepository } from "./repo-repository.js";
 import { RepoResolver } from "./repo-resolver.js";
 
@@ -12,6 +13,7 @@ import { RepoResolver } from "./repo-resolver.js";
 export interface ServerServices {
   repoRepository: RepoRepository;
   repoResolver: RepoResolver;
+  domainTerms: DomainTermsDictionary;
 }
 
 /**
@@ -26,9 +28,18 @@ export interface ServerServices {
 export function createServerServices(db: DuckDBClient): ServerServices {
   const repoRepository = new RepoRepository(db);
   const repoResolver = new RepoResolver(repoRepository);
+  const domainTerms =
+    process.env.KIRI_ENABLE_DOMAIN_TERMS === "1"
+      ? loadDomainTerms()
+      : new (class EmptyDict implements DomainTermsDictionary {
+          expandFromText(): any {
+            return { matched: [], aliases: [], fileHints: [] };
+          }
+        })();
 
   return {
     repoRepository,
     repoResolver,
+    domainTerms,
   };
 }

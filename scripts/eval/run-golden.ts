@@ -521,7 +521,7 @@ class McpServerManager {
     }
   }
 
-  async start(dbPath: string, repoPath: string, verbose: boolean): Promise<number> {
+  async start(dbPath: string, repoPath: string, verbose: boolean, attempts = 0): Promise<number> {
     if (this.serverProc) {
       await this.stop();
     }
@@ -596,11 +596,27 @@ class McpServerManager {
     try {
       await Promise.race([readyPromise, errorPromise]);
       await this.verifyServerIdentity(dbPath);
+      return Date.now() - startedAt;
     } catch (error) {
       await this.stop();
+      const isAddrInUse =
+        error instanceof Error &&
+        (error as NodeJS.ErrnoException).code === "EADDRINUSE" &&
+        attempts < 5;
+      if (isAddrInUse) {
+        if (verbose) {
+          console.warn(
+            `⚠️  Port ${this.assignedPort} in use, retrying with next port (attempt ${
+              attempts + 1
+            }/5)...`
+          );
+        }
+        // shift port and retry
+        this.portShift = (this.portShift + 1) % 1000;
+        return await this.start(dbPath, repoPath, verbose, attempts + 1);
+      }
       throw error;
     }
-    return Date.now() - startedAt;
   }
 
   private async waitForReady(verbose: boolean): Promise<void> {
@@ -1322,13 +1338,17 @@ async function executeQuery(
   const scoringProfile = query.params?.scoringProfile;
   const timeoutMs = query.params?.timeoutMs || defaultParams.timeoutMs;
 
-  // AdaptiveKが有効な場合、categoryベースでK値を決定させるためlimitを省略
-  const adaptiveKEnabled = process.env.KIRI_ADAPTIVE_K_ENABLED === "1";
+  // AdaptiveK: デフォルト有効。categoryベースでK値を決定させるためlimitを省略
+  // 無効にするには KIRI_ADAPTIVE_K_ENABLED=0 または =false を設定
+  const envValue = process.env.KIRI_ADAPTIVE_K_ENABLED?.toLowerCase();
+  const adaptiveKEnabled = envValue !== "0" && envValue !== "false" && envValue !== "off";
   const params: Record<string, unknown> = {
     boost_profile: boostProfile,
   };
   if (!adaptiveKEnabled) {
     params.limit = k;
+  } else {
+    params.category = query.category;
   }
 
   const artifacts: { hints?: string[] } = {};

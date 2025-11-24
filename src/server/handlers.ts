@@ -3730,6 +3730,17 @@ async function contextBundleImpl(
   // 2. そうでなければprofile/artifacts/boost_profileから自動検出
   const detectedCategory = determineCategory(params);
   const adaptiveK = getAdaptiveK(detectedCategory, serverConfig.adaptiveK);
+  if (process.env.KIRI_TRACE_ADAPTIVE_K === "1") {
+    console.info(
+      "[adaptive-k]",
+      JSON.stringify({
+        detectedCategory,
+        selectedK: adaptiveK,
+        userLimit: params.limit ?? null,
+        enabled: serverConfig.adaptiveK.enabled,
+      })
+    );
+  }
   const adaptiveLimit = normalizeBundleLimit(adaptiveK);
   const requestedLimit = normalizeBundleLimit(params.limit);
   // AdaptiveKが無効な場合はrequestLimitをそのまま使用

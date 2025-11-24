@@ -1,5 +1,6 @@
 import process from "node:process";
 
+import { ADAPTIVE_K_CATEGORY_ALIASES } from "../shared/adaptive-k-categories.js";
 import type { AdaptiveKConfig } from "../shared/adaptive-k.js";
 import { validateAdaptiveKConfig } from "../shared/config-validate-adaptive-k.js";
 
@@ -171,10 +172,10 @@ export function loadServerConfig(): ServerConfig {
 
   const pathPenalties = loadPathPenalties();
 
-  const adaptiveKEnabled = envFlagEnabled(process.env.KIRI_ADAPTIVE_K_ENABLED, false);
+  const adaptiveKEnabled = envFlagEnabled(process.env.KIRI_ADAPTIVE_K_ENABLED, true);
   const adaptiveKAllowedSet = parseEnvNumberList(
     process.env.KIRI_ADAPTIVE_K_ALLOWED_SET,
-    [5, 10, 20]
+    [5, 8, 10, 20]
   );
   const adaptiveKMin = parseEnvNumber(process.env.KIRI_ADAPTIVE_K_MIN, 3);
   const adaptiveKMax = parseEnvNumber(process.env.KIRI_ADAPTIVE_K_MAX, 50);
@@ -185,28 +186,35 @@ export function loadServerConfig(): ServerConfig {
   const adaptiveKDefault = parseEnvNumber(process.env.KIRI_ADAPTIVE_K_DEFAULT, 10);
   const adaptiveKWhenDisabled = parseEnvNumber(process.env.KIRI_ADAPTIVE_K_DISABLED_VALUE, 10);
   // 追加カテゴリ: golden評価で使用される分類
-  const adaptiveKDebug = parseEnvNumber(process.env.KIRI_ADAPTIVE_K_DEBUG, 15);
-  const adaptiveKApi = parseEnvNumber(process.env.KIRI_ADAPTIVE_K_API, 15);
+  const adaptiveKDebug = parseEnvNumber(process.env.KIRI_ADAPTIVE_K_DEBUG, 10);
+  const adaptiveKApi = parseEnvNumber(process.env.KIRI_ADAPTIVE_K_API, 10);
   const adaptiveKDocs = parseEnvNumber(process.env.KIRI_ADAPTIVE_K_DOCS, 8);
   const adaptiveKFeature = parseEnvNumber(process.env.KIRI_ADAPTIVE_K_FEATURE, 10);
+
+  const adaptiveKMap: Record<string, number> = {
+    bugfix: adaptiveKBugfix,
+    integration: adaptiveKIntegration,
+    testfail: adaptiveKTestfail,
+    performance: adaptiveKPerformance,
+    debug: adaptiveKDebug,
+    api: adaptiveKApi,
+    docs: adaptiveKDocs,
+    feature: adaptiveKFeature,
+  };
+
+  // docs-plain は docs に正規化
+  adaptiveKMap["docs-plain"] = adaptiveKDocs;
+  // エイリアスを正規カテゴリにマッピング（kMapの単一ソース化）
+  for (const [alias, target] of Object.entries(ADAPTIVE_K_CATEGORY_ALIASES)) {
+    adaptiveKMap[alias] = adaptiveKMap[target] ?? adaptiveKDefault;
+  }
 
   const adaptiveK: AdaptiveKConfig = {
     enabled: adaptiveKEnabled,
     allowedSet: adaptiveKAllowedSet,
     kMin: adaptiveKMin,
     kMax: adaptiveKMax,
-    kMap: {
-      bugfix: adaptiveKBugfix,
-      integration: adaptiveKIntegration,
-      testfail: adaptiveKTestfail,
-      performance: adaptiveKPerformance,
-      // golden評価カテゴリ
-      debug: adaptiveKDebug,
-      api: adaptiveKApi,
-      docs: adaptiveKDocs,
-      "docs-plain": adaptiveKDocs,
-      feature: adaptiveKFeature,
-    },
+    kMap: adaptiveKMap,
     kDefault: adaptiveKDefault,
     kWhenDisabled: adaptiveKWhenDisabled,
   };

@@ -450,16 +450,16 @@ queries:
     query: "PluginRegistry registerPlugin dependency graph"
     tool: "context_bundle"
     intent: "Locate plugin registry bootstrap logic in assay-kit"
-    category: "assay"
+    category: "feature"
     repo: "assay-kit"
     params:
       boostProfile: "default"
     expected:
       paths:
-        - "packages/assay-kit/src/plugins/registry.ts"
-        - "packages/assay-kit/src/plugins/types.ts"
-        - "packages/assay-kit/src/plugins/logger.ts"
-        - "packages/assay-kit/src/plugins/dependencies.ts"
+        - "src/plugins/registry.ts"
+        - "src/plugins/types.ts"
+        - "src/plugins/logger.ts"
+        - "src/plugins/dependencies.ts"
     tags: ["plugin", "registry", "assay-kit"]
     hints:
       - "PluginRegistry"
@@ -469,20 +469,20 @@ queries:
     query: "loadDatasetFromYAML schema validation error"
     tool: "context_bundle"
     intent: "Find dataset loader and schema definition for assay-kit"
-    category: "assay"
+    category: "feature"
     repo: "assay-kit"
     params:
       boostProfile: "default"
     expected:
       paths:
-        - "packages/assay-kit/src/dataset/loader.ts"
-        - "packages/assay-kit/src/dataset/schemas/dataset.schema.ts"
-        - "packages/assay-kit/src/dataset/schemas/query.schema.ts"
+        - "src/dataset/loader.ts"
+        - "src/dataset/schemas/dataset.schema.ts"
+        - "src/dataset/schemas/query.schema.ts"
     tags: ["dataset", "schema", "assay-kit"]
     hints:
-      - "packages/assay-kit/src/dataset/loader.ts"
-      - "packages/assay-kit/src/dataset/schemas/dataset.schema.ts"
-      - "packages/assay-kit/src/dataset/schemas/query.schema.ts"
+      - "src/dataset/loader.ts"
+      - "src/dataset/schemas/dataset.schema.ts"
+      - "src/dataset/schemas/query.schema.ts"
       - "loadDatasetFromYAML"
       - "schema"
       - "validation"

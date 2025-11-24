@@ -17,8 +17,8 @@ import {
 import { loadPathPenalties, mergePathPenaltyEntries } from "./config-loader.js";
 import { loadServerConfig } from "./config.js";
 import { FtsStatusCache, ServerContext, TableAvailability } from "./context.js";
-import { coerceProfileName, loadScoringProfile, type ScoringWeights } from "./scoring.js";
 import type { DomainFileHint } from "./domain-terms.js";
+import { coerceProfileName, loadScoringProfile, type ScoringWeights } from "./scoring.js";
 import { createServerServices, ServerServices } from "./services/index.js";
 
 // Re-export extracted handlers for backward compatibility

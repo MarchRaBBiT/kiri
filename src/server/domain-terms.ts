@@ -51,7 +51,7 @@ function normalizeTermId(raw: string): string {
   const normalized = collapsed.replace(/^-|-$/g, "").toLowerCase();
   if (normalized.length < 2) {
     throw new Error(
-      `Domain term \"${raw}\" is too short after normalization → 2文字以上の識別子にしてください`
+      `Domain term "${raw}" is too short after normalization → 2文字以上の識別子にしてください`
     );
   }
   return normalized;
@@ -239,13 +239,13 @@ export function loadDomainTerms(
   for (const [category, value] of Object.entries(parsed)) {
     if (!Array.isArray(value)) {
       throw new Error(
-        `Invalid domain terms config: category \"${category}\" must be an array of terms → YAMLを修正してください`
+        `Invalid domain terms config: category "${category}" must be an array of terms → YAMLを修正してください`
       );
     }
     dictionary[category] = value.map((entry, idx) => {
       if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
         throw new Error(
-          `Invalid domain terms config: entry #${idx + 1} in category \"${category}\" must be a mapping → YAMLを修正してください`
+          `Invalid domain terms config: entry #${idx + 1} in category "${category}" must be a mapping → YAMLを修正してください`
         );
       }
       return entry as Record<string, unknown>;

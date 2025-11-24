@@ -523,7 +523,10 @@ function determineCategory(params: ContextBundleParams): string | undefined {
   }
 
   // profileからの推論
-  if (profile === "bugfix" || profile === "testfail" || profile === "typeerror") {
+  if (profile === "testfail") {
+    return "testfail";
+  }
+  if (profile === "bugfix" || profile === "typeerror") {
     return "debug";
   }
   if (profile === "refactor") {
@@ -3708,6 +3711,7 @@ async function contextBundleImpl(
   // 2. そうでなければprofile/artifacts/boost_profileから自動検出
   const detectedCategory = determineCategory(params);
   const adaptiveK = getAdaptiveK(detectedCategory, serverConfig.adaptiveK);
+  const adaptiveLimit = normalizeBundleLimit(adaptiveK);
   const requestedLimit = normalizeBundleLimit(params.limit);
   // AdaptiveKが無効な場合はrequestLimitをそのまま使用
   // AdaptiveKが有効な場合:
@@ -3715,8 +3719,8 @@ async function contextBundleImpl(
   //   - ユーザー指定がある場合は小さい方を採用（過剰取得防止）
   const limit = serverConfig.adaptiveK.enabled
     ? params.limit === undefined
-      ? adaptiveK
-      : Math.min(requestedLimit, adaptiveK)
+      ? adaptiveLimit
+      : Math.min(requestedLimit, adaptiveLimit)
     : requestedLimit;
   const artifacts = params.artifacts ?? {};
   const artifactHints = normalizeArtifactHints(artifacts.hints);

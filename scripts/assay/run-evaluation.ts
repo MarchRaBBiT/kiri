@@ -32,6 +32,19 @@ function parseProfileArg(): EvalProfile {
   throw new Error(`Unknown profile '${value}'. Use 'current' or 'release'.`);
 }
 
+function parseDatasetArg(defaultPath: string): string {
+  const args = process.argv.slice(2);
+  const index = args.indexOf("--dataset");
+  if (index === -1) {
+    return defaultPath;
+  }
+  const value = args[index + 1];
+  if (!value) {
+    throw new Error("Missing value for --dataset. Pass a path to a dataset YAML.");
+  }
+  return value;
+}
+
 function applyProfileEnv(profile: EvalProfile): void {
   const toggles = [
     "KIRI_SUPPRESS_NON_CODE",
@@ -65,10 +78,11 @@ async function main(): Promise<void> {
 
   const repoRoot = process.cwd();
   const databasePath = join(repoRoot, "var/index.duckdb");
-  const datasetPath = join(
+  const defaultDatasetPath = join(
     repoRoot,
     "external/assay-kit/examples/kiri-integration/datasets/kiri-golden.yaml"
   );
+  const datasetPath = parseDatasetArg(defaultDatasetPath);
   const resultsDir = join(repoRoot, "var/assay");
 
   if (!existsSync(databasePath)) {
@@ -142,7 +156,8 @@ async function main(): Promise<void> {
   }
 
   const timestamp = new Date().toISOString().split("T")[0];
-  const baseName = `eval-${profile}-${timestamp}`;
+  const datasetSlug = dataset.name.replace(/[^a-zA-Z0-9_-]+/g, "-");
+  const baseName = `eval-${profile}-${datasetSlug}-${timestamp}`;
   const jsonPath = join(resultsDir, `${baseName}.json`);
   const mdPath = join(resultsDir, `${baseName}.md`);
 

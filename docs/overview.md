@@ -71,3 +71,10 @@ service: "kiri"
 - **Indexer** が Git から構造・履歴・本文・埋め込みを DuckDB に書き込む。
 - **MCP Server** が DuckDB を叩き、`files_search` や `context_bundle` などのツールを公開する。
 - **Client** は `context_bundle` で得た断片を LLM プロンプトへ注入する。
+
+## ドメイン用語辞書
+
+- 定義ファイル: `config/domain-terms.yml`（`.kiri/domain-terms.yml` でも可）。camelCase/スペース/アンダースコアは正規化され、ハイフン小文字＋分割トークンも生成。
+- スキーマ: カテゴリ配下に `{canonical: {aliases, files}}` の配列を並べる。例は `config/domain-terms.yml` を参照。
+- フィーチャーフラグ: デフォルト OFF。`KIRI_ENABLE_DOMAIN_TERMS=1` を付けて `context_bundle` サーバーを起動すると有効化され、辞書エイリアスとファイルヒントをブースト対象に追加する（`dictionary:hint:<path>` が `why` に付与）。
+- 更新手順: 辞書を編集したら `pnpm exec vitest run tests/server/domain-terms.spec.ts` で構文を確認し、必要に応じて `tests/server/context.bundle.spec.ts` も併せて実行。

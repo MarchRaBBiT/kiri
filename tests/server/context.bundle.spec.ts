@@ -485,6 +485,49 @@ describe("context_bundle", () => {
     expect(entry?.why).toContain("dictionary:hint:src/stats/mann.ts");
   });
 
+  it("promotes domain dictionary paths for abstract aliases", async () => {
+    const prevFlag = process.env.KIRI_ENABLE_DOMAIN_TERMS;
+    process.env.KIRI_ENABLE_DOMAIN_TERMS = "1";
+    const repo = await createTempRepo({
+      "src/tuning/orchestrator.ts": `export class TuningOrchestrator {
+  run(): number {
+    return 1;
+  }
+}
+`,
+    });
+    cleanupTargets.push({ dispose: repo.cleanup });
+
+    const dbDir = await mkdtemp(join(tmpdir(), "kiri-domain-terms-"));
+    const dbPath = join(dbDir, "index.duckdb");
+    cleanupTargets.push({ dispose: async () => await rm(dbDir, { recursive: true, force: true }) });
+
+    await runIndexer({ repoRoot: repo.path, databasePath: dbPath, full: true });
+
+    const db = await DuckDBClient.connect({ databasePath: dbPath });
+    cleanupTargets.push({ dispose: async () => await db.close() });
+
+    const repoId = await resolveRepoId(db, repo.path);
+    const tableAvailability = await checkTableAvailability(db);
+    const context: ServerContext = {
+      db,
+      repoId,
+      services: createServerServices(db),
+      tableAvailability,
+      warningManager: new WarningManager(),
+    };
+
+    const bundle = await contextBundle(context, {
+      goal: "investigate orchestrator retries",
+      limit: 3,
+    });
+
+    const entry = bundle.context.find((item) => item.path === "src/tuning/orchestrator.ts");
+    expect(entry).toBeDefined();
+    expect(entry?.why).toContain("dictionary:hint:src/tuning/orchestrator.ts");
+    process.env.KIRI_ENABLE_DOMAIN_TERMS = prevFlag;
+  });
+
   it("skips tokens_estimate calculation unless requested", async () => {
     const repo = await createTempRepo({
       "src/app.ts": "export function app() { return 1; }\n",

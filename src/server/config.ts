@@ -171,7 +171,7 @@ export function loadServerConfig(): ServerConfig {
 
   const pathPenalties = loadPathPenalties();
 
-  const adaptiveKEnabled = envFlagEnabled(process.env.KIRI_ADAPTIVE_K_ENABLED, false);
+  const adaptiveKEnabled = envFlagEnabled(process.env.KIRI_ADAPTIVE_K_ENABLED, true);
   const adaptiveKAllowedSet = parseEnvNumberList(
     process.env.KIRI_ADAPTIVE_K_ALLOWED_SET,
     [5, 10, 20]

@@ -1322,8 +1322,10 @@ async function executeQuery(
   const scoringProfile = query.params?.scoringProfile;
   const timeoutMs = query.params?.timeoutMs || defaultParams.timeoutMs;
 
-  // AdaptiveKが有効な場合、categoryベースでK値を決定させるためlimitを省略
-  const adaptiveKEnabled = process.env.KIRI_ADAPTIVE_K_ENABLED === "1";
+  // AdaptiveK: デフォルト有効。categoryベースでK値を決定させるためlimitを省略
+  // 無効にするには KIRI_ADAPTIVE_K_ENABLED=0 または =false を設定
+  const envValue = process.env.KIRI_ADAPTIVE_K_ENABLED?.toLowerCase();
+  const adaptiveKEnabled = envValue !== "0" && envValue !== "false" && envValue !== "off";
   const params: Record<string, unknown> = {
     boost_profile: boostProfile,
   };

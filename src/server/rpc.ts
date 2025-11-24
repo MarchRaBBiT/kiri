@@ -212,7 +212,6 @@ const ADAPTIVE_K_CATEGORY_ALIASES: Record<string, string> = {
   editor: "feature",
   infra: "integration",
   "docs-plain": "docs",
-  assay: "feature",
 };
 
 const TOOL_DESCRIPTORS: ToolDescriptor[] = [

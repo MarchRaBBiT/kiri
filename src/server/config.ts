@@ -208,7 +208,6 @@ export function loadServerConfig(): ServerConfig {
       feature: adaptiveKFeature,
       editor: adaptiveKFeature, // editorはfeatureと同様のK=10
       infra: adaptiveKIntegration, // infraはintegrationと同様のK=5
-      assay: adaptiveKFeature, // assayはfeatureと同様のK=10
     },
     kDefault: adaptiveKDefault,
     kWhenDisabled: adaptiveKWhenDisabled,

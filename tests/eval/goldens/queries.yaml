@@ -450,7 +450,7 @@ queries:
     query: "PluginRegistry registerPlugin dependency graph"
     tool: "context_bundle"
     intent: "Locate plugin registry bootstrap logic in assay-kit"
-    category: "assay"
+    category: "feature"
     repo: "assay-kit"
     params:
       boostProfile: "default"
@@ -469,7 +469,7 @@ queries:
     query: "loadDatasetFromYAML schema validation error"
     tool: "context_bundle"
     intent: "Find dataset loader and schema definition for assay-kit"
-    category: "assay"
+    category: "feature"
     repo: "assay-kit"
     params:
       boostProfile: "default"

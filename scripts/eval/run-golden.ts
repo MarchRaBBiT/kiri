@@ -330,6 +330,8 @@ interface BenchmarkOptions {
   categoryFilter: Set<string>;
   minR5: number | null;
   maxStartupMs: number | null;
+  inspectQuery?: string;
+  inspectTop: number;
 }
 
 interface ContextBundleItemResponse {
@@ -364,6 +366,8 @@ function parseArgs(): BenchmarkOptions {
     categoryFilter: new Set(),
     minR5: null,
     maxStartupMs: null,
+    inspectQuery: undefined,
+    inspectTop: 10,
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -413,6 +417,12 @@ function parseArgs(): BenchmarkOptions {
           options.maxStartupMs = null;
         }
         break;
+      case "--inspect-query":
+        options.inspectQuery = args[++i];
+        break;
+      case "--inspect-top":
+        options.inspectTop = Number.parseInt(args[++i] ?? "10", 10) || 10;
+        break;
       case "--help":
         console.log(`
 Usage: tsx scripts/eval/run-golden.ts [options]
@@ -428,6 +438,8 @@ Options:
   --categories <list>    Comma-separated category filter (e.g. docs,docs-plain)
   --min-r5 <number>      Minimum acceptable R@5 (0-1). Fail if below
   --max-startup-ms <ms>  Fail if MCP startup exceeds this many milliseconds
+  --inspect-query <id>   Dump top candidates for a query id (debug only)
+  --inspect-top <n>      Number of candidates to dump with --inspect-query (default: 10)
   --help                 Show this help message
 `);
         process.exit(0);
@@ -471,12 +483,49 @@ class McpServerManager {
   private serverLogs = "";
   private cleanupHandlers: Array<[NodeJS.Signals | "exit", () => void]> = [];
 
+  private lastRepoPath: string | null = null;
+
   private scoringConfigPath = join(process.cwd(), "config", "scoring-profiles.yml");
+
+  private async verifyServerIdentity(dbPath: string): Promise<void> {
+    const result = (await this.call("ping", { verbose: false, includeConfig: true }, 5000)) as
+      | { db?: string; repo?: string }
+      | undefined;
+    const remoteDb = typeof result?.db === "string" ? result.db : undefined;
+    const remoteRepo = typeof result?.repo === "string" ? result.repo : undefined;
+
+    if (!remoteDb) {
+      throw new Error(
+        "Ping did not include db path; refusing to trust existing server. Restart with a clean port."
+      );
+    }
+
+    const normalizedExpectedDb = resolveSafePath(dbPath, { allowOutsideBase: true });
+    const normalizedRemoteDb = resolveSafePath(remoteDb, { allowOutsideBase: true });
+    if (normalizedExpectedDb !== normalizedRemoteDb) {
+      throw new Error(
+        `Existing server uses different db: expected ${normalizedExpectedDb}, got ${normalizedRemoteDb}`
+      );
+    }
+
+    if (remoteRepo) {
+      const normalizedRemoteRepo = resolveSafePath(remoteRepo, { allowOutsideBase: true });
+      const normalizedExpectedRepo = resolveSafePath(this.lastRepoPath ?? "", {
+        allowOutsideBase: true,
+      });
+      if (normalizedExpectedRepo && normalizedExpectedRepo !== normalizedRemoteRepo) {
+        throw new Error(
+          `Existing server uses different repo: expected ${normalizedExpectedRepo}, got ${normalizedRemoteRepo}`
+        );
+      }
+    }
+  }
 
   async start(dbPath: string, repoPath: string, verbose: boolean): Promise<number> {
     if (this.serverProc) {
       await this.stop();
     }
+    this.lastRepoPath = repoPath;
     this.serverLogs = "";
     const startedAt = Date.now();
     if (verbose) {
@@ -546,6 +595,7 @@ class McpServerManager {
 
     try {
       await Promise.race([readyPromise, errorPromise]);
+      await this.verifyServerIdentity(dbPath);
     } catch (error) {
       await this.stop();
       throw error;
@@ -1272,10 +1322,14 @@ async function executeQuery(
   const scoringProfile = query.params?.scoringProfile;
   const timeoutMs = query.params?.timeoutMs || defaultParams.timeoutMs;
 
+  // AdaptiveKが有効な場合、categoryベースでK値を決定させるためlimitを省略
+  const adaptiveKEnabled = process.env.KIRI_ADAPTIVE_K_ENABLED === "1";
   const params: Record<string, unknown> = {
-    limit: k,
     boost_profile: boostProfile,
   };
+  if (!adaptiveKEnabled) {
+    params.limit = k;
+  }
 
   const artifacts: { hints?: string[] } = {};
   if (query.hints && query.hints.length > 0) {
@@ -1284,6 +1338,10 @@ async function executeQuery(
 
   if (isContextBundleTool) {
     params.goal = query.query;
+    // AdaptiveK: カテゴリをhandlerに渡してK値調整に使用
+    if (query.category) {
+      params.category = query.category;
+    }
     if (artifacts.hints) {
       params.artifacts = artifacts;
     }
@@ -1357,7 +1415,12 @@ async function executeQuery(
       : null;
   const hintCoverage = contextPayload ? computeHintCoverage(contextItems) : null;
 
-  type MinimalResultItem = { path?: string };
+  type MinimalResultItem = {
+    path?: string;
+    score?: number;
+    combined?: number;
+    base?: number;
+  };
   const resultItems: MinimalResultItem[] = Array.isArray(rawResult)
     ? (rawResult as MinimalResultItem[])
     : contextItems;
@@ -1367,6 +1430,17 @@ async function executeQuery(
     .filter((path): path is string => typeof path === "string");
   const metadataRequired = Boolean(query.requiresMetadata);
   const inboundRequired = Boolean(query.requiresInboundLinks);
+
+  if (!isWarmup && options.inspectQuery && options.inspectQuery === query.id) {
+    const topItems = resultItems.slice(0, options.inspectTop);
+    console.log(`\n[inspect:${query.id}] top ${topItems.length} (tool=${tool})`);
+    topItems.forEach((item, idx) => {
+      const path = item.path ?? "<no-path>";
+      const score = item.score ?? item.combined ?? item.base ?? "";
+      const reasons = whyByPath[path] ?? [];
+      console.log(`${idx + 1}. ${path}  score=${score}  reasons=${reasons.join("|")}`);
+    });
+  }
 
   let tokensBaseline: number | null = null;
   let tokenSavingsRatio: number | null = null;

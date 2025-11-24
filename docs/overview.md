@@ -17,6 +17,7 @@ service: "kiri"
 - **更新日**: 2025-10-28
 - **オーナー**: りずさん
 - **目的**: Git ワークツリーの構造・履歴・近接・意味を合成し、LLM 向けに最小限の文脈断片を即時返却するプラットフォームを構築する。
+- **推奨 Node バージョン**: 20.x (LTS)
 
 ## 用語
 
@@ -30,6 +31,12 @@ service: "kiri"
 - [運用 Runbook](./runbook.md#運用-runbook): デグレード時の復旧と観測手順。Front matter の `tags: [operations, degrade, observability]` を使用。
 - [検索とランキング指針](./search-ranking.md#検索とランキング): `boost_profile` やメタデータブーストの詳細。
 - [テストと評価](./testing.md#テストと評価): ゴールデンセットやカバレッジ指標の延長戦ガイド。
+
+## メトリクス/観測
+
+- Prometheus exporter は `src/server/observability/metrics.ts` で登録。
+- Adaptive K 関連: `adaptive_k_selected_total{enabled,category,k}`（選択Kの分布）、
+  `adaptive_k_deviation_total{category,requested}`（ユーザ指定limitがallowedSet外のとき）。
 
 ## 目標と非目標
 

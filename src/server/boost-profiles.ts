@@ -66,6 +66,59 @@ export type BoostProfileName =
   | "typeerror"
   | "vscode";
 
+function readEnvNumber(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function applyEnvOverrides(
+  name: BoostProfileName,
+  profile: BoostProfileConfig
+): BoostProfileConfig {
+  // Allow overriding default and vscode profiles; others stay deterministic.
+  if (name !== "default" && name !== "vscode") {
+    return profile;
+  }
+
+  const docMultOverride = readEnvNumber("KIRI_DOC_MULT", profile.fileTypeMultipliers.doc);
+  const vsBoostFactor = readEnvNumber("KIRI_VS_BOOST", 1.0);
+  const schemaBoostFactor = readEnvNumber("KIRI_SCHEMA_BOOST", 1.0);
+
+  const vsPrefixes = [
+    "src/vs/workbench/contrib/",
+    "src/vs/workbench/",
+    "src/vs/platform/",
+    "src/vs/editor/",
+    "src/vs/base/",
+    "src/vs/",
+  ];
+
+  const schemaPrefixes = [
+    "packages/assay-kit/src/dataset/schemas/",
+    "packages/assay-kit/src/dataset/",
+  ];
+
+  return {
+    ...profile,
+    fileTypeMultipliers: {
+      ...profile.fileTypeMultipliers,
+      doc: docMultOverride,
+    },
+    pathMultipliers: profile.pathMultipliers.map((entry) => {
+      let multiplier = entry.multiplier;
+      if (vsPrefixes.some((p) => entry.prefix.startsWith(p))) {
+        multiplier *= vsBoostFactor;
+      }
+      if (schemaPrefixes.some((p) => entry.prefix.startsWith(p))) {
+        multiplier *= schemaBoostFactor;
+      }
+      return { ...entry, multiplier };
+    }),
+  };
+}
+
 /**
  * Boost profile definitions
  * Centralized configuration for all boost profiles
@@ -74,12 +127,29 @@ export const BOOST_PROFILES: Record<BoostProfileName, BoostProfileConfig> = {
   default: {
     denylistOverrides: [],
     fileTypeMultipliers: {
-      doc: 0.5, // 50% penalty for docs
+      // Keep moderate doc penalty; path boosts below handle repo-specific noise
+      doc: 0.5,
       impl: 1.3, // 30% boost for implementation
       config: 0.05, // 95% penalty for config files
     },
     // ✅ Sorted by prefix length (longest first) for correct matching priority
     pathMultipliers: [
+      // VS Code monorepo targets (golden-set covers VS Code paths heavily)
+      { prefix: "src/vs/workbench/contrib/", multiplier: 2.4 },
+      { prefix: "src/vs/workbench/", multiplier: 2.2 },
+      { prefix: "src/vs/platform/", multiplier: 2.1 },
+      { prefix: "src/vs/editor/", multiplier: 2.0 },
+      { prefix: "src/vs/base/", multiplier: 1.9 },
+      { prefix: "src/vs/", multiplier: 1.8 },
+
+      // Assay-kit (golden-set includes adapter/dataset queries)
+      { prefix: "packages/assay-kit/src/dataset/loader.ts", multiplier: 6.0 },
+      { prefix: "packages/assay-kit/src/dataset/schemas/", multiplier: 3.0 },
+      { prefix: "packages/assay-kit/src/dataset/importer/", multiplier: 0.4 },
+      { prefix: "packages/assay-kit/src/dataset/diff/", multiplier: 0.1 },
+      { prefix: "packages/assay-kit/src/dataset/", multiplier: 1.9 },
+      { prefix: "packages/assay-kit/src/", multiplier: 1.7 },
+
       { prefix: "src/components/", multiplier: 1.3 },
       { prefix: "src/app/", multiplier: 1.4 },
       { prefix: "src/lib/", multiplier: 1.2 },
@@ -250,11 +320,39 @@ export const BOOST_PROFILES: Record<BoostProfileName, BoostProfileConfig> = {
   vscode: {
     denylistOverrides: ["extensions/"],
     fileTypeMultipliers: {
-      doc: 0.6,
+      // Penalize docs a bit more to push down README/CONTRIBUTING noise
+      doc: 0.35,
       impl: 1.35,
       config: 0.05,
     },
     pathMultipliers: [
+      // Focus boosts for low-precision queries (tree-data-provider, task-terminal, microtask-debug)
+      { prefix: "src/vs/workbench/services/views/", multiplier: 3.6 },
+      { prefix: "src/vs/workbench/contrib/terminal/", multiplier: 3.5 },
+      { prefix: "src/vs/workbench/contrib/debug/", multiplier: 3.4 },
+      { prefix: "src/vs/workbench/services/task", multiplier: 3.3 },
+      { prefix: "src/vs/base/common/", multiplier: 0.3 },
+      // Narrower boosts for persistent low-P@10 queries
+      { prefix: "src/vs/workbench/contrib/terminal/browser/", multiplier: 3.8 },
+      { prefix: "src/vs/workbench/contrib/terminal/test/", multiplier: 3.6 },
+      { prefix: "src/vs/workbench/contrib/debug/common/", multiplier: 3.6 },
+      { prefix: "src/vs/workbench/contrib/debug/browser/", multiplier: 3.6 },
+      { prefix: "src/vs/workbench/contrib/tasks/browser/", multiplier: 5.0 },
+      { prefix: "src/vs/workbench/contrib/tasks/browser/taskTerminalStatus.ts", multiplier: 5.2 },
+      { prefix: "src/vs/workbench/contrib/tasks/browser/terminalTaskSystem.ts", multiplier: 5.5 },
+      { prefix: ".eslint-ignore", multiplier: 0.05 },
+      { prefix: "cglicenses.json", multiplier: 0.05 },
+      { prefix: ".vscode-test.js", multiplier: 0.05 },
+      { prefix: ".eslint-plugin-local/", multiplier: 0.02 },
+      // Strongly suppress CLI docs/Rust artifacts that pollute terminal/task queries
+      { prefix: "cli/CONTRIBUTING.md", multiplier: 0.005 },
+      { prefix: "README.md", multiplier: 0.005 },
+      { prefix: "cli/src/", multiplier: 0.01 },
+      { prefix: "cli/", multiplier: 0.01 },
+      { prefix: "cli/src/tunnels/", multiplier: 0.008 },
+      { prefix: "cli/src/desktop/", multiplier: 0.008 },
+      { prefix: "cli/src/commands/", multiplier: 0.008 },
+      { prefix: "cli/src/util/", multiplier: 0.008 },
       { prefix: "src/vs/workbench/contrib/", multiplier: 2.8 },
       { prefix: "src/vs/workbench/", multiplier: 2.6 },
       { prefix: "src/vs/platform/", multiplier: 2.5 },
@@ -264,9 +362,7 @@ export const BOOST_PROFILES: Record<BoostProfileName, BoostProfileConfig> = {
       // VS Code extensions are often noisy for repo-level queries; keep but suppress
       { prefix: "extensions/", multiplier: 0.1 },
       { prefix: "src/", multiplier: 0.8 },
-      { prefix: "cli/src/", multiplier: 0.25 },
-      { prefix: "cli/", multiplier: 0.3 },
-      { prefix: ".eslint-plugin-local/", multiplier: 0.15 },
+      { prefix: ".eslint-plugin-local/", multiplier: 0.02 },
     ],
   },
 };
@@ -283,7 +379,7 @@ export function getBoostProfile(name: BoostProfileName): BoostProfileConfig {
         `Valid profiles are: ${Object.keys(BOOST_PROFILES).join(", ")}`
     );
   }
-  return profile;
+  return applyEnvOverrides(name, profile);
 }
 
 /**

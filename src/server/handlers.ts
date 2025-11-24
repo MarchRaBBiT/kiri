@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { checkFTSSchemaExists } from "../indexer/schema.js";
+import { getAdaptiveK } from "../shared/adaptive-k.js";
 import { DuckDBClient } from "../shared/duckdb.js";
 import { generateEmbedding, structuralSimilarity } from "../shared/embedding.js";
 import { encode as encodeGPT, tokenizeText } from "../shared/tokenizer.js";
@@ -435,6 +436,7 @@ export interface ContextBundleParams {
   metadata_filters?: Record<string, string | string[]>;
   requestId?: string; // Optional request ID for tracing/debugging
   path_prefix?: string;
+  category?: string; // Query category for adaptive K (bugfix, testfail, etc.)
 }
 
 export interface ContextBundleItem {
@@ -495,6 +497,69 @@ function bucketArtifactHints(hints: string[]): ArtifactHintBuckets {
     }
   }
   return buckets;
+}
+
+/**
+ * AdaptiveK用カテゴリ自動検出
+ *
+ * 優先順位:
+ * 1. params.categoryが明示的に指定されている場合はそれを使用
+ * 2. profile/artifacts/boost_profileから推論
+ *
+ * @param params - context_bundleのパラメータ
+ * @returns 検出されたカテゴリ（undefined = デフォルトK値を使用）
+ */
+function determineCategory(params: ContextBundleParams): string | undefined {
+  // 明示的に指定されている場合はそれを優先
+  if (params.category) {
+    return params.category;
+  }
+
+  const { profile, boost_profile, artifacts } = params;
+
+  // artifacts.failing_testsがある場合はデバッグ作業
+  if (artifacts?.failing_tests && artifacts.failing_tests.length > 0) {
+    return "debug";
+  }
+
+  // profileからの推論
+  if (profile === "testfail") {
+    return "testfail";
+  }
+  if (profile === "bugfix" || profile === "typeerror") {
+    return "debug";
+  }
+  if (profile === "refactor") {
+    return "api";
+  }
+  if (profile === "feature") {
+    return "feature";
+  }
+
+  // boost_profileからの推論
+  if (boost_profile === "docs") {
+    return "docs";
+  }
+
+  // artifacts.editing_pathからの推論
+  if (artifacts?.editing_path) {
+    const editingPath = artifacts.editing_path.toLowerCase();
+    // テストファイルを編集中 → debug
+    if (
+      editingPath.includes(".test.") ||
+      editingPath.includes(".spec.") ||
+      editingPath.includes("__tests__")
+    ) {
+      return "debug";
+    }
+    // ドキュメントを編集中 → docs
+    if (editingPath.endsWith(".md") || editingPath.includes("/docs/")) {
+      return "docs";
+    }
+  }
+
+  // 推論できない場合はundefined（kDefaultを使用）
+  return undefined;
 }
 
 type HintOrigin = "artifact" | "dictionary";
@@ -3641,7 +3706,22 @@ async function contextBundleImpl(
     );
   }
 
-  const limit = normalizeBundleLimit(params.limit);
+  // AdaptiveK: カテゴリに基づいてK値を動的に調整
+  // 1. params.categoryが明示的に指定されていればそれを使用
+  // 2. そうでなければprofile/artifacts/boost_profileから自動検出
+  const detectedCategory = determineCategory(params);
+  const adaptiveK = getAdaptiveK(detectedCategory, serverConfig.adaptiveK);
+  const adaptiveLimit = normalizeBundleLimit(adaptiveK);
+  const requestedLimit = normalizeBundleLimit(params.limit);
+  // AdaptiveKが無効な場合はrequestLimitをそのまま使用
+  // AdaptiveKが有効な場合:
+  //   - ユーザー指定limitがなければadaptiveKを使用
+  //   - ユーザー指定がある場合は小さい方を採用（過剰取得防止）
+  const limit = serverConfig.adaptiveK.enabled
+    ? params.limit === undefined
+      ? adaptiveLimit
+      : Math.min(requestedLimit, adaptiveLimit)
+    : requestedLimit;
   const artifacts = params.artifacts ?? {};
   const artifactHints = normalizeArtifactHints(artifacts.hints);
   const hintBuckets = bucketArtifactHints(artifactHints);

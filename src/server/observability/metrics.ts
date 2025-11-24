@@ -1,5 +1,21 @@
 import { ServerResponse } from "node:http";
 
+interface Counter {
+  inc(labels?: Record<string, string | number>): void;
+}
+
+/**
+ * Lightweight counter factory used for instrumentation.
+ * Current implementation is a no-op placeholder; wiring to Prometheus can replace this.
+ */
+export function counter(_name: string, _opts: { help: string; labelNames?: string[] }): Counter {
+  return {
+    inc: () => {
+      /* no-op */
+    },
+  };
+}
+
 export interface WatcherMetrics {
   reindexCount: number;
   lastReindexDuration: number;

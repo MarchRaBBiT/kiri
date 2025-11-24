@@ -860,6 +860,8 @@ export function createRpcHandler(
             serverInfo: SERVER_INFO,
             pid: process.pid,
             uptime: process.uptime(),
+            db: context.databasePath ? path.basename(context.databasePath) : undefined,
+            repo: context.repoPath ? path.basename(context.repoPath) : undefined,
           };
           break;
         }

@@ -21,6 +21,8 @@ export interface ServerContext {
   db: DuckDBClient;
   repoId: number;
   services: ServerServices;
+  databasePath?: string;
+  repoPath?: string;
   features?: {
     fts?: boolean; // FTS拡張が利用可能かどうか
   };
@@ -42,6 +44,8 @@ export function createServerContext(options: {
   db: DuckDBClient;
   repoId: number;
   services: ServerServices;
+  databasePath?: string;
+  repoPath?: string;
   features?: { fts?: boolean };
   ftsStatusCache?: FtsStatusCache;
   tableAvailability: TableAvailability;
@@ -54,6 +58,14 @@ export function createServerContext(options: {
     tableAvailability: options.tableAvailability,
     warningManager: options.warningManager,
   };
+
+  if (options.databasePath !== undefined) {
+    context.databasePath = options.databasePath;
+  }
+
+  if (options.repoPath !== undefined) {
+    context.repoPath = options.repoPath;
+  }
 
   // exactOptionalPropertyTypes: true を満たすため、undefined の場合は代入しない
   if (options.features !== undefined) {

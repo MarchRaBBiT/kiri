@@ -1,5 +1,8 @@
 import process from "node:process";
 
+import type { AdaptiveKConfig } from "../shared/adaptive-k.js";
+import { validateAdaptiveKConfig } from "../shared/config-validate-adaptive-k.js";
+
 import type { PathMultiplier } from "./boost-profiles.js";
 import { loadPathPenalties } from "./config-loader.js";
 
@@ -45,6 +48,7 @@ export interface ServerConfig {
     pathMissDelta: number;
     largeFileDelta: number;
   };
+  adaptiveK: AdaptiveKConfig;
   pathPenalties: PathMultiplier[];
 }
 
@@ -78,6 +82,19 @@ function parseEnvFloat(value: string | undefined, fallback: number): number {
     return parsed;
   }
   return fallback;
+}
+
+function parseEnvNumberList(value: string | undefined, fallback: number[]): number[] {
+  if (value === undefined) {
+    return fallback;
+  }
+  const parts = value
+    .split(",")
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0)
+    .map((part) => Number.parseFloat(part));
+  const allFinite = parts.every((n) => Number.isFinite(n));
+  return allFinite && parts.length > 0 ? parts : fallback;
 }
 
 function validateServerConfig(config: ServerConfig): void {
@@ -131,6 +148,8 @@ function validateServerConfig(config: ServerConfig): void {
       );
     }
   }
+
+  validateAdaptiveKConfig(config.adaptiveK);
 }
 
 export function loadServerConfig(): ServerConfig {
@@ -151,6 +170,46 @@ export function loadServerConfig(): ServerConfig {
   const hintsEnabled = directoryEnabled || dependencyEnabled || semanticEnabled;
 
   const pathPenalties = loadPathPenalties();
+
+  const adaptiveKEnabled = envFlagEnabled(process.env.KIRI_ADAPTIVE_K_ENABLED, false);
+  const adaptiveKAllowedSet = parseEnvNumberList(
+    process.env.KIRI_ADAPTIVE_K_ALLOWED_SET,
+    [5, 10, 20]
+  );
+  const adaptiveKMin = parseEnvNumber(process.env.KIRI_ADAPTIVE_K_MIN, 3);
+  const adaptiveKMax = parseEnvNumber(process.env.KIRI_ADAPTIVE_K_MAX, 50);
+  const adaptiveKBugfix = parseEnvNumber(process.env.KIRI_ADAPTIVE_K_BUGFIX, 5);
+  const adaptiveKIntegration = parseEnvNumber(process.env.KIRI_ADAPTIVE_K_INTEGRATION, 5);
+  const adaptiveKTestfail = parseEnvNumber(process.env.KIRI_ADAPTIVE_K_TESTFAIL, 20);
+  const adaptiveKPerformance = parseEnvNumber(process.env.KIRI_ADAPTIVE_K_PERFORMANCE, 20);
+  const adaptiveKDefault = parseEnvNumber(process.env.KIRI_ADAPTIVE_K_DEFAULT, 10);
+  const adaptiveKWhenDisabled = parseEnvNumber(process.env.KIRI_ADAPTIVE_K_DISABLED_VALUE, 10);
+  // 追加カテゴリ: golden評価で使用される分類
+  const adaptiveKDebug = parseEnvNumber(process.env.KIRI_ADAPTIVE_K_DEBUG, 15);
+  const adaptiveKApi = parseEnvNumber(process.env.KIRI_ADAPTIVE_K_API, 15);
+  const adaptiveKDocs = parseEnvNumber(process.env.KIRI_ADAPTIVE_K_DOCS, 8);
+  const adaptiveKFeature = parseEnvNumber(process.env.KIRI_ADAPTIVE_K_FEATURE, 10);
+
+  const adaptiveK: AdaptiveKConfig = {
+    enabled: adaptiveKEnabled,
+    allowedSet: adaptiveKAllowedSet,
+    kMin: adaptiveKMin,
+    kMax: adaptiveKMax,
+    kMap: {
+      bugfix: adaptiveKBugfix,
+      integration: adaptiveKIntegration,
+      testfail: adaptiveKTestfail,
+      performance: adaptiveKPerformance,
+      // golden評価カテゴリ
+      debug: adaptiveKDebug,
+      api: adaptiveKApi,
+      docs: adaptiveKDocs,
+      "docs-plain": adaptiveKDocs,
+      feature: adaptiveKFeature,
+    },
+    kDefault: adaptiveKDefault,
+    kWhenDisabled: adaptiveKWhenDisabled,
+  };
 
   const config: ServerConfig = {
     features: {
@@ -211,6 +270,7 @@ export function loadServerConfig(): ServerConfig {
       pathMissDelta: parseEnvFloat(process.env.KIRI_PATH_MISS_DELTA, -0.5),
       largeFileDelta: parseEnvFloat(process.env.KIRI_LARGE_FILE_DELTA, -0.8),
     },
+    adaptiveK,
     pathPenalties,
   };
 

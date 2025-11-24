@@ -1,7 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 
-import { DegradeController } from "../../src/server/fallbacks/degradeController.js";
-import { MetricsRegistry } from "../../src/server/observability/metrics.js";
 import {
   createRpcHandler,
   type JsonRpcRequest,
@@ -10,6 +8,8 @@ import {
 } from "../../src/server/rpc.js";
 import type { ServerContext } from "../../src/server/context.js";
 import type { ContextBundleParams } from "../../src/server/handlers.js";
+import { DegradeController } from "../../src/server/fallbacks/degradeController.js";
+import { MetricsRegistry } from "../../src/server/observability/metrics.js";
 import * as handlers from "../../src/server/handlers.js";
 import type { ServerServices } from "../../src/server/services/index.js";
 import type { DuckDBClient } from "../../src/shared/duckdb.js";

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2025-11-25
+
+### Changed
+
+- **AdaptiveK enabled by default**: `context_bundle` now uses adaptive K sizing automatically without requiring explicit configuration
+  - Previously required opt-in, now provides intelligent result sizing out of the box
+  - Configurable limits remain available for fine-tuning
+
+### Added
+
+- **Category aliases for AdaptiveK**: Added convenience aliases for common query categories
+  - Simplifies query categorization with human-readable aliases
+  - Integrated with golden set evaluation system
+
+### Fixed
+
+- **Lint and type errors**: Resolved import ordering and type compatibility issues in adaptive-k module
+- **WarningManager test**: Fixed test compatibility with adaptive-k changes
+- **Port retry on benchmark**: Evaluation scripts now retry on `EADDRINUSE` errors
+
 ## [0.13.0] - 2025-11-24
 
 ### Added

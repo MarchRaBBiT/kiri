@@ -1,15 +1,12 @@
 import path from "node:path";
 
 import packageJson from "../../package.json" with { type: "json" };
-import { maskValue } from "../shared/security/masker.js";
-
-const RESPONSE_MASK_SKIP_KEYS = ["path"];
-
 import {
   ADAPTIVE_K_CATEGORIES,
   ADAPTIVE_K_CATEGORY_ALIASES,
   ADAPTIVE_K_CATEGORY_SET,
 } from "../shared/adaptive-k-categories.js";
+import { maskValue } from "../shared/security/masker.js";
 
 import { isValidBoostProfile, BOOST_PROFILES } from "./boost-profiles.js";
 import { ServerContext } from "./context.js";
@@ -29,11 +26,8 @@ import {
 import { MetricsRegistry } from "./observability/metrics.js";
 import { withSpan } from "./observability/tracing.js";
 import { selectProfileFromQuery } from "./profile-selector.js";
-import {
-  ADAPTIVE_K_CATEGORIES,
-  ADAPTIVE_K_CATEGORY_ALIASES,
-  ADAPTIVE_K_CATEGORY_SET,
-} from "../shared/adaptive-k-categories.js";
+
+const RESPONSE_MASK_SKIP_KEYS = ["path"];
 
 /**
  * WarningManager - 警告メッセージの表示を管理するクラス

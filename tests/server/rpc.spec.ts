@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 
+import type { ServerServices } from "../../src/server/services/index.js";
+import type { DuckDBClient } from "../../src/shared/duckdb.js";
 import type { ServerContext } from "../../src/server/context.js";
 import type { ContextBundleParams } from "../../src/server/handlers.js";
 import { DegradeController } from "../../src/server/fallbacks/degradeController.js";
@@ -11,8 +13,6 @@ import {
   type JsonRpcSuccess,
   WarningManager,
 } from "../../src/server/rpc.js";
-import type { ServerServices } from "../../src/server/services/index.js";
-import type { DuckDBClient } from "../../src/shared/duckdb.js";
 
 const createHandler = () => {
   const warningManager = new WarningManager();

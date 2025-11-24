@@ -1,7 +1,7 @@
 import process from "node:process";
 
-import type { AdaptiveKConfig } from "../shared/adaptive-k.js";
 import { ADAPTIVE_K_CATEGORY_ALIASES } from "../shared/adaptive-k-categories.js";
+import type { AdaptiveKConfig } from "../shared/adaptive-k.js";
 import { validateAdaptiveKConfig } from "../shared/config-validate-adaptive-k.js";
 
 import type { PathMultiplier } from "./boost-profiles.js";

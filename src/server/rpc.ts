@@ -23,6 +23,11 @@ import {
 import { MetricsRegistry } from "./observability/metrics.js";
 import { withSpan } from "./observability/tracing.js";
 import { selectProfileFromQuery } from "./profile-selector.js";
+import {
+  ADAPTIVE_K_CATEGORIES,
+  ADAPTIVE_K_CATEGORY_ALIASES,
+  ADAPTIVE_K_CATEGORY_SET,
+} from "../shared/adaptive-k-categories.js";
 
 /**
  * WarningManager - 警告メッセージの表示を管理するクラス
@@ -196,23 +201,6 @@ const SERVER_INFO = {
   name: "kiri",
   version: typeof packageJson?.version === "string" ? packageJson.version : "0.0.0",
 } as const;
-
-const ADAPTIVE_K_CATEGORIES = [
-  "bugfix",
-  "testfail",
-  "debug",
-  "api",
-  "docs",
-  "feature",
-  "integration",
-  "performance",
-] as const;
-const ADAPTIVE_K_CATEGORY_SET = new Set<string>(ADAPTIVE_K_CATEGORIES);
-const ADAPTIVE_K_CATEGORY_ALIASES: Record<string, string> = {
-  editor: "feature",
-  infra: "integration",
-  "docs-plain": "docs",
-};
 
 const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {

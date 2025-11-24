@@ -2,6 +2,11 @@ import process from "node:process";
 
 import type { AdaptiveKConfig } from "../shared/adaptive-k.js";
 import { validateAdaptiveKConfig } from "../shared/config-validate-adaptive-k.js";
+import {
+  ADAPTIVE_K_CATEGORIES,
+  ADAPTIVE_K_CATEGORY_ALIASES,
+  ADAPTIVE_K_CATEGORY_SET,
+} from "../shared/adaptive-k-categories.js";
 
 import type { PathMultiplier } from "./boost-profiles.js";
 import { loadPathPenalties } from "./config-loader.js";
@@ -190,25 +195,38 @@ export function loadServerConfig(): ServerConfig {
   const adaptiveKDocs = parseEnvNumber(process.env.KIRI_ADAPTIVE_K_DOCS, 8);
   const adaptiveKFeature = parseEnvNumber(process.env.KIRI_ADAPTIVE_K_FEATURE, 10);
 
+  const adaptiveKMap: Record<string, number> = {
+    bugfix: adaptiveKBugfix,
+    integration: adaptiveKIntegration,
+    testfail: adaptiveKTestfail,
+    performance: adaptiveKPerformance,
+    debug: adaptiveKDebug,
+    api: adaptiveKApi,
+    docs: adaptiveKDocs,
+    feature: adaptiveKFeature,
+  };
+
+  // docs-plain は docs に正規化
+  adaptiveKMap["docs-plain"] = adaptiveKDocs;
+  // エイリアスを正規カテゴリにマッピング（kMapの単一ソース化）
+  for (const [alias, target] of Object.entries(ADAPTIVE_K_CATEGORY_ALIASES)) {
+    adaptiveKMap[alias] = adaptiveKMap[target] ?? adaptiveKDefault;
+  }
+
+  // 未指定カテゴリに対しては kDefault が使われる前提で、kMapキーを正規カテゴリセットに限定
+  for (const key of Object.keys(adaptiveKMap)) {
+    if (!ADAPTIVE_K_CATEGORY_SET.has(key)) {
+      // aliasやdocs-plainは許容
+      continue;
+    }
+  }
+
   const adaptiveK: AdaptiveKConfig = {
     enabled: adaptiveKEnabled,
     allowedSet: adaptiveKAllowedSet,
     kMin: adaptiveKMin,
     kMax: adaptiveKMax,
-    kMap: {
-      bugfix: adaptiveKBugfix,
-      integration: adaptiveKIntegration,
-      testfail: adaptiveKTestfail,
-      performance: adaptiveKPerformance,
-      // golden評価カテゴリ
-      debug: adaptiveKDebug,
-      api: adaptiveKApi,
-      docs: adaptiveKDocs,
-      "docs-plain": adaptiveKDocs,
-      feature: adaptiveKFeature,
-      editor: adaptiveKFeature, // editorはfeatureと同様のK=10
-      infra: adaptiveKIntegration, // infraはintegrationと同様のK=5
-    },
+    kMap: adaptiveKMap,
     kDefault: adaptiveKDefault,
     kWhenDisabled: adaptiveKWhenDisabled,
   };

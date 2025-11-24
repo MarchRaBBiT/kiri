@@ -1,8 +1,8 @@
 import process from "node:process";
 
+import type { AdaptiveKConfig } from "../shared/adaptive-k.js";
 import { ADAPTIVE_K_CATEGORY_ALIASES } from "../shared/adaptive-k-categories.js";
 import { validateAdaptiveKConfig } from "../shared/config-validate-adaptive-k.js";
-import type { AdaptiveKConfig } from "../shared/adaptive-k.js";
 
 import type { PathMultiplier } from "./boost-profiles.js";
 import { loadPathPenalties } from "./config-loader.js";
@@ -207,14 +207,6 @@ export function loadServerConfig(): ServerConfig {
   // エイリアスを正規カテゴリにマッピング（kMapの単一ソース化）
   for (const [alias, target] of Object.entries(ADAPTIVE_K_CATEGORY_ALIASES)) {
     adaptiveKMap[alias] = adaptiveKMap[target] ?? adaptiveKDefault;
-  }
-
-  // 未指定カテゴリに対しては kDefault が使われる前提で、kMapキーを正規カテゴリセットに限定
-  for (const key of Object.keys(adaptiveKMap)) {
-    if (!ADAPTIVE_K_CATEGORY_SET.has(key)) {
-      // aliasやdocs-plainは許容
-      continue;
-    }
   }
 
   const adaptiveK: AdaptiveKConfig = {

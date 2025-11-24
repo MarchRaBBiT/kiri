@@ -486,6 +486,8 @@ describe("context_bundle", () => {
   });
 
   it("promotes domain dictionary paths for abstract aliases", async () => {
+    const prevFlag = process.env.KIRI_ENABLE_DOMAIN_TERMS;
+    process.env.KIRI_ENABLE_DOMAIN_TERMS = "1";
     const repo = await createTempRepo({
       "src/tuning/orchestrator.ts": `export class TuningOrchestrator {
   run(): number {
@@ -523,6 +525,7 @@ describe("context_bundle", () => {
     const entry = bundle.context.find((item) => item.path === "src/tuning/orchestrator.ts");
     expect(entry).toBeDefined();
     expect(entry?.why).toContain("dictionary:hint:src/tuning/orchestrator.ts");
+    process.env.KIRI_ENABLE_DOMAIN_TERMS = prevFlag;
   });
 
   it("skips tokens_estimate calculation unless requested", async () => {

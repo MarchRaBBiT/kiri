@@ -197,6 +197,24 @@ const SERVER_INFO = {
   version: typeof packageJson?.version === "string" ? packageJson.version : "0.0.0",
 } as const;
 
+const ADAPTIVE_K_CATEGORIES = [
+  "bugfix",
+  "testfail",
+  "debug",
+  "api",
+  "docs",
+  "feature",
+  "integration",
+  "performance",
+] as const;
+const ADAPTIVE_K_CATEGORY_SET = new Set<string>(ADAPTIVE_K_CATEGORIES);
+const ADAPTIVE_K_CATEGORY_ALIASES: Record<string, string> = {
+  editor: "feature",
+  infra: "integration",
+  "docs-plain": "docs",
+  assay: "feature",
+};
+
 const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: "context_bundle",
@@ -295,6 +313,12 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
           additionalProperties: true,
           description:
             "Structured metadata filters applied in addition to the goal text. Keys may use prefixes (meta./metadata./docmeta./frontmatter./fm./yaml./json.) or aliases (tag/tags, category, service). Values can be strings or string arrays. Example: { tags: ['observability'], 'docmeta.category': 'operations' }.",
+        },
+        category: {
+          type: "string",
+          enum: [...ADAPTIVE_K_CATEGORIES],
+          description:
+            "Query category for adaptive K-value selection. Valid values: bugfix, testfail, debug, api, docs, feature, integration, performance. When provided, the system adjusts the number of results (K) based on typical needs for that category.",
         },
       },
     },
@@ -697,6 +721,24 @@ function parseContextBundleParams(input: unknown, context: ServerContext): Conte
     params.metadata_filters = record.metadata_filters as Record<string, string | string[]>;
   }
 
+  // Parse category parameter for AdaptiveK
+  if (typeof record.category === "string") {
+    const trimmedCategory = record.category.trim();
+    if (trimmedCategory.length > 0) {
+      const normalizedCategory = ADAPTIVE_K_CATEGORY_ALIASES[trimmedCategory] ?? trimmedCategory;
+      if (ADAPTIVE_K_CATEGORY_SET.has(normalizedCategory)) {
+        params.category = normalizedCategory;
+      } else {
+        context.warningManager.warnForRequest(
+          "category-invalid",
+          `category "${trimmedCategory}" is not supported. Valid values: ${ADAPTIVE_K_CATEGORIES.join(
+            ", "
+          )}. The value was ignored.`
+        );
+      }
+    }
+  }
+
   return params;
 }
 
@@ -860,8 +902,8 @@ export function createRpcHandler(
             serverInfo: SERVER_INFO,
             pid: process.pid,
             uptime: process.uptime(),
-            db: context.databasePath ? path.basename(context.databasePath) : undefined,
-            repo: context.repoPath ? path.basename(context.repoPath) : undefined,
+            db: context.databasePath ? path.resolve(context.databasePath) : undefined,
+            repo: context.repoPath ? path.resolve(context.repoPath) : undefined,
           };
           break;
         }

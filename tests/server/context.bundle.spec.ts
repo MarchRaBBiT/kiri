@@ -1377,6 +1377,164 @@ This Lambda function handles canvas-agent operations.
     expect(pageAgentRank).toBeLessThan(3);
   }, 15000);
 
+  /**
+   * Issue #48: ストップワードが多数含まれるゴール文でも関連ファイルがランク上位になることを検証
+   *
+   * このテストは、ゴール文に一般語（ストップワード）が多数含まれていても、
+   * 重要なキーワードが抽出され、関連ファイルが正しくランキングされることを確認する。
+   */
+  it("ranks relevant files highly even when goal contains many stop words", async () => {
+    const repo = await createTempRepo({
+      // 認証関連の実装ファイル（関連するべきファイル）
+      "src/auth/authentication.ts": `export class AuthenticationService {
+  async login(username: string, password: string): Promise<boolean> {
+    const user = await this.findUser(username);
+    if (!user) return false;
+    return this.verifyPassword(password, user.passwordHash);
+  }
+
+  async logout(sessionId: string): Promise<void> {
+    await this.invalidateSession(sessionId);
+  }
+
+  private async findUser(username: string) {
+    return { username, passwordHash: 'hash' };
+  }
+
+  private async verifyPassword(input: string, hash: string) {
+    return input === hash;
+  }
+
+  private async invalidateSession(sessionId: string) {
+    console.log('Session invalidated:', sessionId);
+  }
+}
+`,
+      // 全く関係ないファイル
+      "src/utils/format.ts": `export function formatDate(date: Date): string {
+  return date.toISOString();
+}
+
+export function formatNumber(num: number): string {
+  return num.toLocaleString();
+}
+`,
+      // データベース関連（やや関連）
+      "src/db/connection.ts": `export class DatabaseConnection {
+  async connect(): Promise<void> {
+    console.log('Connected to database');
+  }
+}
+`,
+    });
+    cleanupTargets.push({ dispose: repo.cleanup });
+
+    const dbDir = await mkdtemp(join(tmpdir(), "kiri-stopwords-"));
+    const dbPath = join(dbDir, "index.duckdb");
+    cleanupTargets.push({ dispose: async () => await rm(dbDir, { recursive: true, force: true }) });
+
+    await runIndexer({ repoRoot: repo.path, databasePath: dbPath, full: true });
+
+    const db = await DuckDBClient.connect({ databasePath: dbPath });
+    cleanupTargets.push({ dispose: async () => await db.close() });
+
+    const repoId = await resolveRepoId(db, repo.path);
+    const tableAvailability = await checkTableAvailability(db);
+    const context: ServerContext = {
+      db,
+      repoId,
+      services: createServerServices(db),
+      tableAvailability,
+      warningManager: new WarningManager(),
+    };
+
+    // ストップワードが多数含まれるゴール文
+    // ストップワード: fix, the, test, error, bug, that, is, failing, with, this, issue, when, has, their
+    // 重要キーワード: authentication
+    const goalWithManyStopWords =
+      "Fix the test error bug that is failing with this authentication issue when the user has their session";
+
+    const bundle = await contextBundle(context, {
+      goal: goalWithManyStopWords,
+      limit: 5,
+    });
+
+    // 認証ファイルが結果に含まれていること
+    const authFile = bundle.context.find((item) => item.path === "src/auth/authentication.ts");
+    expect(authFile).toBeDefined();
+
+    // 認証ファイルがランク上位（上位2位以内）にあること
+    const authRank = bundle.context.findIndex((item) => item.path === "src/auth/authentication.ts");
+    expect(authRank).toBeLessThan(2);
+
+    // 全く関係ないフォーマットファイルより認証ファイルが上位にあること
+    const formatRank = bundle.context.findIndex((item) => item.path === "src/utils/format.ts");
+    if (formatRank !== -1) {
+      expect(authRank).toBeLessThan(formatRank);
+    }
+  }, 10000);
+
+  /**
+   * Issue #48: 日本語ストップワードを含むゴール文でも正しく動作することを検証
+   */
+  it("handles Japanese stop words in goal text correctly", async () => {
+    const repo = await createTempRepo({
+      // 決済処理ファイル
+      "src/payment/processor.ts": `export class PaymentProcessor {
+  async processPayment(amount: number, currency: string): Promise<boolean> {
+    console.log('Processing payment:', amount, currency);
+    return true;
+  }
+}
+`,
+      // 関係ないファイル
+      "src/utils/logger.ts": `export function log(message: string): void {
+  console.log(message);
+}
+`,
+    });
+    cleanupTargets.push({ dispose: repo.cleanup });
+
+    const dbDir = await mkdtemp(join(tmpdir(), "kiri-ja-stopwords-"));
+    const dbPath = join(dbDir, "index.duckdb");
+    cleanupTargets.push({ dispose: async () => await rm(dbDir, { recursive: true, force: true }) });
+
+    await runIndexer({ repoRoot: repo.path, databasePath: dbPath, full: true });
+
+    const db = await DuckDBClient.connect({ databasePath: dbPath });
+    cleanupTargets.push({ dispose: async () => await db.close() });
+
+    const repoId = await resolveRepoId(db, repo.path);
+    const tableAvailability = await checkTableAvailability(db);
+    const context: ServerContext = {
+      db,
+      repoId,
+      services: createServerServices(db),
+      tableAvailability,
+      warningManager: new WarningManager(),
+    };
+
+    // 日本語ストップワードを含むゴール（「の」「を」「は」「が」「で」「に」など）
+    // 重要キーワード: payment, processor
+    const goalWithJapaneseStopWords =
+      "この payment の processor を修正して、エラーが発生している問題を解決する";
+
+    const bundle = await contextBundle(context, {
+      goal: goalWithJapaneseStopWords,
+      limit: 5,
+    });
+
+    // 決済ファイルが結果に含まれていること
+    const paymentFile = bundle.context.find((item) => item.path === "src/payment/processor.ts");
+    expect(paymentFile).toBeDefined();
+
+    // 決済ファイルがランク上位にあること
+    const paymentRank = bundle.context.findIndex(
+      (item) => item.path === "src/payment/processor.ts"
+    );
+    expect(paymentRank).toBeLessThan(2);
+  }, 10000);
+
   describe("WarningManager request isolation", () => {
     it("clears warnings between requests to prevent cross-contamination", async () => {
       // This test validates that WarningManager properly isolates warnings between requests.

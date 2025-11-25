@@ -4,6 +4,7 @@ import {
   type DomainExpansion,
   type DomainTermsDictionary,
 } from "../domain-terms.js";
+import { loadStopWords, type StopWordsService } from "../stop-words.js";
 
 import { RepoRepository } from "./repo-repository.js";
 import { RepoResolver } from "./repo-resolver.js";
@@ -18,6 +19,7 @@ export interface ServerServices {
   repoRepository: RepoRepository;
   repoResolver: RepoResolver;
   domainTerms: DomainTermsDictionary;
+  stopWords: StopWordsService;
 }
 
 /**
@@ -43,10 +45,12 @@ export function createServerServices(db: DuckDBClient): ServerServices {
             return { matched: [], aliases: [], fileHints: [] };
           }
         })() as unknown as DomainTermsDictionary);
+  const stopWords = loadStopWords();
 
   return {
     repoRepository,
     repoResolver,
     domainTerms,
+    stopWords,
   };
 }

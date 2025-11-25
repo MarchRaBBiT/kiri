@@ -18,8 +18,10 @@ import { loadPathPenalties, mergePathPenaltyEntries } from "./config-loader.js";
 import { loadServerConfig } from "./config.js";
 import { FtsStatusCache, ServerContext, TableAvailability } from "./context.js";
 import type { DomainFileHint } from "./domain-terms.js";
+import { createIdfProvider } from "./idf-provider.js";
 import { coerceProfileName, loadScoringProfile, type ScoringWeights } from "./scoring.js";
 import { createServerServices, ServerServices } from "./services/index.js";
+import { loadStopWords, type StopWordsService } from "./stop-words.js";
 
 // Re-export extracted handlers for backward compatibility
 export {
@@ -961,39 +963,18 @@ function selectWhyTags(reasons: Set<string>): string[] {
   return Array.from(selected);
 }
 
-const STOP_WORDS = new Set([
-  "the",
-  "and",
-  "for",
-  "with",
-  "from",
-  "this",
-  "that",
-  "have",
-  "has",
-  "will",
-  "would",
-  "into",
-  "about",
-  "there",
-  "their",
-  "your",
-  "fix",
-  "test",
-  "tests",
-  "issue",
-  "error",
-  "bug",
-  "fail",
-  "failing",
-  "make",
-  "when",
-  "where",
-  "should",
-  "could",
-  "need",
-  "goal",
-]);
+/**
+ * ストップワードサービスの遅延初期化
+ * シングルトンキャッシュを使用し、config/stop-words.yml から読み込み
+ * @see Issue #48: Improve context_bundle stop word coverage and configurability
+ */
+let _stopWordsService: StopWordsService | null = null;
+function getStopWordsService(): StopWordsService {
+  if (!_stopWordsService) {
+    _stopWordsService = loadStopWords();
+  }
+  return _stopWordsService;
+}
 
 export interface DepsClosureParams {
   path: string;
@@ -1331,7 +1312,7 @@ function extractCompoundTerms(text: string): string[] {
   const matches = Array.from(text.matchAll(compoundPattern)).map((m) => m[1]!);
   return matches
     .map((term) => term.toLowerCase())
-    .filter((term) => term.length >= 3 && !STOP_WORDS.has(term));
+    .filter((term) => term.length >= 3 && !getStopWordsService().has(term));
 }
 
 /**
@@ -1348,7 +1329,7 @@ function extractPathSegments(text: string): string[] {
   for (const path of matches) {
     const parts = path.toLowerCase().split("/");
     for (const part of parts) {
-      if (part.length >= 3 && !STOP_WORDS.has(part) && !segments.includes(part)) {
+      if (part.length >= 3 && !getStopWordsService().has(part) && !segments.includes(part)) {
         segments.push(part);
       }
     }
@@ -1363,7 +1344,7 @@ function extractPathSegments(text: string): string[] {
  */
 function extractRegularWords(text: string, strategy: TokenizationStrategy): string[] {
   const words = tokenizeText(text, strategy).filter(
-    (word) => word.length >= 3 && !STOP_WORDS.has(word)
+    (word) => word.length >= 3 && !getStopWordsService().has(word)
   );
 
   return words;
@@ -1400,7 +1381,7 @@ function extractKeywords(text: string): ExtractedTerms {
         // ハイフンとアンダースコアの両方で分割
         const parts = term
           .split(/[-_]/)
-          .filter((part) => part.length >= 3 && !STOP_WORDS.has(part));
+          .filter((part) => part.length >= 3 && !getStopWordsService().has(part));
         result.keywords.push(...parts);
       }
     }
@@ -1429,7 +1410,7 @@ function addKeywordDerivedPathSegments(result: ExtractedTerms): void {
   }
   const additional: string[] = [];
   for (const keyword of result.keywords) {
-    if (keyword.length < 3 || STOP_WORDS.has(keyword)) {
+    if (keyword.length < 3 || getStopWordsService().has(keyword)) {
       continue;
     }
     if (result.pathSegments.includes(keyword) || additional.includes(keyword)) {
@@ -3826,13 +3807,34 @@ async function contextBundleImpl(
     const pathSegments = artifacts.editing_path
       .split(/[/_.-]/)
       .map((segment) => segment.toLowerCase())
-      .filter((segment) => segment.length >= 3 && !STOP_WORDS.has(segment));
+      .filter((segment) => segment.length >= 3 && !getStopWordsService().has(segment));
     extractedTerms.pathSegments.push(...pathSegments.slice(0, MAX_KEYWORDS));
   }
 
   const candidates = new Map<string, CandidateInfo>();
   const stringMatchSeeds = new Set<string>();
   const fileCache = new Map<string, FileContentCacheEntry>();
+
+  // Phase 2: IDF重み付けプロバイダーの初期化
+  // キーワードの文書頻度に基づいて重みを計算し、高頻度語を自動的に減衰
+  const idfProvider = createIdfProvider(db, repoId);
+  const idfWeights = new Map<string, number>();
+
+  // 抽出されたキーワードのIDF重みを事前計算（非同期バッチ処理）
+  if (extractedTerms.keywords.length > 0) {
+    const computedWeights = await idfProvider.computeIdfBatch(extractedTerms.keywords);
+    for (const [term, weight] of computedWeights) {
+      idfWeights.set(term, weight);
+    }
+    if (process.env.KIRI_TRACE_IDF === "1") {
+      console.info(
+        "[idf-weights]",
+        JSON.stringify(
+          Object.fromEntries(Array.from(idfWeights.entries()).map(([k, v]) => [k, v.toFixed(3)]))
+        )
+      );
+    }
+  }
 
   // ✅ Cache boost profile config to avoid redundant lookups in hot path
   const boostProfile: BoostProfileName =
@@ -3999,10 +4001,17 @@ async function contextBundleImpl(
 
       const candidate = ensureCandidate(candidates, row.path);
 
-      // 各マッチしたキーワードに対してスコアリング
+      // 各マッチしたキーワードに対してスコアリング（Phase 2: IDF重み付け）
       for (const keyword of matchedKeywords) {
-        candidate.score += weights.textMatch;
-        candidate.reasons.add(`text:${keyword}`);
+        // IDF重みを適用（事前計算済み、なければデフォルト1.0）
+        // 減衰適用: 0.6 + 0.4 * idfWeight でファイル種別マルチプライヤとのバランスを維持
+        // - 高頻度語: IDF=0 → 0.6 (40%減)
+        // - 低頻度語: IDF=1 → 1.0 (減衰なし)
+        const rawIdfWeight = idfWeights.get(keyword.toLowerCase()) ?? 1.0;
+        const dampedIdfWeight = 0.6 + 0.4 * rawIdfWeight;
+        const weightedScore = weights.textMatch * dampedIdfWeight;
+        candidate.score += weightedScore;
+        candidate.reasons.add(`text:${keyword}:idf=${rawIdfWeight.toFixed(2)}`);
         candidate.keywordHits.add(keyword);
       }
 

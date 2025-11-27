@@ -16,14 +16,17 @@ import {
   getRepoPathCandidates,
 } from "../shared/utils/path.js";
 
+import { computeCochangeGraph, incrementalCochangeUpdate } from "./cochange.js";
 import { analyzeSource, buildFallbackSnippet } from "./codeintel.js";
 import { getDefaultBranch, getHeadCommit, gitLsFiles, gitDiffNameOnly } from "./git.js";
+import { computeGraphMetrics, incrementalGraphUpdate } from "./graph-metrics.js";
 import { detectLanguage } from "./language.js";
 import { mergeRepoRecords } from "./migrations/repo-merger.js";
 import { getIndexerQueue } from "./queue.js";
 import {
   ensureBaseSchema,
   ensureDocumentMetadataTables,
+  ensureGraphLayerTables,
   ensureNormalizedRootColumn,
   ensureRepoMetaColumns,
   rebuildFTSIfNeeded,
@@ -37,6 +40,7 @@ interface IndexerOptions {
   since?: string;
   changedPaths?: string[]; // For incremental indexing: only reindex these files
   skipLocking?: boolean; // Fix #1: Internal use only - allows caller (e.g., watcher) to manage lock
+  skipCochange?: boolean; // Skip co-change graph computation (use --no-cochange flag)
 }
 
 interface BlobRecord {
@@ -1583,6 +1587,8 @@ export async function runIndexer(options: IndexerOptions): Promise<void> {
       await ensureNormalizedRootColumn(dbClient);
       // Phase 3: Ensure FTS metadata columns exist for existing DBs (migration)
       await ensureRepoMetaColumns(dbClient);
+      // Phase 3.2: Ensure graph layer tables exist (graph_metrics, inbound_edges, cochange)
+      await ensureGraphLayerTables(dbClient);
 
       const [headCommit, defaultBranch] = await Promise.all([
         getHeadCommit(repoRoot),
@@ -1803,6 +1809,18 @@ export async function runIndexer(options: IndexerOptions): Promise<void> {
 
         // Phase 2+3: Rebuild FTS index after incremental updates (dirty=true triggers rebuild)
         await rebuildFTSIfNeeded(dbClient, repoId);
+
+        // Phase 3.2: Incremental graph metrics update (only if files were actually changed)
+        if (processedCount > 0) {
+          const changedFilePaths = changedFiles.map((f) => f.path);
+          await incrementalGraphUpdate(dbClient, repoId, changedFilePaths);
+        }
+
+        // Phase 4: Incremental co-change update (check for new commits)
+        if (!options.skipCochange) {
+          await incrementalCochangeUpdate(dbClient, repoId, repoRoot);
+        }
+
         return;
       }
 
@@ -1875,6 +1893,14 @@ export async function runIndexer(options: IndexerOptions): Promise<void> {
       // Phase 2+3: Force rebuild FTS index after full reindex
       await rebuildFTSIfNeeded(dbClient, repoId, true);
 
+      // Phase 3.2: Compute graph metrics (PageRank, inbound closure) after dependencies are persisted
+      await computeGraphMetrics(dbClient, repoId);
+
+      // Phase 4: Compute co-change graph from git history
+      if (!options.skipCochange) {
+        await computeCochangeGraph(dbClient, repoId, repoRoot);
+      }
+
       // Garbage collect orphaned blobs after full reindex
       await garbageCollectBlobs(dbClient);
     } finally {
@@ -1904,8 +1930,9 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   const since = parseArg("--since");
   const watch = process.argv.includes("--watch");
   const debounceMs = parseInt(parseArg("--debounce") ?? "500", 10);
+  const skipCochange = process.argv.includes("--no-cochange");
 
-  const options: IndexerOptions = { repoRoot, databasePath, full: full || !since };
+  const options: IndexerOptions = { repoRoot, databasePath, full: full || !since, skipCochange };
 
   const main = async (): Promise<void> => {
     if (since) {

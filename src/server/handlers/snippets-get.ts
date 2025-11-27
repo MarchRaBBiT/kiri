@@ -3,12 +3,22 @@ import { ServerContext } from "../context.js";
 /**
  * snippets_get tool のパラメータ
  */
+/**
+ * view パラメータの有効な値
+ * - "auto": 現行動作を維持（シンボルがあればシンボル境界、なければ行範囲）
+ * - "symbol": 強制的にシンボル境界ベースのスニペットを返す
+ * - "lines": 行範囲ベースのスニペットを返す（シンボル境界を無視）
+ * - "full": ファイル全体を返す（安全上限付き）
+ */
+export type SnippetsGetView = "auto" | "symbol" | "lines" | "full";
+
 export interface SnippetsGetParams {
   path: string;
   start_line?: number;
   end_line?: number;
   compact?: boolean; // If true, omit content payload entirely
   includeLineNumbers?: boolean; // If true, prefix content lines with line numbers
+  view?: SnippetsGetView; // 取得戦略を明示的に制御
 }
 
 /**
@@ -52,6 +62,7 @@ interface SnippetRow {
  * Constants
  */
 const DEFAULT_SNIPPET_WINDOW = 150;
+const MAX_FULL_LINES = 500; // view: "full" 時の安全上限
 
 /**
  * 行番号をプレフィックスとして追加する（動的幅調整）
@@ -147,11 +158,39 @@ export async function snippetsGet(
     [repoId, params.path]
   );
 
+  const view = params.view ?? "auto";
   const requestedStart = params.start_line ?? 1;
-  const requestedEnd =
-    params.end_line ?? Math.min(totalLines, requestedStart + DEFAULT_SNIPPET_WINDOW - 1);
 
-  const useSymbolSnippets = snippetRows.length > 0 && params.end_line === undefined;
+  // view パラメータに基づいて取得戦略を決定
+  let useSymbolSnippets: boolean;
+  let requestedEnd: number;
+
+  switch (view) {
+    case "symbol":
+      // 強制的にシンボル境界を使用
+      useSymbolSnippets = snippetRows.length > 0;
+      requestedEnd =
+        params.end_line ?? Math.min(totalLines, requestedStart + DEFAULT_SNIPPET_WINDOW - 1);
+      break;
+    case "lines":
+      // 行ベース取得（シンボル境界を無視）
+      useSymbolSnippets = false;
+      requestedEnd =
+        params.end_line ?? Math.min(totalLines, requestedStart + DEFAULT_SNIPPET_WINDOW - 1);
+      break;
+    case "full":
+      // ファイル全体を返す（安全上限付き）
+      useSymbolSnippets = false;
+      requestedEnd = Math.min(totalLines, MAX_FULL_LINES);
+      break;
+    case "auto":
+    default:
+      // 現行動作: シンボルがあり end_line 未指定の場合はシンボル境界を使用
+      useSymbolSnippets = snippetRows.length > 0 && params.end_line === undefined;
+      requestedEnd =
+        params.end_line ?? Math.min(totalLines, requestedStart + DEFAULT_SNIPPET_WINDOW - 1);
+      break;
+  }
 
   let snippetSelection: SnippetRow | null = null;
   if (useSymbolSnippets) {

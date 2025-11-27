@@ -17,6 +17,7 @@ import {
   FilesSearchParams,
   SemanticRerankParams,
   SnippetsGetParams,
+  SnippetsGetView,
   contextBundle,
   depsClosure,
   filesSearch,
@@ -406,7 +407,12 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     description:
       "Focused snippet retrieval by file path. The tool uses recorded symbol boundaries to return the smallest readable span, or falls back to the requested line window.\n\n" +
       "Returns {path, startLine, endLine, totalLines, symbolName, symbolKind} with optional `content`. Set `compact: true` to omit content, or `include_line_numbers: true` to prefix each line with its number; this is a read-only lookup. Missing `path`, binary files, or absent index entries raise an MCP error with guidance to re-run the indexer.\n\n" +
-      "Example: snippets_get({path: 'src/auth/login.ts'}) surfaces the enclosing function. Invalid: snippets_get({path: 'assets/logo.png'}) reports that binary snippets are unsupported.",
+      "Use the `view` parameter to control retrieval strategy:\n" +
+      "- 'auto' (default): Uses symbol boundaries if available, falls back to line window\n" +
+      "- 'symbol': Forces symbol-based snippets\n" +
+      "- 'lines': Uses line-based retrieval (respects start_line/end_line, ignores symbols)\n" +
+      "- 'full': Returns entire file content (up to 500 lines safety limit)\n\n" +
+      "Example: snippets_get({path: 'src/auth/login.ts'}) surfaces the enclosing function. snippets_get({path: 'src/config.ts', view: 'full'}) returns entire file. Invalid: snippets_get({path: 'assets/logo.png'}) reports that binary snippets are unsupported.",
     inputSchema: {
       type: "object",
       required: ["path"],
@@ -427,6 +433,12 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
           type: "boolean",
           description:
             "If true, prefixes each returned line with its line number (ignored when compact is true).",
+        },
+        view: {
+          type: "string",
+          enum: ["auto", "symbol", "lines", "full"],
+          description:
+            'Retrieval strategy: "auto" (default) uses symbol boundaries if available, "symbol" forces symbol-based snippets, "lines" uses line-based retrieval ignoring symbols, "full" returns entire file (up to 500 lines).',
         },
       },
     },
@@ -556,6 +568,15 @@ function parseSnippetsGetParams(input: unknown): SnippetsGetParams {
   const includeLineNumbersValue = record.includeLineNumbers ?? record.include_line_numbers;
   if (typeof includeLineNumbersValue === "boolean") {
     params.includeLineNumbers = includeLineNumbersValue;
+  }
+  // Parse view parameter with validation
+  const validViews: SnippetsGetView[] = ["auto", "symbol", "lines", "full"];
+  if (typeof record.view === "string") {
+    if (validViews.includes(record.view as SnippetsGetView)) {
+      params.view = record.view as SnippetsGetView;
+    } else {
+      throw new Error(`Invalid view: "${record.view}". Valid values are: ${validViews.join(", ")}`);
+    }
   }
   return params;
 }

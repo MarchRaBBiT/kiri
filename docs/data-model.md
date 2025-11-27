@@ -124,4 +124,39 @@ CREATE INDEX idx_file_lang ON file(repo_id, lang);
 CREATE INDEX idx_symbol_name ON symbol(repo_id, name);
 CREATE INDEX idx_dep_src ON dependency(repo_id, src_path);
 CREATE INDEX idx_blame_last ON blame_summary(repo_id, path, last_touched);
+
+-- ドキュメントメタデータ（Front Matter、YAML、JSON）
+CREATE TABLE document_metadata (
+  repo_id INTEGER,
+  path TEXT,
+  source TEXT,              -- 'front_matter' | 'yaml' | 'json' | 'docmeta'
+  data JSON,                -- 元の構造化データ
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (repo_id, path, source)
+);
+
+-- メタデータキー/バリュー展開（検索用）
+CREATE TABLE document_metadata_kv (
+  repo_id INTEGER,
+  path TEXT,
+  source TEXT,
+  key TEXT,                 -- e.g., 'tags', 'category', 'title'
+  value TEXT,               -- フラット化された値
+  PRIMARY KEY (repo_id, path, source, key, value)
+);
+
+-- Markdownリンクグラフ
+CREATE TABLE markdown_link (
+  repo_id INTEGER,
+  src_path TEXT,            -- リンク元ファイル
+  target TEXT,              -- 生のリンクターゲット (e.g., "../api.md#handlers")
+  resolved_path TEXT,       -- 解決済みパス (e.g., "src/api.md")
+  anchor_text TEXT,         -- リンクテキスト
+  kind TEXT,                -- 'relative' | 'absolute' | 'external' | 'anchor'
+  PRIMARY KEY (repo_id, src_path, target, anchor_text)
+);
+
+-- ドキュメントメタデータ用インデックス
+CREATE INDEX idx_document_metadata_key ON document_metadata_kv(repo_id, key);
+CREATE INDEX idx_markdown_link_target ON markdown_link(repo_id, resolved_path);
 ```

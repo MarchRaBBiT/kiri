@@ -453,4 +453,229 @@ describe("files_search", () => {
       expect(pathsNone.sort()).toEqual(pathsDefault.sort()); // Same files found
     });
   });
+
+  describe("metadata filtering edge cases", () => {
+    it("handles empty metadata_filters object gracefully", async () => {
+      const repo = await createTempRepo({
+        "docs/guide.md": `---
+title: Guide
+tags:
+  - tutorial
+---
+# Guide content
+`,
+      });
+      cleanupTargets.push({ dispose: repo.cleanup });
+
+      const dbDir = await mkdtemp(join(tmpdir(), "kiri-empty-filters-"));
+      const dbPath = join(dbDir, "index.duckdb");
+      cleanupTargets.push({
+        dispose: async () => await rm(dbDir, { recursive: true, force: true }),
+      });
+
+      await runIndexer({ repoRoot: repo.path, databasePath: dbPath, full: true });
+
+      const db = await DuckDBClient.connect({ databasePath: dbPath });
+      cleanupTargets.push({ dispose: async () => await db.close() });
+
+      const repoId = await resolveRepoId(db, repo.path);
+      const tableAvailability = await checkTableAvailability(db);
+      const context: ServerContext = {
+        db,
+        repoId,
+        services: createServerServices(db),
+        tableAvailability,
+        warningManager: new WarningManager(),
+      };
+
+      // Empty metadata_filters should not cause errors
+      const results = await filesSearch(context, {
+        query: "Guide",
+        metadata_filters: {},
+        boost_profile: "docs",
+      });
+
+      expect(results.length).toBeGreaterThan(0);
+      expect(results.some((r) => r.path === "docs/guide.md")).toBe(true);
+    });
+
+    it("supports array values in metadata_filters", async () => {
+      const repo = await createTempRepo({
+        "docs/a.md": `---
+tags:
+  - alpha
+---
+# Doc A
+`,
+        "docs/b.md": `---
+tags:
+  - beta
+---
+# Doc B
+`,
+        "docs/c.md": `---
+tags:
+  - gamma
+---
+# Doc C
+`,
+      });
+      cleanupTargets.push({ dispose: repo.cleanup });
+
+      const dbDir = await mkdtemp(join(tmpdir(), "kiri-array-filters-"));
+      const dbPath = join(dbDir, "index.duckdb");
+      cleanupTargets.push({
+        dispose: async () => await rm(dbDir, { recursive: true, force: true }),
+      });
+
+      await runIndexer({ repoRoot: repo.path, databasePath: dbPath, full: true });
+
+      const db = await DuckDBClient.connect({ databasePath: dbPath });
+      cleanupTargets.push({ dispose: async () => await db.close() });
+
+      const repoId = await resolveRepoId(db, repo.path);
+      const tableAvailability = await checkTableAvailability(db);
+      const context: ServerContext = {
+        db,
+        repoId,
+        services: createServerServices(db),
+        tableAvailability,
+        warningManager: new WarningManager(),
+      };
+
+      // Filter with array of values - should match any
+      const results = await filesSearch(context, {
+        query: "Doc",
+        metadata_filters: { "docmeta.tags": ["alpha", "beta"] },
+      });
+
+      const paths = results.map((r) => r.path);
+      expect(paths).toContain("docs/a.md");
+      expect(paths).toContain("docs/b.md");
+      // gamma should not be included in strict filter results
+    });
+
+    it("handles numeric metadata values", async () => {
+      const repo = await createTempRepo({
+        "config/app.yaml": `version: 2
+priority: 100
+enabled: true
+`,
+      });
+      cleanupTargets.push({ dispose: repo.cleanup });
+
+      const dbDir = await mkdtemp(join(tmpdir(), "kiri-numeric-meta-"));
+      const dbPath = join(dbDir, "index.duckdb");
+      cleanupTargets.push({
+        dispose: async () => await rm(dbDir, { recursive: true, force: true }),
+      });
+
+      await runIndexer({ repoRoot: repo.path, databasePath: dbPath, full: true });
+
+      const db = await DuckDBClient.connect({ databasePath: dbPath });
+      cleanupTargets.push({ dispose: async () => await db.close() });
+
+      const repoId = await resolveRepoId(db, repo.path);
+
+      // Check that numeric values are stored
+      const kvRows = await db.all<{ key: string; value: string }>(
+        "SELECT key, value FROM document_metadata_kv WHERE repo_id = ?",
+        [repoId]
+      );
+
+      // Numeric values should be stored as strings
+      const versionEntry = kvRows.find((r) => r.key === "version");
+      expect(versionEntry?.value).toBe("2");
+
+      const priorityEntry = kvRows.find((r) => r.key === "priority");
+      expect(priorityEntry?.value).toBe("100");
+    });
+
+    it("handles boolean metadata values", async () => {
+      const repo = await createTempRepo({
+        "config/flags.yaml": `enabled: true
+debug: false
+`,
+      });
+      cleanupTargets.push({ dispose: repo.cleanup });
+
+      const dbDir = await mkdtemp(join(tmpdir(), "kiri-bool-meta-"));
+      const dbPath = join(dbDir, "index.duckdb");
+      cleanupTargets.push({
+        dispose: async () => await rm(dbDir, { recursive: true, force: true }),
+      });
+
+      await runIndexer({ repoRoot: repo.path, databasePath: dbPath, full: true });
+
+      const db = await DuckDBClient.connect({ databasePath: dbPath });
+      cleanupTargets.push({ dispose: async () => await db.close() });
+
+      const repoId = await resolveRepoId(db, repo.path);
+
+      // Check that boolean values are stored as strings
+      const kvRows = await db.all<{ key: string; value: string }>(
+        "SELECT key, value FROM document_metadata_kv WHERE repo_id = ?",
+        [repoId]
+      );
+
+      const enabledEntry = kvRows.find((r) => r.key === "enabled");
+      expect(enabledEntry?.value).toBe("true");
+
+      const debugEntry = kvRows.find((r) => r.key === "debug");
+      expect(debugEntry?.value).toBe("false");
+    });
+
+    it("combines metadata filter with path_prefix", async () => {
+      const repo = await createTempRepo({
+        "docs/api/guide.md": `---
+category: api
+---
+# API Guide
+`,
+        "docs/user/guide.md": `---
+category: user
+---
+# User Guide
+`,
+        "src/guide.md": `---
+category: dev
+---
+# Dev Guide
+`,
+      });
+      cleanupTargets.push({ dispose: repo.cleanup });
+
+      const dbDir = await mkdtemp(join(tmpdir(), "kiri-path-meta-"));
+      const dbPath = join(dbDir, "index.duckdb");
+      cleanupTargets.push({
+        dispose: async () => await rm(dbDir, { recursive: true, force: true }),
+      });
+
+      await runIndexer({ repoRoot: repo.path, databasePath: dbPath, full: true });
+
+      const db = await DuckDBClient.connect({ databasePath: dbPath });
+      cleanupTargets.push({ dispose: async () => await db.close() });
+
+      const repoId = await resolveRepoId(db, repo.path);
+      const tableAvailability = await checkTableAvailability(db);
+      const context: ServerContext = {
+        db,
+        repoId,
+        services: createServerServices(db),
+        tableAvailability,
+        warningManager: new WarningManager(),
+      };
+
+      // Combine path_prefix with metadata filter
+      const results = await filesSearch(context, {
+        query: "Guide",
+        path_prefix: "docs/",
+        metadata_filters: { "docmeta.category": "api" },
+      });
+
+      // Should only return docs/api/guide.md (matching both path and metadata)
+      expect(results.length).toBe(1);
+      expect(results[0]!.path).toBe("docs/api/guide.md");
+    });
+  });
 });

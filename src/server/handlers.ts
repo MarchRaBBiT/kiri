@@ -27,6 +27,7 @@ import { loadStopWords, type StopWordsService } from "./stop-words.js";
 export {
   snippetsGet,
   type SnippetsGetParams,
+  type SnippetsGetView,
   type SnippetResult,
 } from "./handlers/snippets-get.js";
 

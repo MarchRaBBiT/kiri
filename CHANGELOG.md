@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] - 2025-11-29
+
+### Added
+
+- **`code` boost_profile for implementation-focused search**: New boost profile that strongly deprioritizes documentation and config files (95% penalty) to focus search results on actual implementation code
+  - Use `boost_profile: "code"` when you want to find implementation files only
+  - Complements existing profiles: `default`, `docs`, `balanced`, `none`
+
+### Fixed
+
+- **Graph metrics retry logic**: Added retry logic for transient DuckDB errors during graph metrics computation
+  - Prevents sporadic failures during indexing on systems with high I/O load
+  - Automatically retries failed operations with exponential backoff
+
 ## [0.16.1] - 2025-11-28
 
 ### Fixed

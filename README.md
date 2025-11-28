@@ -2,7 +2,7 @@
 
 > Intelligent code context extraction for LLMs via Model Context Protocol
 
-[![Version](https://img.shields.io/badge/version-0.16.1-blue.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-0.17.0-blue.svg)](package.json)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.6-blue.svg)](https://www.typescriptlang.org/)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
@@ -20,16 +20,20 @@
 - **📝 Phrase-Aware**: Recognizes compound terms (kebab-case, snake_case) for precise matching
 - **🔒 Concurrency-Safe** _(v0.9.7+)_: Per-database queues, canonicalized DuckDB paths, and bootstrap-safe locking prevent FTS rebuild conflicts and keep locks consistent across symlinks—even on first run
 
-## 🆕 What's New in v0.16.1
+## 🆕 What's New in v0.17.0
+
+### ✨ New Features
+
+- **`code` boost_profile**: New boost profile that strongly deprioritizes documentation and config files (95% penalty) to focus search results on actual implementation code
+  - Use `boost_profile: "code"` when you want to find implementation files only
 
 ### 🐛 Bug Fixes
 
-- **Graceful degradation for graph layer tables**: Fixed crash when `graph_metrics`/`cochange` tables are missing
-  - Added table existence check at startup
-  - Scoring functions skip gracefully with warning logs when tables are unavailable
+- **Graph metrics retry logic**: Added retry logic for transient DuckDB errors during graph metrics computation
 
 ### Previous Releases
 
+- **v0.16.1**: Graceful degradation for graph layer tables
 - **v0.16.0**: DuckDB client migration to `@duckdb/node-api`
 - **v0.15.0**: `snippets_get` view parameter, co-change scoring, stop words & IDF weighting
 
@@ -258,12 +262,12 @@ Tip: Avoid leading command words like `find` or `show`; instead list concrete mo
 
 **Parameters:**
 
-| Parameter       | Type    | Required | Description                                                                                                                                                                                                             |
-| --------------- | ------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `goal`          | string  | Yes      | Task description or question about the code                                                                                                                                                                             |
-| `limit`         | number  | No       | Max snippets to return (default: 12, max: 20)                                                                                                                                                                           |
-| `compact`       | boolean | No       | Return only metadata without preview (default: **true** in v0.8.0+, false in v0.7)                                                                                                                                      |
-| `boost_profile` | string  | No       | File type boosting: `"default"` (prioritizes src/, blacklists docs/), `"docs"` (prioritizes .md/.yaml, includes docs/ directory), `"balanced"` (equal weight for docs and impl, NEW in v0.9.10), `"none"` (no boosting) |
+| Parameter       | Type    | Required | Description                                                                                                                                                                                                                                                         |
+| --------------- | ------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `goal`          | string  | Yes      | Task description or question about the code                                                                                                                                                                                                                         |
+| `limit`         | number  | No       | Max snippets to return (default: 12, max: 20)                                                                                                                                                                                                                       |
+| `compact`       | boolean | No       | Return only metadata without preview (default: **true** in v0.8.0+, false in v0.7)                                                                                                                                                                                  |
+| `boost_profile` | string  | No       | File type boosting: `"default"` (prioritizes src/, blacklists docs/), `"code"` (strongly deprioritizes docs/config, 95% penalty), `"docs"` (prioritizes .md/.yaml, includes docs/ directory), `"balanced"` (equal weight for docs and impl), `"none"` (no boosting) |
 
 ### 2. files_search
 
@@ -300,14 +304,14 @@ Fast search across all indexed files. Supports multi-word queries, hyphenated te
 
 **Parameters:**
 
-| Parameter       | Type   | Required | Description                                                                                                                                                  |
-| --------------- | ------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `query`         | string | Yes      | Search keywords or phrase                                                                                                                                    |
-| `limit`         | number | No       | Max results to return (default: 50, max: 200)                                                                                                                |
-| `lang`          | string | No       | Filter by language (e.g., "typescript", "python")                                                                                                            |
-| `ext`           | string | No       | Filter by extension (e.g., ".ts", ".md")                                                                                                                     |
-| `path_prefix`   | string | No       | Filter by path prefix (e.g., "src/auth/")                                                                                                                    |
-| `boost_profile` | string | No       | File type boosting: `"default"` (prioritizes src/, blacklists docs/), `"docs"` **(prioritizes .md/.yaml, includes docs/ directory)**, `"none"` (no boosting) |
+| Parameter       | Type   | Required | Description                                                                                                                                                                                                                                           |
+| --------------- | ------ | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `query`         | string | Yes      | Search keywords or phrase                                                                                                                                                                                                                             |
+| `limit`         | number | No       | Max results to return (default: 50, max: 200)                                                                                                                                                                                                         |
+| `lang`          | string | No       | Filter by language (e.g., "typescript", "python")                                                                                                                                                                                                     |
+| `ext`           | string | No       | Filter by extension (e.g., ".ts", ".md")                                                                                                                                                                                                              |
+| `path_prefix`   | string | No       | Filter by path prefix (e.g., "src/auth/")                                                                                                                                                                                                             |
+| `boost_profile` | string | No       | File type boosting: `"default"` (prioritizes src/, blacklists docs/), `"code"` (strongly deprioritizes docs/config, 95% penalty), `"docs"` **(prioritizes .md/.yaml, includes docs/ directory)**, `"balanced"` (equal weight), `"none"` (no boosting) |
 
 ### 3. snippets_get
 
@@ -548,6 +552,10 @@ Control search ranking behavior with the `boost_profile` parameter:
   - Implementation files get 30% boost, documentation files get 50% penalty
   - Config files heavily penalized (95% reduction)
   - `docs/` directory is blacklisted
+- **`"code"`** (NEW in v0.17.0): Strongly prioritizes implementation code only
+  - Documentation and config files get 95% penalty
+  - Best for finding actual implementation when you don't want docs in results
+  - `docs/` directory is blacklisted
 - **`"docs"`**: Prioritizes documentation files (`*.md`) over implementation
   - Documentation files get 50% boost, implementation files get 50% penalty
   - `docs/` directory is included in search results
@@ -561,6 +569,9 @@ Control search ranking behavior with the `boost_profile` parameter:
 ```typescript
 // Find implementation files (default behavior)
 files_search({ query: "authentication", boost_profile: "default" });
+
+// Find only implementation code (no docs/config in results)
+files_search({ query: "authentication", boost_profile: "code" });
 
 // Find documentation
 files_search({ query: "setup guide", boost_profile: "docs" });
@@ -977,8 +988,8 @@ Built with:
 
 ---
 
-**Status**: v0.15.0 (Beta) - Production-ready for MCP clients
+**Status**: v0.17.0 (Beta) - Production-ready for MCP clients
 
-**New in v0.15.0**: Co-change scoring, stop words/IDF weighting, and `snippets_get` view parameter for explicit retrieval control. See [CHANGELOG.md](CHANGELOG.md) for details.
+**New in v0.17.0**: `code` boost_profile for implementation-focused search. See [CHANGELOG.md](CHANGELOG.md) for details.
 
 For questions or support, please open a [GitHub issue](https://github.com/CAPHTECH/kiri/issues).

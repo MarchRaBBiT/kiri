@@ -2,7 +2,7 @@ import { access, mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { DuckDBInstance } from "@duckdb/node-api";
-import type { DuckDBConnection } from "@duckdb/node-api";
+import type { DuckDBConnection, DuckDBValue } from "@duckdb/node-api";
 
 export interface DuckDBClientOptions {
   databasePath: string;
@@ -10,7 +10,15 @@ export interface DuckDBClientOptions {
   autoGitignore?: boolean;
 }
 
+/**
+ * パラメータの型定義。
+ * - 配列: 位置パラメータ (? プレースホルダ用)
+ * - オブジェクト: 名前付きパラメータ ($param プレースホルダ用)
+ */
 type QueryParams = unknown[] | Record<string, unknown>;
+
+/** @duckdb/node-api が受け付けるパラメータ型 */
+type DuckDBParams = DuckDBValue[] | Record<string, DuckDBValue>;
 
 function hasDefinedParams(params: QueryParams): boolean {
   return Array.isArray(params) ? params.length > 0 : Object.keys(params).length > 0;
@@ -100,15 +108,6 @@ async function createGitignoreIfNeeded(dirPath: string): Promise<void> {
   }
 }
 
-/**
- * Convert query parameters to format expected by @duckdb/node-api.
- * Array params are used for positional ? placeholders.
- * Object params are used for named $param placeholders.
- */
-function convertParams(params: QueryParams): unknown[] | Record<string, unknown> {
-  return params;
-}
-
 export class DuckDBClient {
   private readonly instance: DuckDBInstance;
   private readonly connection: DuckDBConnection;
@@ -143,9 +142,8 @@ export class DuckDBClient {
     assertNoUndefined(sql, params);
     try {
       if (hasDefinedParams(params)) {
-        const convertedParams = convertParams(params);
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        await this.connection.run(sql, convertedParams as any);
+        // QueryParams は DuckDBParams と互換性がある（プリミティブ値のみを使用する前提）
+        await this.connection.run(sql, params as DuckDBParams);
       } else {
         await this.connection.run(sql);
       }
@@ -160,9 +158,8 @@ export class DuckDBClient {
     try {
       let reader;
       if (hasDefinedParams(params)) {
-        const convertedParams = convertParams(params);
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        reader = await this.connection.runAndReadAll(sql, convertedParams as any);
+        // QueryParams は DuckDBParams と互換性がある（プリミティブ値のみを使用する前提）
+        reader = await this.connection.runAndReadAll(sql, params as DuckDBParams);
       } else {
         reader = await this.connection.runAndReadAll(sql);
       }
@@ -181,8 +178,11 @@ export class DuckDBClient {
       await this.run("COMMIT");
       return result;
     } catch (error) {
-      await this.run("ROLLBACK").catch(() => {
-        // Ignore rollback errors so original error is surfaced.
+      await this.run("ROLLBACK").catch((rollbackError: unknown) => {
+        // ROLLBACKエラーは握りつぶすが、デバッグのためstderrに出力
+        // 元のエラーを優先して伝播させるため、ここでは再throwしない
+        const msg = rollbackError instanceof Error ? rollbackError.message : String(rollbackError);
+        process.stderr.write(`[DuckDBClient] ROLLBACK failed: ${msg}\n`);
       });
       throw error;
     }
@@ -198,6 +198,9 @@ export class DuckDBClient {
       // Ignore checkpoint errors - database might be in read-only mode or already checkpointed
     }
 
+    // DuckDBConnection.closeSync() を呼び出すと、接続が閉じられる
+    // DuckDBInstance は接続経由で使用され、明示的なclose APIは提供されていない
+    // （@duckdb/node-api の設計上、Instance のリソースは GC で解放される）
     this.connection.closeSync();
   }
 }

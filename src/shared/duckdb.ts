@@ -1,7 +1,8 @@
 import { access, mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import duckdb from "duckdb";
+import { DuckDBInstance } from "@duckdb/node-api";
+import type { DuckDBConnection } from "@duckdb/node-api";
 
 export interface DuckDBClientOptions {
   databasePath: string;
@@ -99,11 +100,22 @@ async function createGitignoreIfNeeded(dirPath: string): Promise<void> {
   }
 }
 
-export class DuckDBClient {
-  private readonly database: import("duckdb").Database;
+/**
+ * Convert query parameters to format expected by @duckdb/node-api.
+ * Array params are used for positional ? placeholders.
+ * Object params are used for named $param placeholders.
+ */
+function convertParams(params: QueryParams): unknown[] | Record<string, unknown> {
+  return params;
+}
 
-  constructor(path: string) {
-    this.database = new duckdb.Database(path);
+export class DuckDBClient {
+  private readonly instance: DuckDBInstance;
+  private readonly connection: DuckDBConnection;
+
+  private constructor(instance: DuckDBInstance, connection: DuckDBConnection) {
+    this.instance = instance;
+    this.connection = connection;
   }
 
   static async connect(options: DuckDBClientOptions): Promise<DuckDBClient> {
@@ -122,65 +134,44 @@ export class DuckDBClient {
       }
     }
 
-    return new DuckDBClient(options.databasePath);
+    const instance = await DuckDBInstance.create(options.databasePath);
+    const connection = await instance.connect();
+    return new DuckDBClient(instance, connection);
   }
 
   async run(sql: string, params: QueryParams = []): Promise<void> {
     assertNoUndefined(sql, params);
-    await new Promise<void>((resolve, reject) => {
-      const callback = (err: Error | null) => {
-        if (err) {
-          reject(err);
-          return;
-        }
-        resolve();
-      };
-      if (Array.isArray(params)) {
-        if (params.length > 0) {
-          // @ts-expect-error - duckdb.run expects rest parameters which cannot be strongly typed with unknown[]
-          this.database.run(sql, ...params, callback);
-        } else {
-          this.database.run(sql, callback);
-        }
-      } else if (hasDefinedParams(params)) {
+    try {
+      if (hasDefinedParams(params)) {
+        const convertedParams = convertParams(params);
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        this.database.run(sql, params as any, callback);
+        await this.connection.run(sql, convertedParams as any);
       } else {
-        this.database.run(sql, callback);
+        await this.connection.run(sql);
       }
-    }).catch((error: unknown) => {
+    } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
       throw new Error(`${message} | SQL: ${sql} | Params: ${JSON.stringify(params)}`);
-    });
+    }
   }
 
   async all<T>(sql: string, params: QueryParams = []): Promise<T[]> {
     assertNoUndefined(sql, params);
-    return await new Promise<T[]>((resolve, reject) => {
-      const callback = (err: Error | null, rows: T[]) => {
-        if (err) {
-          reject(err);
-          return;
-        }
-        resolve(rows.map((row) => coerceBigInts(row)));
-      };
-      if (Array.isArray(params)) {
-        if (params.length > 0) {
-          // @ts-expect-error - duckdb.all expects rest parameters which cannot be strongly typed with unknown[]
-          this.database.all<T>(sql, ...params, callback);
-        } else {
-          this.database.all<T>(sql, callback);
-        }
-      } else if (hasDefinedParams(params)) {
+    try {
+      let reader;
+      if (hasDefinedParams(params)) {
+        const convertedParams = convertParams(params);
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        this.database.all<T>(sql, params as any, callback);
+        reader = await this.connection.runAndReadAll(sql, convertedParams as any);
       } else {
-        this.database.all<T>(sql, callback);
+        reader = await this.connection.runAndReadAll(sql);
       }
-    }).catch((error: unknown) => {
+      const rows = reader.getRowObjects() as T[];
+      return rows.map((row) => coerceBigInts(row));
+    } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
       throw new Error(`${message} | SQL: ${sql} | Params: ${JSON.stringify(params)}`);
-    });
+    }
   }
 
   async transaction<T>(fn: () => Promise<T>): Promise<T> {
@@ -207,14 +198,6 @@ export class DuckDBClient {
       // Ignore checkpoint errors - database might be in read-only mode or already checkpointed
     }
 
-    await new Promise<void>((resolve, reject) => {
-      this.database.close((err: Error | null) => {
-        if (err) {
-          reject(err);
-          return;
-        }
-        resolve();
-      });
-    });
+    this.connection.closeSync();
   }
 }

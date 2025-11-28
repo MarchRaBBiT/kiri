@@ -252,6 +252,31 @@ contextBundle({ goal: "lambda/page-agent/handler request processing error handli
 
 ファイルタイプによるブースト無効、純粋なBM25スコアのみ
 
+#### boost_profile: "code" (NEW in Issue #130)
+
+ドキュメントファイルと設定ファイルを強くペナルティし、実装コードのみに集中
+
+**files_search & context_bundle:**
+
+- `src/*.ts`, `src/*.js`: スコア ×1.4（40%ブースト、defaultの1.3より強い）
+- `*.md`, `*.yaml`, `*.yml`: スコア ×0.05（95%削減、defaultの0.5より大幅に強いペナルティ）
+- `tsconfig.json`, `package.json` などの設定ファイル: スコア ×0.05（95%削減）
+- `CLAUDE.md`, `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `AGENTS.md`: スコア ×0.01（99%削減）
+
+**使用ケース:**
+
+- 実装コードのみを検索したい場合
+- ドキュメントファイル（CLAUDE.md, README.mdなど）がノイズになる場合
+- 設定ファイルを除外してコードロジックを探す場合
+
+**プロファイル比較:**
+
+| プロファイル | doc multiplier | config multiplier | ユースケース                       |
+| ------------ | -------------- | ----------------- | ---------------------------------- |
+| `default`    | 0.5            | 0.05              | 一般的な検索（ドキュメントも許容） |
+| `code`       | 0.05           | 0.05              | 実装コードのみに集中したい場合     |
+| `docs`       | 1.5            | 0.05              | ドキュメントを優先したい場合       |
+
 #### boost_profile: "vscode" (NEW)
 
 VS Code リポジトリのように `src/vs/**` と `extensions/**` が巨大なケース向けの専用プロファイル。
@@ -284,6 +309,11 @@ contextBundle({ goal: "authentication design docs/auth/README.md", boost_profile
 // 純粋なBM25スコア
 filesSearch({ query: "authentication", boost_profile: "none" });
 // → ファイルタイプ関係なく、BM25スコアのみ
+
+// 実装コードのみに集中（ドキュメントをノイズとして除外）(NEW in Issue #130)
+contextBundle({ goal: "authentication logic JWT validation", boost_profile: "code" });
+// → src/*.ts が強くブースト、CLAUDE.md/README.md は99%ペナルティ
+// → 「CLAUDE.mdの指示がコード検索を邪魔する」ケースに有効
 
 // VS Code コードパスを優先
 contextBundle({

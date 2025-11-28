@@ -265,9 +265,9 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         },
         boost_profile: {
           type: "string",
-          enum: ["default", "docs", "balanced", "none"],
+          enum: ["default", "docs", "balanced", "none", "code"],
           description:
-            'File type boosting mode: "default" prioritizes implementation files (src/app/, src/components/), "docs" prioritizes documentation (*.md), "balanced" applies equal weight to both docs and implementation, "none" disables boosting. Default is "default".',
+            'File type boosting mode: "default" prioritizes implementation files (src/app/, src/components/), "code" strongly deprioritizes documentation and config files (95% penalty), "docs" prioritizes documentation (*.md), "balanced" applies equal weight to both docs and implementation, "none" disables boosting. Default is "default".',
         },
         path_prefix: {
           type: "string",
@@ -384,9 +384,9 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         },
         boost_profile: {
           type: "string",
-          enum: ["default", "docs", "balanced", "none"],
+          enum: ["default", "docs", "balanced", "none", "code"],
           description:
-            'File type boosting mode: "default" prioritizes implementation files (src/app/, src/components/), "docs" prioritizes documentation (*.md), "balanced" applies equal weight to both docs and implementation, "none" disables boosting. Default is "default".',
+            'File type boosting mode: "default" prioritizes implementation files (src/app/, src/components/), "code" strongly deprioritizes documentation and config files (95% penalty), "docs" prioritizes documentation (*.md), "balanced" applies equal weight to both docs and implementation, "none" disables boosting. Default is "default".',
         },
         compact: {
           type: "boolean",

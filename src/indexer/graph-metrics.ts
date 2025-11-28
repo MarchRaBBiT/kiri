@@ -16,6 +16,7 @@
  */
 
 import type { DuckDBClient } from "../shared/duckdb.js";
+import { withRetry } from "../shared/utils/retry.js";
 
 /**
  * Configuration for graph metrics computation
@@ -37,6 +38,18 @@ const DEFAULT_CONFIG: GraphMetricsConfig = {
 
 /** Minimum score floor to prevent division by zero during PageRank normalization */
 const MIN_PAGERANK_SCORE = 0.001;
+
+/** Retry configuration for transient DuckDB errors (e.g., concurrent access) */
+const DB_RETRY_OPTIONS = {
+  maxAttempts: 3,
+  delayMs: 100,
+  jitterMs: 50,
+  isRetriable: (error: unknown): boolean => {
+    const msg = error instanceof Error ? error.message : String(error);
+    // Retry on prepared statement failures (transient lock issues)
+    return msg.includes("Failed to execute prepared statement");
+  },
+};
 
 /**
  * Compute all graph metrics for a repository.
@@ -73,8 +86,11 @@ export async function computeGraphMetrics(
  * Uses SQL aggregation for efficiency.
  */
 export async function computeDegreeCentrality(db: DuckDBClient, repoId: number): Promise<void> {
-  // Clear existing metrics for this repo
-  await db.run(`DELETE FROM graph_metrics WHERE repo_id = ?`, [repoId]);
+  // Clear existing metrics for this repo (with retry for transient lock issues)
+  await withRetry(
+    () => db.run(`DELETE FROM graph_metrics WHERE repo_id = ?`, [repoId]),
+    DB_RETRY_OPTIONS
+  );
 
   // Compute outbound counts (files this file imports)
   await db.run(
@@ -142,8 +158,11 @@ export async function precomputeInboundClosure(
   repoId: number,
   maxDepth: number
 ): Promise<void> {
-  // Clear existing closure for this repo
-  await db.run(`DELETE FROM inbound_edges WHERE repo_id = ?`, [repoId]);
+  // Clear existing closure for this repo (with retry for transient lock issues)
+  await withRetry(
+    () => db.run(`DELETE FROM inbound_edges WHERE repo_id = ?`, [repoId]),
+    DB_RETRY_OPTIONS
+  );
 
   // Use recursive CTE to compute transitive closure
   // This computes: for each file, which files import it (directly or transitively)

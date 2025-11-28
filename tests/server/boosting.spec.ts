@@ -807,4 +807,235 @@ describe("Unified Boosting Logic (v0.7.0+)", () => {
       expect(bundleDocsDefault.score).toBeLessThan(0); // Should be blacklisted (-100)
     }
   });
+
+  // ✅ NEW (Issue #130): Test code profile - strong penalty for documentation files
+  it("boost_profile='code' applies strong penalty to documentation files", async () => {
+    const repo = await createTempRepo({
+      "src/app/feature.ts": `export function feature() {\n  return "implementation";\n}\n`,
+      "src/lib/utils.ts": `export function util() {\n  return "helper";\n}\n`,
+      "README.md": `# Feature Guide\n\nDocumentation about the feature implementation.\n`,
+      "docs/guide.md": `# Implementation Guide\n\nHow to use the feature implementation.\n`,
+    });
+    cleanupTargets.push({ dispose: repo.cleanup });
+
+    const dbDir = await mkdtemp(join(tmpdir(), "kiri-code-docs-"));
+    const dbPath = join(dbDir, "index.duckdb");
+    cleanupTargets.push({ dispose: async () => await rm(dbDir, { recursive: true, force: true }) });
+
+    await runIndexer({ repoRoot: repo.path, databasePath: dbPath, full: true });
+
+    const db = await DuckDBClient.connect({ databasePath: dbPath });
+    cleanupTargets.push({ dispose: async () => await db.close() });
+
+    const repoId = await resolveRepoId(db, repo.path);
+    const tableAvailability = await checkTableAvailability(db);
+    const context: ServerContext = {
+      db,
+      repoId,
+      services: createServerServices(db),
+      tableAvailability,
+      warningManager: new WarningManager(),
+    };
+
+    // Test with code profile - should strongly penalize documentation files
+    const resultsCode = await filesSearch(context, {
+      query: "feature implementation",
+      boost_profile: "code",
+    });
+
+    const resultsDefault = await filesSearch(context, {
+      query: "feature implementation",
+      boost_profile: "default",
+    });
+
+    const implFileCode = resultsCode.find((r) => r.path === "src/app/feature.ts");
+    const docFileCode = resultsCode.find((r) => r.path === "README.md");
+    const implFileDefault = resultsDefault.find((r) => r.path === "src/app/feature.ts");
+    const docFileDefault = resultsDefault.find((r) => r.path === "README.md");
+
+    // Both profiles should find impl files
+    expect(implFileCode).toBeDefined();
+    expect(implFileDefault).toBeDefined();
+
+    if (implFileCode && docFileCode && implFileDefault && docFileDefault) {
+      // Code profile: doc=0.05, impl=1.4 → ratio = 1.4/0.05 = 28x
+      // Default profile: doc=0.5, impl=1.3 → ratio = 1.3/0.5 = 2.6x
+      const codeRatio = implFileCode.score / docFileCode.score;
+      const defaultRatio = implFileDefault.score / docFileDefault.score;
+
+      // Code profile should have much larger impl/doc ratio
+      expect(codeRatio).toBeGreaterThan(defaultRatio);
+    }
+  });
+
+  // ✅ NEW (Issue #130): Test code profile - path-based penalty for root documentation files
+  it("boost_profile='code' applies path-based penalty to root documentation files", async () => {
+    const repo = await createTempRepo({
+      "src/app/feature.ts": `export function feature() {\n  return "app feature";\n}\n`,
+      "CLAUDE.md": `# CLAUDE Instructions\n\nThis is CLAUDE documentation with feature instructions.\n`,
+      "README.md": `# Project README\n\nProject feature documentation.\n`,
+      "CHANGELOG.md": `# Changelog\n\n- feature: Added new feature.\n`,
+      "CONTRIBUTING.md": `# Contributing\n\nHow to contribute feature code.\n`,
+    });
+    cleanupTargets.push({ dispose: repo.cleanup });
+
+    const dbDir = await mkdtemp(join(tmpdir(), "kiri-code-root-docs-"));
+    const dbPath = join(dbDir, "index.duckdb");
+    cleanupTargets.push({ dispose: async () => await rm(dbDir, { recursive: true, force: true }) });
+
+    await runIndexer({ repoRoot: repo.path, databasePath: dbPath, full: true });
+
+    const db = await DuckDBClient.connect({ databasePath: dbPath });
+    cleanupTargets.push({ dispose: async () => await db.close() });
+
+    const repoId = await resolveRepoId(db, repo.path);
+    const tableAvailability = await checkTableAvailability(db);
+    const context: ServerContext = {
+      db,
+      repoId,
+      services: createServerServices(db),
+      tableAvailability,
+      warningManager: new WarningManager(),
+    };
+
+    const results = await contextBundle(context, {
+      goal: "feature instructions documentation",
+      boost_profile: "code",
+      limit: 10,
+    });
+
+    const implFile = results.context.find((r) => r.path === "src/app/feature.ts");
+    const claudeFile = results.context.find((r) => r.path === "CLAUDE.md");
+    const readmeFile = results.context.find((r) => r.path === "README.md");
+
+    // Implementation file should be found with high score
+    expect(implFile).toBeDefined();
+    expect(implFile?.score).toBeGreaterThan(0);
+
+    // Root doc files should have very low scores due to:
+    // 1. doc multiplier (0.05)
+    // 2. path multiplier (0.01 for CLAUDE.md, README.md)
+    // Combined effect: 0.05 * 0.01 = 0.0005x
+    if (implFile && claudeFile) {
+      expect(implFile.score).toBeGreaterThan(claudeFile.score);
+      // CLAUDE.md should have much lower score than impl file
+      expect(claudeFile.score / implFile.score).toBeLessThan(0.1);
+    }
+    if (implFile && readmeFile) {
+      expect(implFile.score).toBeGreaterThan(readmeFile.score);
+    }
+  });
+
+  // ✅ NEW (Issue #130): Test code profile - still boosts implementation paths
+  it("boost_profile='code' still boosts src/app/ and src/components/", async () => {
+    const repo = await createTempRepo({
+      "src/app/page.ts": `export function page() { return "app page"; }\n`,
+      "src/components/Button.tsx": `export function Button() { return "component button"; }\n`,
+      "src/lib/utils.ts": `export function util() { return "lib util"; }\n`,
+      "src/index.ts": `export function main() { return "index main"; }\n`,
+    });
+    cleanupTargets.push({ dispose: repo.cleanup });
+
+    const dbDir = await mkdtemp(join(tmpdir(), "kiri-code-paths-"));
+    const dbPath = join(dbDir, "index.duckdb");
+    cleanupTargets.push({ dispose: async () => await rm(dbDir, { recursive: true, force: true }) });
+
+    await runIndexer({ repoRoot: repo.path, databasePath: dbPath, full: true });
+
+    const db = await DuckDBClient.connect({ databasePath: dbPath });
+    cleanupTargets.push({ dispose: async () => await db.close() });
+
+    const repoId = await resolveRepoId(db, repo.path);
+    const tableAvailability = await checkTableAvailability(db);
+    const context: ServerContext = {
+      db,
+      repoId,
+      services: createServerServices(db),
+      tableAvailability,
+      warningManager: new WarningManager(),
+    };
+
+    const results = await filesSearch(context, {
+      query: "export function",
+      boost_profile: "code",
+    });
+
+    expect(results.length).toBe(4);
+
+    const appFile = results.find((r) => r.path === "src/app/page.ts");
+    const componentFile = results.find((r) => r.path === "src/components/Button.tsx");
+    const libFile = results.find((r) => r.path === "src/lib/utils.ts");
+    const indexFile = results.find((r) => r.path === "src/index.ts");
+
+    expect(appFile).toBeDefined();
+    expect(componentFile).toBeDefined();
+    expect(libFile).toBeDefined();
+    expect(indexFile).toBeDefined();
+
+    // Expected path multipliers for code profile:
+    // - src/app/ → 1.4x (highest)
+    // - src/components/ → 1.3x
+    // - src/lib/ → 1.2x
+    // - src/ → 1.0x (baseline)
+    // All also get impl multiplier 1.4x, so relative ordering is determined by path multiplier
+    if (appFile && componentFile && libFile && indexFile) {
+      expect(appFile.score).toBeGreaterThan(componentFile.score);
+      expect(componentFile.score).toBeGreaterThan(libFile.score);
+      expect(libFile.score).toBeGreaterThan(indexFile.score);
+    }
+  });
+
+  // ✅ NEW (Issue #130): Test code profile - applies strong penalty to config files
+  it("boost_profile='code' applies strong penalty to config files", async () => {
+    const repo = await createTempRepo({
+      "src/app/feature.ts": `export function feature() {\n  return "implementation";\n}\n`,
+      "tsconfig.json": `{"compilerOptions": {"strict": true, "feature": true}}\n`,
+      "package.json": `{"name": "feature-project", "version": "1.0.0"}\n`,
+    });
+    cleanupTargets.push({ dispose: repo.cleanup });
+
+    const dbDir = await mkdtemp(join(tmpdir(), "kiri-code-config-"));
+    const dbPath = join(dbDir, "index.duckdb");
+    cleanupTargets.push({ dispose: async () => await rm(dbDir, { recursive: true, force: true }) });
+
+    await runIndexer({ repoRoot: repo.path, databasePath: dbPath, full: true });
+
+    const db = await DuckDBClient.connect({ databasePath: dbPath });
+    cleanupTargets.push({ dispose: async () => await db.close() });
+
+    const repoId = await resolveRepoId(db, repo.path);
+    const tableAvailability = await checkTableAvailability(db);
+    const context: ServerContext = {
+      db,
+      repoId,
+      services: createServerServices(db),
+      tableAvailability,
+      warningManager: new WarningManager(),
+    };
+
+    const results = await filesSearch(context, {
+      query: "feature",
+      boost_profile: "code",
+    });
+
+    const implFile = results.find((r) => r.path === "src/app/feature.ts");
+    const tsconfigFile = results.find((r) => r.path === "tsconfig.json");
+    const packageFile = results.find((r) => r.path === "package.json");
+
+    // Implementation file should be found
+    expect(implFile).toBeDefined();
+    expect(implFile?.score).toBeGreaterThan(0);
+
+    // Config files should have very low scores due to config multiplier 0.05x
+    // Implementation: impl=1.4 × path(src/app/)=1.4 = 1.96x
+    // Config: config=0.05x
+    // Expected ratio: impl/config ≈ 1.96/0.05 = 39.2x
+    if (implFile && tsconfigFile) {
+      expect(implFile.score).toBeGreaterThan(tsconfigFile.score);
+      expect(implFile.score / tsconfigFile.score).toBeGreaterThan(10); // At least 10x difference
+    }
+    if (implFile && packageFile) {
+      expect(implFile.score).toBeGreaterThan(packageFile.score);
+    }
+  });
 });

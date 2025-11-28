@@ -57,6 +57,7 @@ export type BoostProfileName =
   | "docs"
   | "none"
   | "balanced"
+  | "code"
   | "feature"
   | "bugfix"
   | "debug"
@@ -192,6 +193,29 @@ export const BOOST_PROFILES: Record<BoostProfileName, BoostProfileConfig> = {
       config: 1.0, // No penalty/boost
     },
     pathMultipliers: [],
+  },
+
+  code: {
+    denylistOverrides: [],
+    fileTypeMultipliers: {
+      doc: 0.05, // 95% penalty for docs (stronger than default's 0.5)
+      impl: 1.4, // 40% boost for implementation
+      config: 0.05, // 95% penalty for config files
+    },
+    // Note: Order of pathMultipliers doesn't affect matching (longest prefix wins in applyPathMultipliers)
+    pathMultipliers: [
+      // Strongly suppress common root documentation files (×0.01 = 99% penalty)
+      { prefix: "CLAUDE.md", multiplier: 0.01 },
+      { prefix: "README.md", multiplier: 0.01 },
+      { prefix: "CHANGELOG.md", multiplier: 0.01 },
+      { prefix: "CONTRIBUTING.md", multiplier: 0.01 },
+      { prefix: "AGENTS.md", multiplier: 0.01 },
+      // Implementation file boosts (same as default)
+      { prefix: "src/components/", multiplier: 1.3 },
+      { prefix: "src/app/", multiplier: 1.4 },
+      { prefix: "src/lib/", multiplier: 1.2 },
+      { prefix: "src/", multiplier: 1.0 },
+    ],
   },
 
   feature: {

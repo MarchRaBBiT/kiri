@@ -2,7 +2,7 @@
 
 > Intelligent code context extraction for LLMs via Model Context Protocol
 
-[![Version](https://img.shields.io/badge/version-0.14.0-blue.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-0.15.0-blue.svg)](package.json)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.6-blue.svg)](https://www.typescriptlang.org/)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
@@ -20,18 +20,22 @@
 - **📝 Phrase-Aware**: Recognizes compound terms (kebab-case, snake_case) for precise matching
 - **🔒 Concurrency-Safe** _(v0.9.7+)_: Per-database queues, canonicalized DuckDB paths, and bootstrap-safe locking prevent FTS rebuild conflicts and keep locks consistent across symlinks—even on first run
 
-## 🆕 What's New in v0.14.0
+## 🆕 What's New in v0.15.0
 
 ### ✨ New Features
 
-- **AdaptiveK Enabled by Default**: `context_bundle` now uses adaptive K sizing automatically without requiring explicit configuration
-- **Category Aliases for AdaptiveK**: Added convenience aliases for common query categories
+- **`snippets_get` view parameter** (#117, #118): New `view` parameter for explicit retrieval strategy control
+  - `auto`: Current behavior (symbol boundaries if available)
+  - `symbol`: Force symbol boundary-based snippets
+  - `lines`: Line range-based snippets
+  - `full`: Entire file (500 line safety limit)
+- **Co-change scoring** (#82, #124): Dependency graph with PageRank-like importance scoring and git history-based co-change detection
+- **Stop words & IDF weighting** (#48): Multi-language stop words (en/ja) and BM25-style IDF for better keyword relevance
 
 ### 🐛 Bug Fixes
 
-- **Lint and Type Errors**: Resolved import ordering and type compatibility issues in adaptive-k module
-- **WarningManager Test**: Fixed test compatibility with adaptive-k changes
-- **Port Retry on Benchmark**: Evaluation scripts now retry on `EADDRINUSE` errors
+- **Evaluation fixes**: metadata:hint tag support, assay-kit path corrections
+- **Co-change confidence**: Prevent reset when no new commits processed
 
 ## ⚙️ Prerequisites
 
@@ -912,8 +916,8 @@ Built with:
 
 ---
 
-**Status**: v0.14.0 (Beta) - Production-ready for MCP clients
+**Status**: v0.15.0 (Beta) - Production-ready for MCP clients
 
-**New in v0.14.0**: AdaptiveK is now enabled by default, providing intelligent result sizing out of the box. Category aliases simplify query categorization. See [CHANGELOG.md](CHANGELOG.md) for details.
+**New in v0.15.0**: Co-change scoring, stop words/IDF weighting, and `snippets_get` view parameter for explicit retrieval control. See [CHANGELOG.md](CHANGELOG.md) for details.
 
 For questions or support, please open a [GitHub issue](https://github.com/CAPHTECH/kiri/issues).

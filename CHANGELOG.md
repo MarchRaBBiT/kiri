@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2025-11-28
+
+### Added
+
+- **`snippets_get` view parameter** (#117, #118): New `view` parameter for explicit retrieval strategy control
+  - `auto`: Maintain current behavior (symbol boundaries if available, else line range)
+  - `symbol`: Force symbol boundary-based snippets
+  - `lines`: Line range-based snippets (ignore symbol boundaries)
+  - `full`: Return entire file (500 line safety limit, truncated flag added)
+
+- **VSS infrastructure and co-change scoring** (#82, #124):
+  - Dependency graph with PageRank-like importance scoring
+  - Co-change relationship extraction from git commit history
+  - Graph layer scoring integration into search pipeline
+  - Incremental update support for watch mode
+  - Alloy and TLA+ formal specs for graph layer
+  - Cochange scoring enabled by default (--no-cochange opt-out)
+
+- **Stop words configurability and IDF-based keyword weighting** (#48):
+  - StopWordsService with multi-language support (en/ja)
+  - External config via config/stop-words.yml
+  - NFKC normalization and katakana→hiragana conversion
+  - DuckDbIdfProvider with BM25-style IDF calculation
+  - Lazy computation with LRU cache (max 10K entries)
+
+- **All tools inputSchema validation test** (#127): Comprehensive schema validation for all MCP tools
+
+### Changed
+
+- **Documentation**: Added metadata tables documentation and migration guide (#87)
+- **Documentation**: Added pce-memory usage guide to AGENTS.md and CLAUDE.md
+
+### Fixed
+
+- **Evaluation**: Added metadata:hint tag to Metadata Pass judgment (#121)
+- **Evaluation**: Corrected assay-kit expected paths for monorepo structure
+- **Co-change**: Prevent confidence reset when no new commits processed
+
 ## [0.14.0] - 2025-11-25
 
 ### Changed

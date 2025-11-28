@@ -715,6 +715,46 @@ KIRI automatically filters sensitive files and masks sensitive values:
    pnpm unlink --global kiri-mcp-server
    ```
 
+#### Stale Lock File
+
+**Problem**: Daemon fails to start with error `Lock file already exists. Another process is indexing.`
+
+**Root Cause**: A previous daemon process crashed or was killed without proper cleanup, leaving a stale lock file.
+
+**Solution**:
+
+```bash
+# Remove the stale lock file
+rm -f .kiri/index.duckdb.sock.lock
+
+# Optionally, also remove the socket file
+rm -f .kiri/index.duckdb.sock
+
+# Restart the MCP server
+```
+
+#### Version Mismatch After Upgrade
+
+**Problem**: After upgrading KIRI, connection fails with `Version mismatch: client X.Y.Z is incompatible with daemon A.B.C`
+
+**Root Cause**: An old daemon process is still running after upgrading to a new version.
+
+**Solutions**:
+
+1. **Kill old daemon processes**:
+
+   ```bash
+   pkill -f "kiri.*daemon"
+   ```
+
+2. **Clear npx cache** (if using npx):
+
+   ```bash
+   npx clear-npx-cache
+   ```
+
+3. **Restart the MCP connection**
+
 ### Getting Help
 
 If you encounter issues not covered here:

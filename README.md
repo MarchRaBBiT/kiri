@@ -753,6 +753,31 @@ rm -f .kiri/index.duckdb.sock
 
 3. **Restart the MCP connection**
 
+#### Schema Mismatch After Upgrade (Degrade Mode)
+
+**Problem**: After upgrading KIRI, server shows `Server is running in degrade mode` and logs show errors like `Table with name graph_metrics does not exist`
+
+**Root Cause**: The existing index was created with an older schema version that doesn't include new tables (e.g., `graph_metrics`, `cochange`).
+
+**Solution**:
+
+1. **Stop the daemon**:
+
+   ```bash
+   pkill -f "kiri.*daemon"
+   rm -f .kiri/index.duckdb.sock.lock .kiri/index.duckdb.sock
+   ```
+
+2. **Rebuild index with full schema**:
+
+   ```bash
+   kiri --repo . --db .kiri/index.duckdb --full
+   ```
+
+3. **Restart your MCP client**
+
+> **Note**: The `--full` flag ensures all tables including `graph_metrics` and `cochange` are created. This is required when upgrading from versions prior to v0.15.0.
+
 ### Getting Help
 
 If you encounter issues not covered here:

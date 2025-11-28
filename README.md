@@ -2,7 +2,7 @@
 
 > Intelligent code context extraction for LLMs via Model Context Protocol
 
-[![Version](https://img.shields.io/badge/version-0.15.0-blue.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-0.16.0-blue.svg)](package.json)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.6-blue.svg)](https://www.typescriptlang.org/)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
@@ -20,22 +20,20 @@
 - **📝 Phrase-Aware**: Recognizes compound terms (kebab-case, snake_case) for precise matching
 - **🔒 Concurrency-Safe** _(v0.9.7+)_: Per-database queues, canonicalized DuckDB paths, and bootstrap-safe locking prevent FTS rebuild conflicts and keep locks consistent across symlinks—even on first run
 
-## 🆕 What's New in v0.15.0
+## 🆕 What's New in v0.16.0
 
-### ✨ New Features
+### ✨ Improvements
 
-- **`snippets_get` view parameter** (#117, #118): New `view` parameter for explicit retrieval strategy control
-  - `auto`: Current behavior (symbol boundaries if available)
-  - `symbol`: Force symbol boundary-based snippets
-  - `lines`: Line range-based snippets
-  - `full`: Entire file (500 line safety limit)
-- **Co-change scoring** (#82, #124): Dependency graph with PageRank-like importance scoring and git history-based co-change detection
-- **Stop words & IDF weighting** (#48): Multi-language stop words (en/ja) and BM25-style IDF for better keyword relevance
+- **DuckDB client migration**: Migrated to `@duckdb/node-api` from deprecated `duckdb` package
+  - No more native binding compilation errors with npx
+  - Pre-built binaries for all platforms
+  - Improved type safety and debugging support
 
-### 🐛 Bug Fixes
+### Previous Release (v0.15.0)
 
-- **Evaluation fixes**: metadata:hint tag support, assay-kit path corrections
-- **Co-change confidence**: Prevent reset when no new commits processed
+- **`snippets_get` view parameter**: Explicit retrieval strategy control (auto/symbol/lines/full)
+- **Co-change scoring**: Dependency graph with PageRank-like importance scoring
+- **Stop words & IDF weighting**: Multi-language support (en/ja) with BM25-style ranking
 
 ## ⚙️ Prerequisites
 

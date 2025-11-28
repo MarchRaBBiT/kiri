@@ -7,14 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.15.1] - 2025-11-28
+## [0.16.0] - 2025-11-28
 
 ### Changed
 
 - **DuckDB client migration**: Migrated from deprecated `duckdb` package to `@duckdb/node-api`
   - Resolves native binding installation issues when using npx
   - Uses pre-built platform-specific binaries (no build required at install time)
-  - Maintains API compatibility with existing codebase
+  - Maintains full API compatibility with existing codebase
+  - Improved type safety with explicit `DuckDBParams` type
+  - Added ROLLBACK failure logging for debugging support
 
 ## [0.15.0] - 2025-11-28
 

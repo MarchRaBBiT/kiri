@@ -414,6 +414,97 @@ describe("snippets_get", () => {
       expect(snippet.endLine).toBe(5);
       expect(snippet.content).toContain("const a = 1");
       expect(snippet.content).toContain("const e = 5");
+      // 500行未満のファイルでは truncated は含まれない
+      expect(snippet.truncated).toBeUndefined();
+    });
+
+    it('view: "full" returns truncated: true when file exceeds 500 lines', async () => {
+      // 550行のファイルを作成（MAX_FULL_LINES = 500 を超える）
+      const largeFileLines = Array.from(
+        { length: 550 },
+        (_, i) => `const line${i + 1} = ${i + 1};`
+      );
+      const repo = await createTempRepo({
+        "src/large.ts": largeFileLines.join("\n"),
+      });
+      cleanupTargets.push({ dispose: repo.cleanup });
+
+      const dbDir = await mkdtemp(join(tmpdir(), "kiri-db-view-full-truncated-"));
+      const dbPath = join(dbDir, "index.duckdb");
+      cleanupTargets.push({
+        dispose: async () => await rm(dbDir, { recursive: true, force: true }),
+      });
+
+      await runIndexer({ repoRoot: repo.path, databasePath: dbPath, full: true });
+
+      const db = await DuckDBClient.connect({ databasePath: dbPath });
+      cleanupTargets.push({ dispose: async () => await db.close() });
+
+      const repoId = await resolveRepoId(db, repo.path);
+      const tableAvailability = await checkTableAvailability(db);
+      const context: ServerContext = {
+        db,
+        repoId,
+        services: createServerServices(db),
+        tableAvailability,
+        warningManager: new WarningManager(),
+      };
+
+      const snippet = await snippetsGet(context, {
+        path: "src/large.ts",
+        view: "full",
+      });
+      expect(snippet.startLine).toBe(1);
+      expect(snippet.endLine).toBe(500); // MAX_FULL_LINES で制限される
+      expect(snippet.totalLines).toBe(550);
+      expect(snippet.truncated).toBe(true);
+      expect(snippet.content).toContain("const line1 = 1");
+      expect(snippet.content).toContain("const line500 = 500");
+      expect(snippet.content).not.toContain("const line501 = 501");
+    });
+
+    it('view: "full" ignores start_line and always starts from line 1', async () => {
+      const repo = await createTempRepo({
+        "src/ignore-start.ts": [
+          "const first = 1;",
+          "const second = 2;",
+          "const third = 3;",
+          "const fourth = 4;",
+          "const fifth = 5;",
+        ].join("\n"),
+      });
+      cleanupTargets.push({ dispose: repo.cleanup });
+
+      const dbDir = await mkdtemp(join(tmpdir(), "kiri-db-view-full-ignore-start-"));
+      const dbPath = join(dbDir, "index.duckdb");
+      cleanupTargets.push({
+        dispose: async () => await rm(dbDir, { recursive: true, force: true }),
+      });
+
+      await runIndexer({ repoRoot: repo.path, databasePath: dbPath, full: true });
+
+      const db = await DuckDBClient.connect({ databasePath: dbPath });
+      cleanupTargets.push({ dispose: async () => await db.close() });
+
+      const repoId = await resolveRepoId(db, repo.path);
+      const tableAvailability = await checkTableAvailability(db);
+      const context: ServerContext = {
+        db,
+        repoId,
+        services: createServerServices(db),
+        tableAvailability,
+        warningManager: new WarningManager(),
+      };
+
+      // start_line: 3 を指定しても、view: "full" では無視される
+      const snippet = await snippetsGet(context, {
+        path: "src/ignore-start.ts",
+        start_line: 3, // この値は無視される
+        view: "full",
+      });
+      // 常に1行目から開始される
+      expect(snippet.startLine).toBe(1);
+      expect(snippet.content).toContain("const first = 1");
     });
 
     it('view: "symbol" forces symbol-based retrieval', async () => {

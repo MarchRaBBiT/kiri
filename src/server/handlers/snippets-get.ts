@@ -32,6 +32,7 @@ export interface SnippetResult {
   totalLines: number;
   symbolName: string | null;
   symbolKind: string | null;
+  truncated?: boolean; // view: "full" でファイルが MAX_FULL_LINES を超えた場合 true
 }
 
 /**
@@ -159,37 +160,42 @@ export async function snippetsGet(
   );
 
   const view = params.view ?? "auto";
-  const requestedStart = params.start_line ?? 1;
 
   // view パラメータに基づいて取得戦略を決定
   let useSymbolSnippets: boolean;
+  let requestedStart: number;
   let requestedEnd: number;
 
   switch (view) {
     case "symbol":
       // 強制的にシンボル境界を使用
       useSymbolSnippets = snippetRows.length > 0;
+      requestedStart = params.start_line ?? 1;
       requestedEnd =
         params.end_line ?? Math.min(totalLines, requestedStart + DEFAULT_SNIPPET_WINDOW - 1);
       break;
     case "lines":
       // 行ベース取得（シンボル境界を無視）
       useSymbolSnippets = false;
+      requestedStart = params.start_line ?? 1;
       requestedEnd =
         params.end_line ?? Math.min(totalLines, requestedStart + DEFAULT_SNIPPET_WINDOW - 1);
       break;
     case "full":
-      // ファイル全体を返す（安全上限付き）
+      // ファイル全体を返す（安全上限付き、start_line/end_line は無視）
       useSymbolSnippets = false;
+      requestedStart = 1; // 常に1行目から開始
       requestedEnd = Math.min(totalLines, MAX_FULL_LINES);
       break;
     case "auto":
-    default:
+    default: {
       // 現行動作: シンボルがあり end_line 未指定の場合はシンボル境界を使用
       useSymbolSnippets = snippetRows.length > 0 && params.end_line === undefined;
+      requestedStart = params.start_line ?? 1;
       requestedEnd =
         params.end_line ?? Math.min(totalLines, requestedStart + DEFAULT_SNIPPET_WINDOW - 1);
       break;
+    }
   }
 
   let snippetSelection: SnippetRow | null = null;
@@ -232,6 +238,9 @@ export async function snippetsGet(
     content = addLineNumbers ? prependLineNumbers(snippetContent, startLine) : snippetContent;
   }
 
+  // view: "full" でファイルが MAX_FULL_LINES を超えた場合に truncated フラグを設定
+  const truncated = view === "full" && totalLines > MAX_FULL_LINES;
+
   return {
     path: row.path,
     startLine,
@@ -240,5 +249,6 @@ export async function snippetsGet(
     totalLines,
     symbolName,
     symbolKind,
+    ...(truncated && { truncated }),
   };
 }

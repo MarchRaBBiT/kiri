@@ -411,7 +411,7 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       "- 'auto' (default): Uses symbol boundaries if available, falls back to line window\n" +
       "- 'symbol': Forces symbol-based snippets\n" +
       "- 'lines': Uses line-based retrieval (respects start_line/end_line, ignores symbols)\n" +
-      "- 'full': Returns entire file content (up to 500 lines safety limit)\n\n" +
+      "- 'full': Returns entire file from line 1 (start_line is ignored). Safety limit: 500 lines. If truncated, response includes `truncated: true`.\n\n" +
       "Example: snippets_get({path: 'src/auth/login.ts'}) surfaces the enclosing function. snippets_get({path: 'src/config.ts', view: 'full'}) returns entire file. Invalid: snippets_get({path: 'assets/logo.png'}) reports that binary snippets are unsupported.",
     inputSchema: {
       type: "object",

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.1] - 2025-11-28
+
+### Fixed
+
+- **Graceful degradation for graph layer tables**: Fixed server crash when `graph_metrics` and `cochange` tables are missing
+  - Added `hasGraphMetrics` and `hasCochange` flags to `TableAvailability`
+  - Table existence check at startup with warning logs when tables are missing
+  - Scoring functions now skip gracefully when tables are unavailable
+
 ## [0.16.0] - 2025-11-28
 
 ### Changed

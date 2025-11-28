@@ -2,7 +2,7 @@
 
 > Intelligent code context extraction for LLMs via Model Context Protocol
 
-[![Version](https://img.shields.io/badge/version-0.16.0-blue.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-0.16.1-blue.svg)](package.json)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.6-blue.svg)](https://www.typescriptlang.org/)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
@@ -20,20 +20,18 @@
 - **📝 Phrase-Aware**: Recognizes compound terms (kebab-case, snake_case) for precise matching
 - **🔒 Concurrency-Safe** _(v0.9.7+)_: Per-database queues, canonicalized DuckDB paths, and bootstrap-safe locking prevent FTS rebuild conflicts and keep locks consistent across symlinks—even on first run
 
-## 🆕 What's New in v0.16.0
+## 🆕 What's New in v0.16.1
 
-### ✨ Improvements
+### 🐛 Bug Fixes
 
-- **DuckDB client migration**: Migrated to `@duckdb/node-api` from deprecated `duckdb` package
-  - No more native binding compilation errors with npx
-  - Pre-built binaries for all platforms
-  - Improved type safety and debugging support
+- **Graceful degradation for graph layer tables**: Fixed crash when `graph_metrics`/`cochange` tables are missing
+  - Added table existence check at startup
+  - Scoring functions skip gracefully with warning logs when tables are unavailable
 
-### Previous Release (v0.15.0)
+### Previous Releases
 
-- **`snippets_get` view parameter**: Explicit retrieval strategy control (auto/symbol/lines/full)
-- **Co-change scoring**: Dependency graph with PageRank-like importance scoring
-- **Stop words & IDF weighting**: Multi-language support (en/ja) with BM25-style ranking
+- **v0.16.0**: DuckDB client migration to `@duckdb/node-api`
+- **v0.15.0**: `snippets_get` view parameter, co-change scoring, stop words & IDF weighting
 
 ## ⚙️ Prerequisites
 

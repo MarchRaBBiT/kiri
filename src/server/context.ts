@@ -15,6 +15,8 @@ export interface TableAvailability {
   hasLinkTable: boolean;
   hasHintLog: boolean;
   hasHintDictionary: boolean;
+  hasGraphMetrics: boolean; // graph_metrics テーブル（グラフレイヤースコアリング用）
+  hasCochange: boolean; // cochange テーブル（コチェンジスコアリング用）
 }
 
 export interface ServerContext {

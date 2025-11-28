@@ -241,6 +241,8 @@ export async function checkTableAvailability(db: DuckDBClient): Promise<TableAva
     "markdown_link",
     "hint_expansion",
     "hint_dictionary",
+    "graph_metrics",
+    "cochange",
   ] as const;
 
   const checkTable = async (tableName: (typeof ALLOWED_TABLES)[number]): Promise<boolean> => {
@@ -268,6 +270,8 @@ export async function checkTableAvailability(db: DuckDBClient): Promise<TableAva
     hasLinkTable: await checkTable("markdown_link"),
     hasHintLog: await checkTable("hint_expansion"),
     hasHintDictionary: await checkTable("hint_dictionary"),
+    hasGraphMetrics: await checkTable("graph_metrics"),
+    hasCochange: await checkTable("cochange"),
   };
 
   // 起動時警告: テーブルが存在しない場合に通知
@@ -289,6 +293,16 @@ export async function checkTableAvailability(db: DuckDBClient): Promise<TableAva
   if (!result.hasHintDictionary) {
     console.warn(
       "hint_dictionary table is missing. Dictionary hints disabled. Run scripts/diag/build-hint-dictionary.ts after upgrading the schema."
+    );
+  }
+  if (!result.hasGraphMetrics) {
+    console.warn(
+      "graph_metrics table is missing. Graph layer scoring disabled. Run indexer with --full flag to create the table."
+    );
+  }
+  if (!result.hasCochange) {
+    console.warn(
+      "cochange table is missing. Co-change scoring disabled. Run indexer with --full flag to create the table."
     );
   }
 
@@ -1988,13 +2002,21 @@ function applyStructuralScores(
  * - importance_score: Normalized PageRank score [0, 1]
  *
  * Boosts are additive and scaled by profile weights.
+ *
+ * @param hasGraphMetrics - graph_metrics テーブルが存在するかどうか
  */
 async function applyGraphLayerScores(
   db: DuckDBClient,
   repoId: number,
   candidates: CandidateInfo[],
-  weights: ScoringWeights
+  weights: ScoringWeights,
+  hasGraphMetrics: boolean
 ): Promise<void> {
+  // Skip if graph_metrics table doesn't exist (graceful degradation)
+  if (!hasGraphMetrics) {
+    return;
+  }
+
   // Skip if both weights are zero (disabled)
   if (weights.graphInbound <= 0 && weights.graphImportance <= 0) {
     return;
@@ -2074,14 +2096,21 @@ async function applyGraphLayerScores(
  * @param candidates - Candidate files to score
  * @param weights - Scoring weights (uses cochange weight)
  * @param editingPath - Currently edited file path (optional)
+ * @param hasCochange - cochange テーブルが存在するかどうか
  */
 async function applyCochangeScores(
   db: DuckDBClient,
   repoId: number,
   candidates: CandidateInfo[],
   weights: ScoringWeights,
-  editingPath?: string
+  editingPath: string | undefined,
+  hasCochange: boolean
 ): Promise<void> {
+  // Skip if cochange table doesn't exist (graceful degradation)
+  if (!hasCochange) {
+    return;
+  }
+
   // Skip if cochange weight is zero (disabled by default)
   if (weights.cochange <= 0) {
     return;
@@ -4670,10 +4699,23 @@ async function contextBundleImpl(
   applyStructuralScores(materializedCandidates, queryEmbedding, weights.structural);
 
   // Phase 3.2: Apply graph layer scoring (inbound dependencies, PageRank importance)
-  await applyGraphLayerScores(db, repoId, materializedCandidates, weights);
+  await applyGraphLayerScores(
+    db,
+    repoId,
+    materializedCandidates,
+    weights,
+    context.tableAvailability.hasGraphMetrics
+  );
 
   // Phase 4: Apply co-change scores (files that change together with editing_path)
-  await applyCochangeScores(db, repoId, materializedCandidates, weights, artifacts.editing_path);
+  await applyCochangeScores(
+    db,
+    repoId,
+    materializedCandidates,
+    weights,
+    artifacts.editing_path,
+    context.tableAvailability.hasCochange
+  );
 
   // ✅ CRITICAL SAFETY: Apply multipliers AFTER all additive scoring (v0.7.0)
   // Only apply to positive scores to prevent negative score inversion

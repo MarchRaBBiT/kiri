@@ -212,6 +212,20 @@ function resolveSegmentsToPath(
   return candidates.find((candidate) => fileSet.has(candidate)) ?? null;
 }
 
+function resolveModuleLikePath(
+  base: string,
+  segments: string[],
+  fileSet: Set<string>
+): string | null {
+  const direct = resolveSegmentsToPath(base, segments, fileSet);
+  if (direct) return direct;
+  if (segments.length > 1) {
+    // Drop the final segment to handle item imports (e.g., crate::foo::Bar -> foo.rs)
+    return resolveSegmentsToPath(base, segments.slice(0, -1), fileSet);
+  }
+  return null;
+}
+
 function resolveTarget(
   rawTarget: string,
   pathInRepo: string,
@@ -234,7 +248,7 @@ function resolveTarget(
     if (segments.length === 0) {
       return null;
     }
-    const resolved = resolveSegmentsToPath(crateRoot, segments, fileSet);
+    const resolved = resolveModuleLikePath(crateRoot, segments, fileSet);
     if (resolved) {
       return { kind: "path", target: resolved };
     }
@@ -246,7 +260,7 @@ function resolveTarget(
     if (segments.length === 0) {
       return null;
     }
-    const resolved = resolveSegmentsToPath(baseDir, segments, fileSet);
+    const resolved = resolveModuleLikePath(baseDir, segments, fileSet);
     if (resolved) {
       return { kind: "path", target: resolved };
     }
@@ -263,14 +277,14 @@ function resolveTarget(
     if (segments.length === 0) {
       return null;
     }
-    const resolved = resolveSegmentsToPath(parentDir, segments, fileSet);
+    const resolved = resolveModuleLikePath(parentDir, segments, fileSet);
     if (resolved) {
       return { kind: "path", target: resolved };
     }
     return null;
   }
 
-  const resolved = resolveSegmentsToPath(baseDir, segmentsWithoutWildcard, fileSet);
+  const resolved = resolveModuleLikePath(baseDir, segmentsWithoutWildcard, fileSet);
   if (resolved) {
     return { kind: "path", target: resolved };
   }

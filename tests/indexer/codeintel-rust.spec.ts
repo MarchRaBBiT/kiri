@@ -49,6 +49,7 @@ use crate::foo::{bar, nested::deep};
 use std::collections::HashMap;
 use crate::glob::*;
 extern crate regex;
+use crate::foo::Bar;
 `;
 
     const fileSet = new Set<string>([
@@ -58,6 +59,7 @@ extern crate regex;
       "src/foo/mod.rs",
       "src/foo/nested/deep.rs",
       "src/glob/mod.rs",
+      "src/foo.rs",
     ]);
 
     const result = await analyzeSource("src/lib.rs", "Rust", rustCode, fileSet);
@@ -67,6 +69,7 @@ extern crate regex;
         { dstKind: "path", dst: "src/utils.rs", rel: "mod" },
         { dstKind: "path", dst: "src/foo/bar.rs", rel: "import" },
         { dstKind: "path", dst: "src/foo/nested/deep.rs", rel: "import" },
+        { dstKind: "path", dst: "src/foo.rs", rel: "import" },
         { dstKind: "package", dst: "std", rel: "import" },
         { dstKind: "package", dst: "regex", rel: "extern_crate" },
         { dstKind: "path", dst: "src/glob/mod.rs", rel: "import" },

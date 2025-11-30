@@ -19,3 +19,6 @@ debug-*.mjs
 scripts/debug/
 .serena/
 tests/fixtures/sample-repo/.git
+
+# Alloy verification output (temporary artifacts)
+Plan*_*/

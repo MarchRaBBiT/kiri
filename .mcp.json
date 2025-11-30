@@ -1,8 +1,10 @@
 {
   "mcpServers": {
-    "kiri": {
-      "command": "kiri",
-      "args": ["--repo", ".", "--db", "var/index.duckdb", "--watch"]
+    "pce-memory": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["pce-memory@latest", "--db", "~/.pce/kiri.db"],
+      "env": {}
     }
   }
 }

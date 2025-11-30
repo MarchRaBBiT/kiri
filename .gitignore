@@ -1,6 +1,9 @@
 node_modules/
 dist/
 var/
+tmp/
+external/vscode/
+external/*/.kiri/
 *.log
 .env*
 .DS_Store
@@ -13,5 +16,9 @@ package/
 # Development test scripts
 test-*.mjs
 debug-*.mjs
+scripts/debug/
 .serena/
 tests/fixtures/sample-repo/.git
+
+# Alloy verification output (temporary artifacts)
+Plan*_*/

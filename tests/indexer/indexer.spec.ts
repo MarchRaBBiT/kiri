@@ -1,12 +1,16 @@
+import { execFile } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 
 import { afterEach, describe, expect, it } from "vitest";
 
 import { runIndexer } from "../../src/indexer/cli.js";
 import { DuckDBClient } from "../../src/shared/duckdb.js";
 import { createTempRepo } from "../helpers/test-repo.js";
+
+const execFileAsync = promisify(execFile);
 
 interface CleanupTarget {
   dispose: () => Promise<void>;
@@ -175,5 +179,135 @@ describe("runIndexer", () => {
     expect(firstRow).toBeDefined();
     if (!firstRow) throw new Error("No repo row found");
     expect(firstRow.root).toBe(repo.path);
+  });
+
+  it("indexes tracked files inside git submodules", async () => {
+    const submodule = await createTempRepo({
+      "src/module.ts": "export const moduleValue = 42;",
+    });
+    cleanupTargets.push({ dispose: submodule.cleanup });
+
+    const hostRepo = await createTempRepo({
+      "README.md": "# host repository\n",
+    });
+    cleanupTargets.push({ dispose: hostRepo.cleanup });
+
+    await execFileAsync("git", ["submodule", "add", submodule.path, "external/assay-kit"], {
+      cwd: hostRepo.path,
+      env: { ...process.env, GIT_ALLOW_PROTOCOL: "file" },
+    });
+    await execFileAsync("git", ["add", ".gitmodules", "external/assay-kit"], {
+      cwd: hostRepo.path,
+    });
+    await execFileAsync("git", ["commit", "-m", "Add external assay-kit submodule"], {
+      cwd: hostRepo.path,
+    });
+
+    const dbDir = await mkdtemp(join(tmpdir(), "kiri-db-"));
+    const dbPath = join(dbDir, "index.duckdb");
+    cleanupTargets.push({
+      dispose: async () => await rm(dbDir, { recursive: true, force: true }),
+    });
+
+    await runIndexer({ repoRoot: hostRepo.path, databasePath: dbPath, full: true });
+
+    const db = await DuckDBClient.connect({ databasePath: dbPath });
+    cleanupTargets.push({ dispose: async () => await db.close() });
+
+    const repoRows = await db.all<{ id: number }>("SELECT id FROM repo");
+    expect(repoRows).toHaveLength(1);
+    const repoId = repoRows[0]?.id;
+    expect(repoId).toBeDefined();
+    if (!repoId) throw new Error("No repo id found");
+
+    const fileRows = await db.all<{ path: string }>(
+      "SELECT path FROM file WHERE repo_id = ? ORDER BY path",
+      [repoId]
+    );
+    const paths = fileRows.map((row) => row.path);
+    expect(paths).toContain("external/assay-kit/src/module.ts");
+  });
+
+  it("captures structured metadata and markdown links", async () => {
+    const repo = await createTempRepo({
+      "docs/runbook.md": `---
+title: Metrics Runbook
+tags:
+  - observability
+  - dashboards
+category: guides
+---
+Refer to the API doc for request flow.
+
+See the [API](../src/api.md#handlers) reference.
+`,
+      "docs/faq.md": `# FAQ
+This document lists common questions.
+`,
+      "src/api.md": `# API
+Implements handlers.
+`,
+      "configs/alerting.yml": `service: alerts
+team: sre
+`,
+      "data/owner.json": `{"owner": {"name": "Observability"}, "priority": "P1"}`,
+    });
+    cleanupTargets.push({ dispose: repo.cleanup });
+
+    const dbDir = await mkdtemp(join(tmpdir(), "kiri-metadata-"));
+    const dbPath = join(dbDir, "index.duckdb");
+    cleanupTargets.push({ dispose: async () => await rm(dbDir, { recursive: true, force: true }) });
+
+    await runIndexer({ repoRoot: repo.path, databasePath: dbPath, full: true });
+
+    const db = await DuckDBClient.connect({ databasePath: dbPath });
+    cleanupTargets.push({ dispose: async () => await db.close() });
+
+    const repoRow = await db.all<{ id: number }>("SELECT id FROM repo");
+    const repoId = repoRow[0]?.id;
+    expect(repoId).toBeDefined();
+    if (!repoId) throw new Error("repo id missing");
+
+    const metadataRows = await db.all<{ path: string; source: string; data: string }>(
+      "SELECT path, source, data FROM document_metadata WHERE repo_id = ? ORDER BY path, source",
+      [repoId]
+    );
+    expect(metadataRows).toEqual([
+      expect.objectContaining({ path: "configs/alerting.yml", source: "yaml" }),
+      expect.objectContaining({ path: "data/owner.json", source: "json" }),
+      expect.objectContaining({ path: "docs/runbook.md", source: "front_matter" }),
+    ]);
+    const frontMatter = metadataRows.find((row) => row.path === "docs/runbook.md");
+    expect(frontMatter).toBeDefined();
+    const parsedFrontMatter = JSON.parse(frontMatter!.data);
+    expect(parsedFrontMatter.title).toBe("Metrics Runbook");
+
+    const kvRows = await db.all<{
+      path: string;
+      source: string;
+      key: string;
+      value: string;
+    }>(
+      "SELECT path, source, key, value FROM document_metadata_kv WHERE repo_id = ? ORDER BY path, key, value",
+      [repoId]
+    );
+    const frontMatterTags = kvRows.filter(
+      (row) => row.path === "docs/runbook.md" && row.key === "tags"
+    );
+    expect(frontMatterTags.map((row) => row.value.toLowerCase())).toEqual(
+      expect.arrayContaining(["observability", "dashboards"])
+    );
+
+    const markdownRefs = await db.all<{ srcPath: string; target: string; kind: string }>(
+      "SELECT src_path as srcPath, target, kind FROM markdown_link WHERE repo_id = ? ORDER BY src_path, target",
+      [repoId]
+    );
+    expect(markdownRefs).toEqual([
+      expect.objectContaining({
+        srcPath: "docs/runbook.md",
+        target: "../src/api.md#handlers",
+        kind: "relative",
+      }),
+    ]);
   });
 });

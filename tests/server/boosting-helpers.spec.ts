@@ -6,8 +6,9 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { runIndexer } from "../../src/indexer/cli.js";
 import { ServerContext } from "../../src/server/context.js";
-import { contextBundle, resolveRepoId } from "../../src/server/handlers.js";
+import { checkTableAvailability, contextBundle, resolveRepoId } from "../../src/server/handlers.js";
 import { WarningManager } from "../../src/server/rpc.js";
+import { createServerServices } from "../../src/server/services/index.js";
 import { DuckDBClient } from "../../src/shared/duckdb.js";
 import { createTempRepo } from "../helpers/test-repo.js";
 
@@ -54,7 +55,14 @@ describe("Boosting Helper Functions (v0.7.0+)", () => {
       cleanupTargets.push({ dispose: async () => await db.close() });
 
       const repoId = await resolveRepoId(db, repo.path);
-      const context: ServerContext = { db, repoId, warningManager: new WarningManager() };
+      const tableAvailability = await checkTableAvailability(db);
+      const context: ServerContext = {
+        db,
+        repoId,
+        services: createServerServices(db),
+        tableAvailability,
+        warningManager: new WarningManager(),
+      };
 
       // Query with hyphenated phrase
       const bundle = await contextBundle(context, {
@@ -103,7 +111,14 @@ describe("Boosting Helper Functions (v0.7.0+)", () => {
       cleanupTargets.push({ dispose: async () => await db.close() });
 
       const repoId = await resolveRepoId(db, repo.path);
-      const context: ServerContext = { db, repoId, warningManager: new WarningManager() };
+      const tableAvailability = await checkTableAvailability(db);
+      const context: ServerContext = {
+        db,
+        repoId,
+        services: createServerServices(db),
+        tableAvailability,
+        warningManager: new WarningManager(),
+      };
 
       const bundle = await contextBundle(context, {
         goal: "auth authentication system",
@@ -144,7 +159,14 @@ describe("Boosting Helper Functions (v0.7.0+)", () => {
       cleanupTargets.push({ dispose: async () => await db.close() });
 
       const repoId = await resolveRepoId(db, repo.path);
-      const context: ServerContext = { db, repoId, warningManager: new WarningManager() };
+      const tableAvailability = await checkTableAvailability(db);
+      const context: ServerContext = {
+        db,
+        repoId,
+        services: createServerServices(db),
+        tableAvailability,
+        warningManager: new WarningManager(),
+      };
 
       const bundle = await contextBundle(context, {
         goal: "router routing system",
@@ -189,7 +211,14 @@ describe("Boosting Helper Functions (v0.7.0+)", () => {
       cleanupTargets.push({ dispose: async () => await db.close() });
 
       const repoId = await resolveRepoId(db, repo.path);
-      const context: ServerContext = { db, repoId, warningManager: new WarningManager() };
+      const tableAvailability = await checkTableAvailability(db);
+      const context: ServerContext = {
+        db,
+        repoId,
+        services: createServerServices(db),
+        tableAvailability,
+        warningManager: new WarningManager(),
+      };
 
       const bundle = await contextBundle(context, {
         goal: "configuration settings",
@@ -229,7 +258,14 @@ describe("Boosting Helper Functions (v0.7.0+)", () => {
       cleanupTargets.push({ dispose: async () => await db.close() });
 
       const repoId = await resolveRepoId(db, repo.path);
-      const context: ServerContext = { db, repoId, warningManager: new WarningManager() };
+      const tableAvailability = await checkTableAvailability(db);
+      const context: ServerContext = {
+        db,
+        repoId,
+        services: createServerServices(db),
+        tableAvailability,
+        warningManager: new WarningManager(),
+      };
 
       const bundle = await contextBundle(context, {
         goal: "feature implementation",
@@ -277,7 +313,14 @@ describe("Boosting Helper Functions (v0.7.0+)", () => {
       cleanupTargets.push({ dispose: async () => await db.close() });
 
       const repoId = await resolveRepoId(db, repo.path);
-      const context: ServerContext = { db, repoId, warningManager: new WarningManager() };
+      const tableAvailability = await checkTableAvailability(db);
+      const context: ServerContext = {
+        db,
+        repoId,
+        services: createServerServices(db),
+        tableAvailability,
+        warningManager: new WarningManager(),
+      };
 
       const bundle = await contextBundle(context, {
         goal: "package dependencies",
@@ -325,7 +368,14 @@ describe("Boosting Helper Functions (v0.7.0+)", () => {
       cleanupTargets.push({ dispose: async () => await db.close() });
 
       const repoId = await resolveRepoId(db, repo.path);
-      const context: ServerContext = { db, repoId, warningManager: new WarningManager() };
+      const tableAvailability = await checkTableAvailability(db);
+      const context: ServerContext = {
+        db,
+        repoId,
+        services: createServerServices(db),
+        tableAvailability,
+        warningManager: new WarningManager(),
+      };
 
       const bundle = await contextBundle(context, {
         goal: "configuration setup",
@@ -372,7 +422,14 @@ describe("Boosting Helper Functions (v0.7.0+)", () => {
       cleanupTargets.push({ dispose: async () => await db.close() });
 
       const repoId = await resolveRepoId(db, repo.path);
-      const context: ServerContext = { db, repoId, warningManager: new WarningManager() };
+      const tableAvailability = await checkTableAvailability(db);
+      const context: ServerContext = {
+        db,
+        repoId,
+        services: createServerServices(db),
+        tableAvailability,
+        warningManager: new WarningManager(),
+      };
 
       const bundle = await contextBundle(context, {
         goal: "database schema",
@@ -414,7 +471,14 @@ describe("Boosting Helper Functions (v0.7.0+)", () => {
       cleanupTargets.push({ dispose: async () => await db.close() });
 
       const repoId = await resolveRepoId(db, repo.path);
-      const context: ServerContext = { db, repoId, warningManager: new WarningManager() };
+      const tableAvailability = await checkTableAvailability(db);
+      const context: ServerContext = {
+        db,
+        repoId,
+        services: createServerServices(db),
+        tableAvailability,
+        warningManager: new WarningManager(),
+      };
 
       const bundle = await contextBundle(context, {
         goal: "feature implementation",
@@ -451,7 +515,14 @@ describe("Boosting Helper Functions (v0.7.0+)", () => {
       cleanupTargets.push({ dispose: async () => await db.close() });
 
       const repoId = await resolveRepoId(db, repo.path);
-      const context: ServerContext = { db, repoId, warningManager: new WarningManager() };
+      const tableAvailability = await checkTableAvailability(db);
+      const context: ServerContext = {
+        db,
+        repoId,
+        services: createServerServices(db),
+        tableAvailability,
+        warningManager: new WarningManager(),
+      };
 
       const bundle = await contextBundle(context, {
         goal: "application page",
@@ -488,7 +559,14 @@ describe("Boosting Helper Functions (v0.7.0+)", () => {
       cleanupTargets.push({ dispose: async () => await db.close() });
 
       const repoId = await resolveRepoId(db, repo.path);
-      const context: ServerContext = { db, repoId, warningManager: new WarningManager() };
+      const tableAvailability = await checkTableAvailability(db);
+      const context: ServerContext = {
+        db,
+        repoId,
+        services: createServerServices(db),
+        tableAvailability,
+        warningManager: new WarningManager(),
+      };
 
       const bundle = await contextBundle(context, {
         goal: "feature documentation",
@@ -528,7 +606,14 @@ describe("Boosting Helper Functions (v0.7.0+)", () => {
       cleanupTargets.push({ dispose: async () => await db.close() });
 
       const repoId = await resolveRepoId(db, repo.path);
-      const context: ServerContext = { db, repoId, warningManager: new WarningManager() };
+      const tableAvailability = await checkTableAvailability(db);
+      const context: ServerContext = {
+        db,
+        repoId,
+        services: createServerServices(db),
+        tableAvailability,
+        warningManager: new WarningManager(),
+      };
 
       const bundle = await contextBundle(context, {
         goal: "feature implementation",
@@ -579,7 +664,14 @@ describe("Boosting Helper Functions (v0.7.0+)", () => {
       cleanupTargets.push({ dispose: async () => await db.close() });
 
       const repoId = await resolveRepoId(db, repo.path);
-      const context: ServerContext = { db, repoId, warningManager: new WarningManager() };
+      const tableAvailability = await checkTableAvailability(db);
+      const context: ServerContext = {
+        db,
+        repoId,
+        services: createServerServices(db),
+        tableAvailability,
+        warningManager: new WarningManager(),
+      };
 
       const bundle = await contextBundle(context, {
         goal: "handler guide config",
@@ -625,7 +717,14 @@ describe("Boosting Helper Functions (v0.7.0+)", () => {
       cleanupTargets.push({ dispose: async () => await db.close() });
 
       const repoId = await resolveRepoId(db, repo.path);
-      const context: ServerContext = { db, repoId, warningManager: new WarningManager() };
+      const tableAvailability = await checkTableAvailability(db);
+      const context: ServerContext = {
+        db,
+        repoId,
+        services: createServerServices(db),
+        tableAvailability,
+        warningManager: new WarningManager(),
+      };
 
       const bundle = await contextBundle(context, {
         goal: "authenticate button formatData handler component",
@@ -684,7 +783,14 @@ describe("Boosting Helper Functions (v0.7.0+)", () => {
       cleanupTargets.push({ dispose: async () => await db.close() });
 
       const repoId = await resolveRepoId(db, repo.path);
-      const context: ServerContext = { db, repoId, warningManager: new WarningManager() };
+      const tableAvailability = await checkTableAvailability(db);
+      const context: ServerContext = {
+        db,
+        repoId,
+        services: createServerServices(db),
+        tableAvailability,
+        warningManager: new WarningManager(),
+      };
 
       const bundle = await contextBundle(context, {
         goal: "database settings config",
@@ -743,7 +849,14 @@ describe("Boosting Helper Functions (v0.7.0+)", () => {
       cleanupTargets.push({ dispose: async () => await db.close() });
 
       const repoId = await resolveRepoId(db, repo.path);
-      const context: ServerContext = { db, repoId, warningManager: new WarningManager() };
+      const tableAvailability = await checkTableAvailability(db);
+      const context: ServerContext = {
+        db,
+        repoId,
+        services: createServerServices(db),
+        tableAvailability,
+        warningManager: new WarningManager(),
+      };
 
       const bundle = await contextBundle(context, {
         goal: "main function requirements gemfile cargo docker",
@@ -825,7 +938,14 @@ describe("Boosting Helper Functions (v0.7.0+)", () => {
       cleanupTargets.push({ dispose: async () => await db.close() });
 
       const repoId = await resolveRepoId(db, repo.path);
-      const context: ServerContext = { db, repoId, warningManager: new WarningManager() };
+      const tableAvailability = await checkTableAvailability(db);
+      const context: ServerContext = {
+        db,
+        repoId,
+        services: createServerServices(db),
+        tableAvailability,
+        warningManager: new WarningManager(),
+      };
 
       const bundle = await contextBundle(context, {
         goal: "main hello swift program console",
@@ -904,7 +1024,14 @@ describe("Boosting Helper Functions (v0.7.0+)", () => {
       cleanupTargets.push({ dispose: async () => await db.close() });
 
       const repoId = await resolveRepoId(db, repo.path);
-      const context: ServerContext = { db, repoId, warningManager: new WarningManager() };
+      const tableAvailability = await checkTableAvailability(db);
+      const context: ServerContext = {
+        db,
+        repoId,
+        services: createServerServices(db),
+        tableAvailability,
+        warningManager: new WarningManager(),
+      };
 
       const bundle = await contextBundle(context, {
         goal: "user controller bootstrap config database migration locales caddy nginx",
@@ -940,7 +1067,10 @@ describe("Boosting Helper Functions (v0.7.0+)", () => {
         }
         if (migrationFile) {
           expect(controllerRank).toBeLessThan(bundle.context.indexOf(migrationFile));
-          expect(migrationFile.why.some((reason) => reason === "penalty:config-file")).toBe(true);
+          // v1.0.0: Migration files now use "penalty:low-value-file" instead of "penalty:migration-file"
+          expect(migrationFile.why.some((reason) => reason === "penalty:low-value-file")).toBe(
+            true
+          );
         }
         if (localeFile) {
           expect(controllerRank).toBeLessThan(bundle.context.indexOf(localeFile));

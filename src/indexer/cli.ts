@@ -1,15 +1,36 @@
 import { createHash } from "node:crypto";
-import { readFile, stat } from "node:fs/promises";
-import { join, resolve, extname } from "node:path";
+import { existsSync } from "node:fs";
+import { readFile, readdir, stat } from "node:fs/promises";
+import { join, resolve, extname, posix as pathPosix } from "node:path";
 import { pathToFileURL } from "node:url";
+
+import { parse as parseYAML } from "yaml";
 
 import { DuckDBClient } from "../shared/duckdb.js";
 import { generateEmbedding } from "../shared/embedding.js";
+import { acquireLock, releaseLock, LockfileError, getLockOwner } from "../shared/utils/lockfile.js";
+import {
+  normalizeDbPath,
+  normalizeRepoPath,
+  ensureDbParentDir,
+  getRepoPathCandidates,
+} from "../shared/utils/path.js";
 
+import { computeCochangeGraph, incrementalCochangeUpdate } from "./cochange.js";
 import { analyzeSource, buildFallbackSnippet } from "./codeintel.js";
-import { getDefaultBranch, getHeadCommit, gitLsFiles } from "./git.js";
+import { getDefaultBranch, getHeadCommit, gitLsFiles, gitDiffNameOnly } from "./git.js";
+import { computeGraphMetrics, incrementalGraphUpdate } from "./graph-metrics.js";
 import { detectLanguage } from "./language.js";
-import { ensureBaseSchema } from "./schema.js";
+import { mergeRepoRecords } from "./migrations/repo-merger.js";
+import { getIndexerQueue } from "./queue.js";
+import {
+  ensureBaseSchema,
+  ensureDocumentMetadataTables,
+  ensureGraphLayerTables,
+  ensureNormalizedRootColumn,
+  ensureRepoMetaColumns,
+  rebuildFTSIfNeeded,
+} from "./schema.js";
 import { IndexWatcher } from "./watch.js";
 
 interface IndexerOptions {
@@ -18,6 +39,8 @@ interface IndexerOptions {
   full: boolean;
   since?: string;
   changedPaths?: string[]; // For incremental indexing: only reindex these files
+  skipLocking?: boolean; // Fix #1: Internal use only - allows caller (e.g., watcher) to manage lock
+  skipCochange?: boolean; // Skip co-change graph computation (use --no-cochange flag)
 }
 
 interface BlobRecord {
@@ -68,9 +91,181 @@ interface EmbeddingRow {
   vector: number[];
 }
 
+type MetadataSource = "json" | "yaml" | "front_matter";
+
+type MetadataTree = string | number | boolean | MetadataTree[] | { [key: string]: MetadataTree };
+
+interface DocumentMetadataRecord {
+  path: string;
+  source: MetadataSource;
+  data: MetadataTree;
+}
+
+interface MetadataPairRecord {
+  path: string;
+  source: MetadataSource;
+  key: string;
+  value: string;
+}
+
+type DocLinkKind = "relative" | "absolute" | "external" | "anchor";
+
+interface MarkdownLinkRecord {
+  srcPath: string;
+  target: string;
+  resolvedPath: string | null;
+  anchorText: string;
+  kind: DocLinkKind;
+}
+
+interface StructuredFileData {
+  metadataRecords: DocumentMetadataRecord[];
+  metadataPairs: MetadataPairRecord[];
+  links: MarkdownLinkRecord[];
+}
+
+interface PairCollectorState {
+  count: number;
+  seen: Set<string>;
+}
+
+function normalizePathForIndex(value: string): string {
+  return value.replace(/\\/g, "/");
+}
+
+function ensurePairState(
+  stateMap: Map<string, PairCollectorState>,
+  path: string
+): PairCollectorState {
+  const existing = stateMap.get(path);
+  if (existing) {
+    return existing;
+  }
+  const created: PairCollectorState = { count: 0, seen: new Set<string>() };
+  stateMap.set(path, created);
+  return created;
+}
+
 const MAX_SAMPLE_BYTES = 32_768;
 const MAX_FILE_BYTES = 32 * 1024 * 1024; // 32MB limit to prevent memory exhaustion
 const SCAN_BATCH_SIZE = 100; // Process files in batches to limit memory usage
+const MARKDOWN_EXTENSIONS = new Set([".md", ".mdx", ".markdown"]);
+const DOCMETA_SNAPSHOT_DIR = "docmeta/";
+const DOCMETA_SNAPSHOT_TARGET_FIELD = "target_path";
+const DOCMETA_SNAPSHOT_DATA_FIELD = "front_matter";
+
+/**
+ * Metadata processing limits to prevent DoS attacks and memory exhaustion.
+ *
+ * These values balance security, performance, and real-world usage patterns.
+ * Adjust based on:
+ * - Performance testing with 10000+ file repositories
+ * - Memory profiling (Node.js heap size impact)
+ * - Analysis of 99th percentile values in production data
+ */
+
+/**
+ * Maximum length of a single metadata value (characters).
+ *
+ * Rationale: Typical YAML front matter fields (title, description) are 200-300 chars.
+ * Setting to 512 provides headroom while preventing abuse.
+ *
+ * Example use cases:
+ * - Document titles: ~100 chars
+ * - Descriptions: ~300 chars
+ * - Tags (as comma-separated string): ~200 chars
+ */
+const MAX_METADATA_VALUE_LENGTH = 512;
+
+/**
+ * Maximum nesting depth for metadata tree structures.
+ *
+ * Rationale: Normal YAML/JSON documents nest 3-5 levels deep.
+ * Setting to 8 accommodates complex configurations while preventing stack overflow.
+ *
+ * Defense: Prevents malicious deeply-nested documents from causing:
+ * - Stack overflow (recursive function calls)
+ * - Exponential memory growth
+ * - CPU exhaustion during traversal
+ */
+const MAX_METADATA_DEPTH = 8;
+
+/**
+ * Maximum number of elements in a metadata array.
+ *
+ * Rationale: Common use case is tags/categories arrays with ~10 items.
+ * Setting to 64 provides generous headroom for edge cases.
+ *
+ * Example arrays:
+ * - Tags: ["frontend", "react", "typescript"] (~3-10 items)
+ * - Authors: ["John Doe", "Jane Smith"] (~1-5 items)
+ * - Categories: ["guide", "tutorial", "api"] (~2-8 items)
+ */
+const MAX_METADATA_ARRAY_LENGTH = 64;
+
+/**
+ * Maximum number of key-value pairs extracted per file.
+ *
+ * Rationale: Memory footprint calculation:
+ * - 256 pairs × ~40 bytes/pair ≈ 10KB per file
+ * - For 10000 files: 10KB × 10000 = 100MB (acceptable overhead)
+ *
+ * Prevents DoS from files with thousands of metadata fields.
+ * Normal documents have 5-20 metadata fields.
+ */
+const MAX_METADATA_PAIRS_PER_FILE = 256;
+
+/**
+ * Maximum number of object keys processed in a metadata tree node.
+ *
+ * Rationale: Prevents memory exhaustion from maliciously crafted objects with excessive keys.
+ * Normal metadata objects have 5-20 keys. Setting to 256 provides generous headroom.
+ *
+ * Memory impact: Each key entry requires ~50 bytes (key name + value reference).
+ * 256 keys × 50 bytes ≈ 12.8KB per object, which is acceptable.
+ */
+const MAX_METADATA_OBJECT_KEYS = 256;
+
+/**
+ * Key name used for root-level scalar values in metadata trees.
+ * Internal use only - not exposed in search results.
+ */
+const ROOT_METADATA_KEY = "__root";
+
+/**
+ * Maximum number of SQL placeholders per INSERT statement.
+ *
+ * DuckDB's internal limit is 65535 placeholders, but we use a conservative value of 30000 for:
+ * 1. Safety margin: Prevents stack overflow when building large SQL strings in JavaScript
+ * 2. Performance: Smaller batches reduce memory pressure and provide better error granularity
+ * 3. Compatibility: Works safely across different DuckDB versions and system configurations
+ *
+ * This value has been validated with real-world testing:
+ * - Successfully handles 10000+ files in batch-processing.spec.ts
+ * - Prevents "Maximum call stack size exceeded" errors (Issue #39)
+ * - Balances transaction throughput vs. individual batch size
+ *
+ * Example batch sizes with this limit:
+ * - 4-column table (blob): 7500 records per batch
+ * - 5-column table (dependency): 6000 records per batch
+ * - 9-column table (symbol): 3333 records per batch
+ */
+const MAX_SQL_PLACEHOLDERS = 30000;
+
+/**
+ * Calculate safe batch size for SQL INSERT operations based on columns per record.
+ * Ensures total placeholders per statement stays under MAX_SQL_PLACEHOLDERS.
+ *
+ * @param columnsPerRecord - Number of columns in the INSERT statement (must be positive)
+ * @returns Safe batch size that won't exceed placeholder limit
+ * @throws {Error} If columnsPerRecord is not a positive integer
+ */
+function calculateBatchSize(columnsPerRecord: number): number {
+  if (columnsPerRecord <= 0 || !Number.isInteger(columnsPerRecord)) {
+    throw new Error(`columnsPerRecord must be a positive integer, got: ${columnsPerRecord}`);
+  }
+  return Math.floor(MAX_SQL_PLACEHOLDERS / columnsPerRecord);
+}
 
 function countLines(content: string): number {
   if (content.length === 0) {
@@ -100,64 +295,133 @@ function isBinaryBuffer(buffer: Buffer): boolean {
 async function ensureRepo(
   db: DuckDBClient,
   repoRoot: string,
-  defaultBranch: string | null
+  defaultBranch: string | null,
+  candidateRoots: string[]
 ): Promise<number> {
-  // Atomically insert or update using ON CONFLICT to leverage auto-increment
-  // This eliminates the TOCTOU race condition present in manual ID generation
-  await db.run(
-    `INSERT INTO repo (root, default_branch, indexed_at)
-     VALUES (?, ?, CURRENT_TIMESTAMP)
-     ON CONFLICT(root) DO UPDATE SET
-       default_branch = COALESCE(excluded.default_branch, repo.default_branch)`,
-    [repoRoot, defaultBranch]
+  const searchRoots = Array.from(new Set([repoRoot, ...(candidateRoots ?? [])]));
+  const placeholders = searchRoots.map(() => "?").join(", ");
+
+  let rows = await db.all<{ id: number; root: string }>(
+    `SELECT id, root FROM repo WHERE root IN (${placeholders})`,
+    searchRoots
   );
 
-  // Fetch the ID of the existing or newly created repo
-  const rows = await db.all<{ id: number }>("SELECT id FROM repo WHERE root = ?", [repoRoot]);
+  if (rows.length === 0) {
+    const normalized = normalizeRepoPath(repoRoot);
+    await db.run(
+      `INSERT INTO repo (root, normalized_root, default_branch, indexed_at)
+       VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+       ON CONFLICT(root) DO UPDATE SET
+         normalized_root = excluded.normalized_root,
+         default_branch = COALESCE(excluded.default_branch, repo.default_branch)`,
+      [repoRoot, normalized, defaultBranch]
+    );
+
+    rows = await db.all<{ id: number; root: string }>(
+      `SELECT id, root FROM repo WHERE root IN (${placeholders})`,
+      searchRoots
+    );
+  }
 
   if (rows.length === 0) {
     throw new Error(
       "Failed to create or find repository record. Check database constraints and schema."
     );
   }
-  const row = rows[0];
-  if (!row) {
+
+  let canonicalRow = rows.find((row) => row.root === repoRoot) ?? rows[0];
+  if (!canonicalRow) {
     throw new Error("Failed to retrieve repository record. Database returned empty result.");
   }
-  return row.id;
-}
 
-async function persistBlobs(db: DuckDBClient, blobs: Map<string, BlobRecord>): Promise<void> {
-  if (blobs.size === 0) return;
-
-  // Use bulk insert for better performance
-  const blobArray = Array.from(blobs.values());
-  const placeholders = blobArray.map(() => "(?, ?, ?, ?)").join(", ");
-  const sql = `INSERT OR REPLACE INTO blob (hash, size_bytes, line_count, content) VALUES ${placeholders}`;
-
-  const params: unknown[] = [];
-  for (const blob of blobArray) {
-    params.push(blob.hash, blob.sizeBytes, blob.lineCount, blob.content);
+  if (canonicalRow.root !== repoRoot) {
+    await db.run("UPDATE repo SET root = ? WHERE id = ?", [repoRoot, canonicalRow.id]);
+    canonicalRow = { ...canonicalRow, root: repoRoot };
   }
 
-  await db.run(sql, params);
+  const legacyIds = rows.filter((row) => row.id !== canonicalRow.id).map((row) => row.id);
+  await mergeRepoRecords(db, canonicalRow.id, legacyIds);
+
+  return canonicalRow.id;
 }
 
+/**
+ * Generic helper function to persist records in batches to prevent stack overflow.
+ * Splits large datasets into smaller batches and executes INSERT statements sequentially.
+ *
+ * IMPORTANT: This function must be called within an active database transaction.
+ * See runIndexer() for transaction management context.
+ *
+ * @param db - Database client (must be within an active transaction)
+ * @param records - Array of records to persist
+ * @param batchSize - Maximum number of records per INSERT statement
+ * @param buildInsert - Function that builds SQL and params for a batch
+ */
+async function persistInBatches<T>(
+  db: DuckDBClient,
+  records: T[],
+  batchSize: number,
+  buildInsert: (batch: T[]) => { sql: string; params: unknown[] }
+): Promise<void> {
+  if (records.length === 0) return;
+
+  for (let i = 0; i < records.length; i += batchSize) {
+    const batch = records.slice(i, i + batchSize);
+    const { sql, params } = buildInsert(batch);
+
+    try {
+      await db.run(sql, params);
+    } catch (error) {
+      // バッチインデックスとサイズを含むエラーメッセージ（0-indexedの正確な範囲）
+      const batchInfo = `Batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(records.length / batchSize)} (records ${i}-${i + batch.length - 1})`;
+      throw new Error(
+        `Failed to persist batch: ${batchInfo}. Original error: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+}
+
+/**
+ * Persist blob records to database in batches to prevent stack overflow.
+ *
+ * IMPORTANT: This function must be called within an active database transaction.
+ * See runIndexer() for transaction management context.
+ *
+ * @param db - Database client (must be within an active transaction)
+ * @param blobs - Map of blob records to persist
+ */
+async function persistBlobs(db: DuckDBClient, blobs: Map<string, BlobRecord>): Promise<void> {
+  const blobArray = Array.from(blobs.values());
+  const BATCH_SIZE = calculateBatchSize(4); // blob table has 4 columns
+
+  await persistInBatches(db, blobArray, BATCH_SIZE, (batch) => ({
+    sql: `INSERT OR REPLACE INTO blob (hash, size_bytes, line_count, content) VALUES ${batch.map(() => "(?, ?, ?, ?)").join(", ")}`,
+    params: batch.flatMap((blob) => [blob.hash, blob.sizeBytes, blob.lineCount, blob.content]),
+  }));
+}
+
+/**
+ * Persist tree records to database in batches to prevent stack overflow.
+ *
+ * IMPORTANT: This function must be called within an active database transaction.
+ * See runIndexer() for transaction management context.
+ *
+ * @param db - Database client (must be within an active transaction)
+ * @param repoId - Repository ID
+ * @param commitHash - Git commit hash
+ * @param records - File records to persist
+ */
 async function persistTrees(
   db: DuckDBClient,
   repoId: number,
   commitHash: string,
   records: FileRecord[]
 ): Promise<void> {
-  if (records.length === 0) return;
+  const BATCH_SIZE = calculateBatchSize(8); // tree table has 8 columns
 
-  // Use bulk insert for better performance
-  const placeholders = records.map(() => "(?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
-  const sql = `INSERT OR REPLACE INTO tree (repo_id, commit_hash, path, blob_hash, ext, lang, is_binary, mtime) VALUES ${placeholders}`;
-
-  const params: unknown[] = [];
-  for (const record of records) {
-    params.push(
+  await persistInBatches(db, records, BATCH_SIZE, (batch) => ({
+    sql: `INSERT OR REPLACE INTO tree (repo_id, commit_hash, path, blob_hash, ext, lang, is_binary, mtime) VALUES ${batch.map(() => "(?, ?, ?, ?, ?, ?, ?, ?)").join(", ")}`,
+    params: batch.flatMap((record) => [
       repoId,
       commitHash,
       record.path,
@@ -165,158 +429,763 @@ async function persistTrees(
       record.ext,
       record.lang,
       record.isBinary,
-      record.mtimeIso
-    );
-  }
-
-  await db.run(sql, params);
+      record.mtimeIso,
+    ]),
+  }));
 }
 
+/**
+ * Persist file records to database in batches to prevent stack overflow.
+ *
+ * IMPORTANT: This function must be called within an active database transaction.
+ * See runIndexer() for transaction management context.
+ *
+ * @param db - Database client (must be within an active transaction)
+ * @param repoId - Repository ID
+ * @param records - File records to persist
+ */
 async function persistFiles(
   db: DuckDBClient,
   repoId: number,
   records: FileRecord[]
 ): Promise<void> {
-  if (records.length === 0) return;
+  const BATCH_SIZE = calculateBatchSize(7); // file table has 7 columns
 
-  // Use bulk insert for better performance
-  const placeholders = records.map(() => "(?, ?, ?, ?, ?, ?, ?)").join(", ");
-  const sql = `INSERT OR REPLACE INTO file (repo_id, path, blob_hash, ext, lang, is_binary, mtime) VALUES ${placeholders}`;
-
-  const params: unknown[] = [];
-  for (const record of records) {
-    params.push(
+  await persistInBatches(db, records, BATCH_SIZE, (batch) => ({
+    sql: `INSERT OR REPLACE INTO file (repo_id, path, blob_hash, ext, lang, is_binary, mtime) VALUES ${batch.map(() => "(?, ?, ?, ?, ?, ?, ?)").join(", ")}`,
+    params: batch.flatMap((record) => [
       repoId,
       record.path,
       record.blobHash,
       record.ext,
       record.lang,
       record.isBinary,
-      record.mtimeIso
-    );
-  }
-
-  await db.run(sql, params);
+      record.mtimeIso,
+    ]),
+  }));
 }
 
+/**
+ * Persist symbol records to database in batches to prevent stack overflow.
+ *
+ * IMPORTANT: This function must be called within an active database transaction.
+ * See runIndexer() for transaction management context.
+ *
+ * @param db - Database client (must be within an active transaction)
+ * @param repoId - Repository ID
+ * @param records - Symbol records to persist
+ */
 async function persistSymbols(
   db: DuckDBClient,
   repoId: number,
   records: SymbolRow[]
 ): Promise<void> {
-  if (records.length === 0) return;
+  const BATCH_SIZE = calculateBatchSize(9); // symbol table has 9 columns
 
-  // バッチサイズを1000に制限してスタックオーバーフローを防ぐ
-  const BATCH_SIZE = 1000;
-  for (let i = 0; i < records.length; i += BATCH_SIZE) {
-    const batch = records.slice(i, i + BATCH_SIZE);
-    const placeholders = batch.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ");
-    const sql = `
-      INSERT OR REPLACE INTO symbol (
-        repo_id, path, symbol_id, name, kind, range_start_line, range_end_line, signature, doc
-      ) VALUES ${placeholders}
-    `;
-
-    const params: unknown[] = [];
-    for (const record of batch) {
-      params.push(
-        repoId,
-        record.path,
-        record.symbolId,
-        record.name,
-        record.kind,
-        record.rangeStartLine,
-        record.rangeEndLine,
-        record.signature,
-        record.doc
-      );
-    }
-
-    await db.run(sql, params);
-  }
+  await persistInBatches(db, records, BATCH_SIZE, (batch) => ({
+    sql: `INSERT OR REPLACE INTO symbol (repo_id, path, symbol_id, name, kind, range_start_line, range_end_line, signature, doc) VALUES ${batch.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ")}`,
+    params: batch.flatMap((r) => [
+      repoId,
+      r.path,
+      r.symbolId,
+      r.name,
+      r.kind,
+      r.rangeStartLine,
+      r.rangeEndLine,
+      r.signature,
+      r.doc,
+    ]),
+  }));
 }
 
+/**
+ * Persist snippet records to database in batches to prevent stack overflow.
+ *
+ * IMPORTANT: This function must be called within an active database transaction.
+ * See runIndexer() for transaction management context.
+ *
+ * @param db - Database client (must be within an active transaction)
+ * @param repoId - Repository ID
+ * @param records - Snippet records to persist
+ */
 async function persistSnippets(
   db: DuckDBClient,
   repoId: number,
   records: SnippetRow[]
 ): Promise<void> {
-  if (records.length === 0) return;
+  const BATCH_SIZE = calculateBatchSize(6); // snippet table has 6 columns
 
-  // バッチサイズを1000に制限してスタックオーバーフローを防ぐ
-  const BATCH_SIZE = 1000;
-  for (let i = 0; i < records.length; i += BATCH_SIZE) {
-    const batch = records.slice(i, i + BATCH_SIZE);
-    const placeholders = batch.map(() => "(?, ?, ?, ?, ?, ?)").join(", ");
-    const sql = `
-      INSERT OR REPLACE INTO snippet (
-        repo_id, path, snippet_id, start_line, end_line, symbol_id
-      ) VALUES ${placeholders}
-    `;
-
-    const params: unknown[] = [];
-    for (const record of batch) {
-      params.push(
-        repoId,
-        record.path,
-        record.snippetId,
-        record.startLine,
-        record.endLine,
-        record.symbolId
-      );
-    }
-
-    await db.run(sql, params);
-  }
+  await persistInBatches(db, records, BATCH_SIZE, (batch) => ({
+    sql: `INSERT OR REPLACE INTO snippet (repo_id, path, snippet_id, start_line, end_line, symbol_id) VALUES ${batch.map(() => "(?, ?, ?, ?, ?, ?)").join(", ")}`,
+    params: batch.flatMap((r) => [repoId, r.path, r.snippetId, r.startLine, r.endLine, r.symbolId]),
+  }));
 }
 
+/**
+ * Persist file dependency records to database in batches to prevent stack overflow.
+ *
+ * MUST be called within a transaction.
+ * Batch size is dynamically calculated based on MAX_SQL_PLACEHOLDERS.
+ */
 async function persistDependencies(
   db: DuckDBClient,
   repoId: number,
   records: DependencyRow[]
 ): Promise<void> {
-  if (records.length === 0) return;
+  const BATCH_SIZE = calculateBatchSize(5); // dependency table has 5 columns
 
-  // バッチサイズを1000に制限してスタックオーバーフローを防ぐ
-  const BATCH_SIZE = 1000;
-  for (let i = 0; i < records.length; i += BATCH_SIZE) {
-    const batch = records.slice(i, i + BATCH_SIZE);
-    const placeholders = batch.map(() => "(?, ?, ?, ?, ?)").join(", ");
-    const sql = `
-      INSERT OR REPLACE INTO dependency (
-        repo_id, src_path, dst_kind, dst, rel
-      ) VALUES ${placeholders}
-    `;
-
-    const params: unknown[] = [];
-    for (const record of batch) {
-      params.push(repoId, record.srcPath, record.dstKind, record.dst, record.rel);
-    }
-
-    await db.run(sql, params);
-  }
+  await persistInBatches(db, records, BATCH_SIZE, (batch) => ({
+    sql: `INSERT OR REPLACE INTO dependency (repo_id, src_path, dst_kind, dst, rel) VALUES ${batch.map(() => "(?, ?, ?, ?, ?)").join(", ")}`,
+    params: batch.flatMap((r) => [repoId, r.srcPath, r.dstKind, r.dst, r.rel]),
+  }));
 }
 
+/**
+ * Persist file embedding records to database in batches to prevent stack overflow.
+ *
+ * IMPORTANT: This function must be called within an active database transaction.
+ * See runIndexer() for transaction management context.
+ *
+ * @param db - Database client (must be within an active transaction)
+ * @param repoId - Repository ID
+ * @param records - Embedding records to persist
+ */
 async function persistEmbeddings(
   db: DuckDBClient,
   repoId: number,
   records: EmbeddingRow[]
 ): Promise<void> {
+  const BATCH_SIZE = calculateBatchSize(4); // file_embedding table has 4 parameterized columns
+
+  await persistInBatches(db, records, BATCH_SIZE, (batch) => ({
+    sql: `INSERT OR REPLACE INTO file_embedding (repo_id, path, dims, vector_json, updated_at) VALUES ${batch.map(() => "(?, ?, ?, ?, CURRENT_TIMESTAMP)").join(", ")}`,
+    params: batch.flatMap((record) => [
+      repoId,
+      record.path,
+      record.dims,
+      JSON.stringify(record.vector),
+    ]),
+  }));
+}
+
+async function persistDocumentMetadata(
+  db: DuckDBClient,
+  repoId: number,
+  records: DocumentMetadataRecord[]
+): Promise<void> {
   if (records.length === 0) return;
+  const BATCH_SIZE = calculateBatchSize(4);
 
-  const placeholders = records.map(() => "(?, ?, ?, ?, CURRENT_TIMESTAMP)").join(", ");
-  const sql = `
-    INSERT OR REPLACE INTO file_embedding (
-      repo_id, path, dims, vector_json, updated_at
-    ) VALUES ${placeholders}
-  `;
+  await persistInBatches(db, records, BATCH_SIZE, (batch) => ({
+    sql: `INSERT OR REPLACE INTO document_metadata (repo_id, path, source, data) VALUES ${batch.map(() => "(?, ?, ?, ?)").join(", ")}`,
+    params: batch.flatMap((record) => [
+      repoId,
+      record.path,
+      record.source,
+      JSON.stringify(record.data),
+    ]),
+  }));
+}
 
-  const params: unknown[] = [];
-  for (const record of records) {
-    params.push(repoId, record.path, record.dims, JSON.stringify(record.vector));
+async function persistMetadataPairs(
+  db: DuckDBClient,
+  repoId: number,
+  records: MetadataPairRecord[]
+): Promise<void> {
+  if (records.length === 0) return;
+  const BATCH_SIZE = calculateBatchSize(5);
+
+  await persistInBatches(db, records, BATCH_SIZE, (batch) => ({
+    sql: `INSERT OR REPLACE INTO document_metadata_kv (repo_id, path, source, key, value) VALUES ${batch.map(() => "(?, ?, ?, ?, ?)").join(", ")}`,
+    params: batch.flatMap((record) => [
+      repoId,
+      record.path,
+      record.source,
+      record.key,
+      record.value,
+    ]),
+  }));
+}
+
+async function persistMarkdownLinks(
+  db: DuckDBClient,
+  repoId: number,
+  records: MarkdownLinkRecord[]
+): Promise<void> {
+  if (records.length === 0) return;
+  const BATCH_SIZE = calculateBatchSize(6);
+
+  await persistInBatches(db, records, BATCH_SIZE, (batch) => ({
+    sql: `INSERT OR REPLACE INTO markdown_link (repo_id, src_path, target, resolved_path, anchor_text, kind) VALUES ${batch.map(() => "(?, ?, ?, ?, ?, ?)").join(", ")}`,
+    params: batch.flatMap((record) => [
+      repoId,
+      record.srcPath,
+      record.target,
+      record.resolvedPath,
+      record.anchorText,
+      record.kind,
+    ]),
+  }));
+}
+
+function sanitizeMetadataTree(value: unknown, depth = 0): MetadataTree | null {
+  // Depth check at the beginning to prevent stack overflow
+  if (depth > MAX_METADATA_DEPTH) {
+    console.warn(`Metadata depth limit (${MAX_METADATA_DEPTH}) exceeded, truncating nested value`);
+    return null;
   }
 
-  await db.run(sql, params);
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed.length === 0) {
+      return null;
+    }
+    return trimmed.length > MAX_METADATA_VALUE_LENGTH
+      ? trimmed.slice(0, MAX_METADATA_VALUE_LENGTH)
+      : trimmed;
+  }
+
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      return null;
+    }
+    return value;
+  }
+
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      return null;
+    }
+    // Warn if array is too large
+    if (value.length > MAX_METADATA_ARRAY_LENGTH) {
+      console.warn(
+        `Metadata array has ${value.length} elements, limiting to ${MAX_METADATA_ARRAY_LENGTH}`
+      );
+    }
+    const sanitized: MetadataTree[] = [];
+    for (const item of value.slice(0, MAX_METADATA_ARRAY_LENGTH)) {
+      const child = sanitizeMetadataTree(item, depth + 1);
+      if (child !== null) {
+        sanitized.push(child);
+      }
+    }
+    return sanitized.length > 0 ? sanitized : null;
+  }
+
+  if (typeof value === "object") {
+    const result: Record<string, MetadataTree> = {};
+    const entries = Object.entries(value as Record<string, unknown>);
+
+    // Limit number of object keys to prevent memory exhaustion
+    if (entries.length > MAX_METADATA_OBJECT_KEYS) {
+      console.warn(
+        `Object has ${entries.length} keys, limiting to ${MAX_METADATA_OBJECT_KEYS} to prevent memory exhaustion`
+      );
+    }
+
+    for (const [key, child] of entries.slice(0, MAX_METADATA_OBJECT_KEYS)) {
+      if (!key) continue;
+      const sanitizedChild = sanitizeMetadataTree(child, depth + 1);
+      if (sanitizedChild !== null) {
+        result[key] = sanitizedChild;
+      }
+    }
+    return Object.keys(result).length > 0 ? result : null;
+  }
+
+  return null;
+}
+
+function metadataValueToString(value: string | number | boolean): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value.toString() : "";
+  }
+  return value ? "true" : "false";
+}
+
+function collectMetadataPairsFromValue(
+  value: MetadataTree,
+  path: string,
+  source: MetadataSource,
+  pairs: MetadataPairRecord[],
+  state: PairCollectorState,
+  keyPrefix = ""
+): void {
+  if (state.count >= MAX_METADATA_PAIRS_PER_FILE) {
+    return;
+  }
+
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    const key = keyPrefix.length > 0 ? keyPrefix : ROOT_METADATA_KEY;
+    let normalized = metadataValueToString(value).trim();
+    if (normalized.length === 0) {
+      return;
+    }
+    if (normalized.length > MAX_METADATA_VALUE_LENGTH) {
+      normalized = normalized.slice(0, MAX_METADATA_VALUE_LENGTH);
+    }
+    const dedupeKey = `${source}:${key}:${normalized.toLowerCase()}`;
+    if (state.seen.has(dedupeKey)) {
+      return;
+    }
+    state.seen.add(dedupeKey);
+    pairs.push({ path, source, key, value: normalized });
+    state.count += 1;
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectMetadataPairsFromValue(item, path, source, pairs, state, keyPrefix);
+      if (state.count >= MAX_METADATA_PAIRS_PER_FILE) {
+        break;
+      }
+    }
+    return;
+  }
+
+  if (typeof value === "object" && value !== null) {
+    for (const [childKey, childValue] of Object.entries(value)) {
+      const normalizedKey = childKey.toLowerCase();
+      const nextPrefix = keyPrefix.length > 0 ? `${keyPrefix}.${normalizedKey}` : normalizedKey;
+      collectMetadataPairsFromValue(
+        childValue as MetadataTree,
+        path,
+        source,
+        pairs,
+        state,
+        nextPrefix
+      );
+      if (state.count >= MAX_METADATA_PAIRS_PER_FILE) {
+        break;
+      }
+    }
+  }
+}
+
+interface FrontMatterResult {
+  data: unknown | null;
+  body: string;
+}
+
+function parseFrontMatterBlock(content: string, path: string): FrontMatterResult | null {
+  const leading = content.startsWith("\uFEFF") ? content.slice(1) : content;
+  if (!leading.startsWith("---")) {
+    return null;
+  }
+
+  const match = leading.match(/^---\s*\r?\n([\s\S]*?)\r?\n---\s*(?:\r?\n|$)/);
+  if (!match) {
+    return null;
+  }
+
+  const rawBlock = match[1] ?? "";
+  const body = leading.slice(match[0]!.length);
+
+  try {
+    const data = parseYAML(rawBlock);
+    return { data: data ?? null, body };
+  } catch (error) {
+    // Structured error logging for better debugging
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.warn(
+      JSON.stringify({
+        level: "warn",
+        message: "Failed to parse Markdown front matter",
+        file: path,
+        error: errorMessage,
+        context: "Front matter YAML parsing failed, metadata will be skipped for this file",
+      })
+    );
+    return { data: null, body };
+  }
+}
+
+function stripLinkTitle(target: string): string {
+  const trimmed = target.trim();
+  if (trimmed.length === 0) {
+    return trimmed;
+  }
+  const angleWrapped = trimmed.startsWith("<") && trimmed.endsWith(">");
+  const unwrapped = angleWrapped ? trimmed.slice(1, -1) : trimmed;
+  return unwrapped.replace(/\s+("[^"]*"|'[^']*')\s*$/, "").trim();
+}
+
+function extractMarkdownLinks(
+  content: string,
+  srcPath: string,
+  repoFileSet: Set<string>
+): MarkdownLinkRecord[] {
+  const links: MarkdownLinkRecord[] = [];
+  const pattern = /\[(?<text>[^\]]+)\]\((?<target>[^)]+)\)/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(content)) !== null) {
+    if (match.index > 0 && content[match.index - 1] === "!") {
+      continue; // Skip images
+    }
+    const text = match.groups?.text?.trim() ?? "";
+    let target = match.groups?.target?.trim() ?? "";
+    if (!text || !target) {
+      continue;
+    }
+    target = stripLinkTitle(target);
+    if (!target) {
+      continue;
+    }
+    const kind = classifyMarkdownTarget(target);
+    const resolvedPath = resolveMarkdownLink(kind, target, srcPath, repoFileSet);
+    if (kind === "anchor" && resolvedPath === null) {
+      continue;
+    }
+    links.push({
+      srcPath,
+      target,
+      resolvedPath,
+      anchorText: text.slice(0, 160),
+      kind,
+    });
+  }
+
+  return links;
+}
+
+function classifyMarkdownTarget(target: string): DocLinkKind {
+  const trimmed = target.trim();
+  if (!trimmed) {
+    return "external";
+  }
+  if (trimmed.startsWith("#")) {
+    return "anchor";
+  }
+  if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed) || trimmed.startsWith("//")) {
+    return "external";
+  }
+  if (trimmed.startsWith("/")) {
+    return "absolute";
+  }
+  return "relative";
+}
+
+function resolveMarkdownLink(
+  kind: DocLinkKind,
+  target: string,
+  srcPath: string,
+  repoFileSet: Set<string>
+): string | null {
+  if (kind === "external" || kind === "anchor") {
+    return null;
+  }
+
+  let cleanTarget = target.split("?")[0] ?? "";
+  const hashIndex = cleanTarget.indexOf("#");
+  if (hashIndex >= 0) {
+    cleanTarget = cleanTarget.slice(0, hashIndex);
+  }
+  cleanTarget = cleanTarget.trim().replace(/\\/g, "/");
+  if (!cleanTarget) {
+    return null;
+  }
+
+  let candidate: string;
+  if (kind === "absolute") {
+    candidate = cleanTarget.replace(/^\/+/, "");
+  } else {
+    const dir = pathPosix.dirname(srcPath);
+    candidate = pathPosix.join(dir, cleanTarget);
+  }
+
+  candidate = pathPosix.normalize(candidate);
+  if (!candidate || candidate.startsWith("..")) {
+    return null;
+  }
+
+  // Security: Prevent directory traversal by checking for ".." segments
+  // Even after normalization, check that no path segment contains ".." or "."
+  const segments = candidate.split("/");
+  if (segments.some((seg) => seg === ".." || seg === ".")) {
+    return null;
+  }
+
+  // Additional security: reject absolute paths that may have bypassed earlier checks
+  if (candidate.startsWith("/")) {
+    return null;
+  }
+
+  const candidates = buildLinkCandidatePaths(candidate);
+  for (const pathCandidate of candidates) {
+    if (repoFileSet.has(pathCandidate)) {
+      return pathCandidate;
+    }
+  }
+  return null;
+}
+
+function buildLinkCandidatePaths(basePath: string): string[] {
+  const candidates = new Set<string>();
+  candidates.add(basePath);
+
+  if (!pathPosix.extname(basePath)) {
+    candidates.add(`${basePath}.md`);
+    candidates.add(`${basePath}.mdx`);
+    candidates.add(`${basePath}/README.md`);
+    candidates.add(`${basePath}/readme.md`);
+    candidates.add(`${basePath}/index.md`);
+    candidates.add(`${basePath}/INDEX.md`);
+  }
+
+  return Array.from(candidates);
+}
+
+function parseJsonValue(content: string, path: string): unknown | null {
+  try {
+    return JSON.parse(content);
+  } catch (error) {
+    // Structured error logging for better debugging
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.warn(
+      JSON.stringify({
+        level: "warn",
+        message: "Failed to parse JSON metadata",
+        file: path,
+        error: errorMessage,
+        context: "JSON parsing failed, metadata will be skipped for this file",
+      })
+    );
+    return null;
+  }
+}
+
+function parseYamlValue(content: string, path: string): unknown | null {
+  try {
+    return parseYAML(content);
+  } catch (error) {
+    // Structured error logging for better debugging
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.warn(
+      JSON.stringify({
+        level: "warn",
+        message: "Failed to parse YAML metadata",
+        file: path,
+        error: errorMessage,
+        context: "YAML parsing failed, metadata will be skipped for this file",
+      })
+    );
+    return null;
+  }
+}
+
+interface DocmetaSnapshotRecord {
+  targetPath: string;
+  data: MetadataTree;
+}
+
+function parseDocmetaSnapshot(content: string, path: string): DocmetaSnapshotRecord | null {
+  const parsed = parseJsonValue(content, path);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return null;
+  }
+  const candidate = parsed as Record<string, unknown>;
+  const targetPath = candidate[DOCMETA_SNAPSHOT_TARGET_FIELD];
+  const frontMatter = candidate[DOCMETA_SNAPSHOT_DATA_FIELD];
+  if (typeof targetPath !== "string") {
+    return null;
+  }
+  const sanitized = sanitizeMetadataTree(frontMatter);
+  if (!sanitized) {
+    return null;
+  }
+  return {
+    targetPath: normalizePathForIndex(targetPath),
+    data: sanitized,
+  };
+}
+
+async function collectPlainDocsPaths(repoRoot: string): Promise<string[]> {
+  const results: string[] = [];
+
+  async function walkRelative(relativeDir: string): Promise<void> {
+    const absDir = join(repoRoot, relativeDir);
+    let entries;
+    try {
+      entries = await readdir(absDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const relPath = pathPosix.join(relativeDir, entry.name);
+      if (entry.isDirectory()) {
+        await walkRelative(relPath);
+      } else {
+        results.push(relPath);
+      }
+    }
+  }
+
+  await walkRelative("docs").catch(() => {});
+  await walkRelative("docmeta").catch(() => {});
+  return results;
+}
+
+function extractStructuredData(
+  files: FileRecord[],
+  blobs: Map<string, BlobRecord>,
+  repoFileSet: Set<string>
+): Map<string, StructuredFileData> {
+  const map = new Map<string, StructuredFileData>();
+  const pairStates = new Map<string, PairCollectorState>();
+
+  for (const file of files) {
+    if (file.isBinary) continue;
+    const blob = blobs.get(file.blobHash);
+    if (!blob || blob.content === null) {
+      continue;
+    }
+
+    const ext = (file.ext ?? "").toLowerCase();
+    const normalizedPath = normalizePathForIndex(file.path);
+
+    if (normalizedPath.startsWith(DOCMETA_SNAPSHOT_DIR)) {
+      const snapshot = parseDocmetaSnapshot(blob.content, file.path);
+      if (snapshot) {
+        const existing = map.get(snapshot.targetPath);
+        const structured = existing ?? {
+          metadataRecords: [],
+          metadataPairs: [],
+          links: [],
+        };
+        structured.metadataRecords.push({
+          path: snapshot.targetPath,
+          source: "front_matter",
+          data: snapshot.data,
+        });
+        const pairState = ensurePairState(pairStates, snapshot.targetPath);
+        collectMetadataPairsFromValue(
+          snapshot.data,
+          snapshot.targetPath,
+          "front_matter",
+          structured.metadataPairs,
+          pairState
+        );
+        map.set(snapshot.targetPath, structured);
+      }
+      continue;
+    }
+
+    const existingEntry = map.get(file.path);
+    const structured: StructuredFileData = existingEntry ?? {
+      metadataRecords: [],
+      metadataPairs: [],
+      links: [],
+    };
+    let mutated = false;
+
+    if (ext === ".json") {
+      const parsed = parseJsonValue(blob.content, file.path);
+      const sanitized = sanitizeMetadataTree(parsed);
+      if (sanitized) {
+        structured.metadataRecords.push({ path: file.path, source: "json", data: sanitized });
+        const pairState = ensurePairState(pairStates, file.path);
+        collectMetadataPairsFromValue(
+          sanitized,
+          file.path,
+          "json",
+          structured.metadataPairs,
+          pairState
+        );
+        mutated = true;
+      }
+    } else if (ext === ".yaml" || ext === ".yml") {
+      const parsed = parseYamlValue(blob.content, file.path);
+      const sanitized = sanitizeMetadataTree(parsed);
+      if (sanitized) {
+        structured.metadataRecords.push({ path: file.path, source: "yaml", data: sanitized });
+        const pairState = ensurePairState(pairStates, file.path);
+        collectMetadataPairsFromValue(
+          sanitized,
+          file.path,
+          "yaml",
+          structured.metadataPairs,
+          pairState
+        );
+        mutated = true;
+      }
+    }
+
+    if (MARKDOWN_EXTENSIONS.has(ext)) {
+      const frontMatter = parseFrontMatterBlock(blob.content, file.path);
+      let markdownBody = blob.content;
+      if (frontMatter) {
+        if (frontMatter.data) {
+          const sanitized = sanitizeMetadataTree(frontMatter.data);
+          if (sanitized) {
+            structured.metadataRecords.push({
+              path: file.path,
+              source: "front_matter",
+              data: sanitized,
+            });
+            const pairState = ensurePairState(pairStates, file.path);
+            collectMetadataPairsFromValue(
+              sanitized,
+              file.path,
+              "front_matter",
+              structured.metadataPairs,
+              pairState
+            );
+            mutated = true;
+          }
+        }
+        markdownBody = frontMatter.body;
+      }
+
+      const links = extractMarkdownLinks(markdownBody, file.path, repoFileSet);
+      if (links.length > 0) {
+        structured.links.push(...links);
+        mutated = true;
+      }
+    }
+
+    if (mutated || existingEntry) {
+      map.set(file.path, structured);
+    }
+  }
+
+  return map;
+}
+
+function aggregateStructuredData(map: Map<string, StructuredFileData>): {
+  metadataRecords: DocumentMetadataRecord[];
+  metadataPairs: MetadataPairRecord[];
+  links: MarkdownLinkRecord[];
+} {
+  const aggregated = {
+    metadataRecords: [] as DocumentMetadataRecord[],
+    metadataPairs: [] as MetadataPairRecord[],
+    links: [] as MarkdownLinkRecord[],
+  };
+
+  for (const entry of map.values()) {
+    aggregated.metadataRecords.push(...entry.metadataRecords);
+    aggregated.metadataPairs.push(...entry.metadataPairs);
+    aggregated.links.push(...entry.links);
+  }
+
+  return aggregated;
 }
 
 async function buildCodeIntel(
@@ -404,14 +1273,20 @@ async function buildCodeIntel(
 async function scanFilesInBatches(
   repoRoot: string,
   paths: string[]
-): Promise<{ blobs: Map<string, BlobRecord>; files: FileRecord[]; embeddings: EmbeddingRow[] }> {
+): Promise<{
+  blobs: Map<string, BlobRecord>;
+  files: FileRecord[];
+  embeddings: EmbeddingRow[];
+  missingPaths: string[];
+}> {
   const allBlobs = new Map<string, BlobRecord>();
   const allFiles: FileRecord[] = [];
   const allEmbeddings: EmbeddingRow[] = [];
+  const allMissingPaths: string[] = [];
 
   for (let i = 0; i < paths.length; i += SCAN_BATCH_SIZE) {
     const batch = paths.slice(i, i + SCAN_BATCH_SIZE);
-    const { blobs, files, embeddings } = await scanFiles(repoRoot, batch);
+    const { blobs, files, embeddings, missingPaths } = await scanFiles(repoRoot, batch);
 
     // マージ: blobはhashでユニークなので重複排除
     for (const [hash, blob] of blobs) {
@@ -421,21 +1296,33 @@ async function scanFilesInBatches(
     }
     allFiles.push(...files);
     allEmbeddings.push(...embeddings);
+    allMissingPaths.push(...missingPaths);
 
     // バッチデータを明示的にクリアしてGCを促す
     blobs.clear();
   }
 
-  return { blobs: allBlobs, files: allFiles, embeddings: allEmbeddings };
+  return {
+    blobs: allBlobs,
+    files: allFiles,
+    embeddings: allEmbeddings,
+    missingPaths: allMissingPaths,
+  };
 }
 
 async function scanFiles(
   repoRoot: string,
   paths: string[]
-): Promise<{ blobs: Map<string, BlobRecord>; files: FileRecord[]; embeddings: EmbeddingRow[] }> {
+): Promise<{
+  blobs: Map<string, BlobRecord>;
+  files: FileRecord[];
+  embeddings: EmbeddingRow[];
+  missingPaths: string[];
+}> {
   const blobs = new Map<string, BlobRecord>();
   const files: FileRecord[] = [];
   const embeddings: EmbeddingRow[] = [];
+  const missingPaths: string[] = [];
 
   for (const relativePath of paths) {
     const absolutePath = join(repoRoot, relativePath);
@@ -492,6 +1379,13 @@ async function scanFiles(
         }
       }
     } catch (error) {
+      // Fix #4: Track deleted files (ENOENT) for database cleanup
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        missingPaths.push(relativePath);
+        continue;
+      }
+
+      // Other errors (permissions, etc.) - log and skip
       console.warn(
         `Cannot read ${relativePath} due to filesystem error. Fix file permissions or remove the file.`
       );
@@ -499,7 +1393,7 @@ async function scanFiles(
     }
   }
 
-  return { blobs, files, embeddings };
+  return { blobs, files, embeddings, missingPaths };
 }
 
 /**
@@ -555,16 +1449,36 @@ async function reconcileDeletedFiles(
   }
 
   // Delete all records for removed files in a single transaction
+  // Batched DELETE operations to avoid N+1 query problem
   if (deletedPaths.length > 0) {
     await db.transaction(async () => {
-      for (const path of deletedPaths) {
-        await db.run("DELETE FROM symbol WHERE repo_id = ? AND path = ?", [repoId, path]);
-        await db.run("DELETE FROM snippet WHERE repo_id = ? AND path = ?", [repoId, path]);
-        await db.run("DELETE FROM dependency WHERE repo_id = ? AND src_path = ?", [repoId, path]);
-        await db.run("DELETE FROM file_embedding WHERE repo_id = ? AND path = ?", [repoId, path]);
-        await db.run("DELETE FROM tree WHERE repo_id = ? AND path = ?", [repoId, path]);
-        await db.run("DELETE FROM file WHERE repo_id = ? AND path = ?", [repoId, path]);
-      }
+      const placeholders = deletedPaths.map(() => "?").join(", ");
+      const params = [repoId, ...deletedPaths];
+
+      await db.run(`DELETE FROM symbol WHERE repo_id = ? AND path IN (${placeholders})`, params);
+      await db.run(`DELETE FROM snippet WHERE repo_id = ? AND path IN (${placeholders})`, params);
+      await db.run(
+        `DELETE FROM dependency WHERE repo_id = ? AND src_path IN (${placeholders})`,
+        params
+      );
+      await db.run(
+        `DELETE FROM file_embedding WHERE repo_id = ? AND path IN (${placeholders})`,
+        params
+      );
+      await db.run(
+        `DELETE FROM document_metadata WHERE repo_id = ? AND path IN (${placeholders})`,
+        params
+      );
+      await db.run(
+        `DELETE FROM document_metadata_kv WHERE repo_id = ? AND path IN (${placeholders})`,
+        params
+      );
+      await db.run(
+        `DELETE FROM markdown_link WHERE repo_id = ? AND src_path IN (${placeholders})`,
+        params
+      );
+      await db.run(`DELETE FROM tree WHERE repo_id = ? AND path IN (${placeholders})`, params);
+      await db.run(`DELETE FROM file WHERE repo_id = ? AND path IN (${placeholders})`, params);
     });
   }
 
@@ -590,6 +1504,9 @@ async function deleteFileRecords(
   await db.run("DELETE FROM snippet WHERE repo_id = ? AND path = ?", [repoId, path]);
   await db.run("DELETE FROM dependency WHERE repo_id = ? AND src_path = ?", [repoId, path]);
   await db.run("DELETE FROM file_embedding WHERE repo_id = ? AND path = ?", [repoId, path]);
+  await db.run("DELETE FROM document_metadata WHERE repo_id = ? AND path = ?", [repoId, path]);
+  await db.run("DELETE FROM document_metadata_kv WHERE repo_id = ? AND path = ?", [repoId, path]);
+  await db.run("DELETE FROM markdown_link WHERE repo_id = ? AND src_path = ?", [repoId, path]);
   await db.run("DELETE FROM tree WHERE repo_id = ? AND commit_hash = ? AND path = ?", [
     repoId,
     headCommit,
@@ -598,199 +1515,404 @@ async function deleteFileRecords(
   await db.run("DELETE FROM file WHERE repo_id = ? AND path = ?", [repoId, path]);
 }
 
-export async function runIndexer(options: IndexerOptions): Promise<void> {
-  const repoRoot = resolve(options.repoRoot);
-  const databasePath = resolve(options.databasePath);
-
-  const db = await DuckDBClient.connect({ databasePath, ensureDirectory: true });
+/**
+ * Remove blob records that are no longer referenced by any file.
+ * This garbage collection should be run after full re-indexing or periodically as maintenance.
+ *
+ * @param db - Database client
+ */
+async function garbageCollectBlobs(db: DuckDBClient): Promise<void> {
+  console.info("Running garbage collection on blob table...");
   try {
-    await ensureBaseSchema(db);
+    await db.run(`
+      DELETE FROM blob
+      WHERE hash NOT IN (SELECT DISTINCT blob_hash FROM file)
+    `);
+    console.info("Blob garbage collection complete.");
+  } catch (error) {
+    console.warn(
+      "Failed to garbage collect blobs:",
+      error instanceof Error ? error.message : String(error)
+    );
+  }
+}
 
-    const [headCommit, defaultBranch] = await Promise.all([
-      getHeadCommit(repoRoot),
-      getDefaultBranch(repoRoot),
-    ]);
+export async function runIndexer(options: IndexerOptions): Promise<void> {
+  const repoPathCandidates = getRepoPathCandidates(options.repoRoot);
+  const repoRoot = repoPathCandidates[0];
+  if (!repoRoot) {
+    throw new Error(`Unable to resolve repository root for ${options.repoRoot}`);
+  }
+  let databasePath: string;
 
-    const repoId = await ensureRepo(db, repoRoot, defaultBranch);
+  // Fix #2: Ensure parent directory exists BEFORE normalization
+  // This guarantees consistent path normalization on first and subsequent runs
+  await ensureDbParentDir(options.databasePath);
 
-    // Incremental mode: only reindex files in changedPaths
-    if (options.changedPaths && options.changedPaths.length > 0) {
-      // First, reconcile deleted files (handle renames/deletions)
-      const deletedPaths = await reconcileDeletedFiles(db, repoId, repoRoot);
-      if (deletedPaths.length > 0) {
-        console.info(`Removed ${deletedPaths.length} deleted file(s) from index.`);
+  // Critical: Use normalizeDbPath to ensure consistent path across runs
+  // This prevents lock file and queue key bypass when DB is accessed via symlink
+  databasePath = normalizeDbPath(options.databasePath);
+
+  // DuckDB single-writer制約対応: 同じdatabasePathへの並列書き込みを防ぐため、
+  // databasePathごとのキューで直列化する
+  return getIndexerQueue(databasePath).add(async () => {
+    // Fix #1 & #2: Add file lock for multi-process safety (unless caller already holds lock)
+    const lockfilePath = `${databasePath}.lock`;
+    let lockAcquired = false;
+
+    if (!options.skipLocking) {
+      try {
+        acquireLock(lockfilePath);
+        lockAcquired = true;
+      } catch (error) {
+        if (error instanceof LockfileError) {
+          const ownerPid = error.ownerPid ?? getLockOwner(lockfilePath);
+          const ownerInfo = ownerPid ? ` (PID: ${ownerPid})` : "";
+          throw new Error(
+            `Another indexing process${ownerInfo} holds the lock for ${databasePath}. Please wait for it to complete.`
+          );
+        }
+        throw error;
       }
+    }
 
-      const existingHashes = await getExistingFileHashes(db, repoId);
-      const { blobs, files, embeddings } = await scanFilesInBatches(repoRoot, options.changedPaths);
+    let db: DuckDBClient | null = null;
+    try {
+      const dbClient = await DuckDBClient.connect({ databasePath, ensureDirectory: true });
+      db = dbClient;
+      await ensureBaseSchema(dbClient);
+      // Migration: Ensure document_metadata tables exist for existing DBs
+      await ensureDocumentMetadataTables(dbClient);
+      // Phase 1: Ensure normalized_root column exists (Critical #1)
+      await ensureNormalizedRootColumn(dbClient);
+      // Phase 3: Ensure FTS metadata columns exist for existing DBs (migration)
+      await ensureRepoMetaColumns(dbClient);
+      // Phase 3.2: Ensure graph layer tables exist (graph_metrics, inbound_edges, cochange)
+      await ensureGraphLayerTables(dbClient);
 
-      // Filter out files that haven't actually changed (same hash)
-      const changedFiles: FileRecord[] = [];
-      const changedBlobs = new Map<string, BlobRecord>();
+      const [headCommit, defaultBranch] = await Promise.all([
+        getHeadCommit(repoRoot),
+        getDefaultBranch(repoRoot),
+      ]);
 
-      for (const file of files) {
-        const existingHash = existingHashes.get(file.path);
-        if (existingHash !== file.blobHash) {
-          changedFiles.push(file);
-          const blob = blobs.get(file.blobHash);
-          if (blob) {
-            changedBlobs.set(blob.hash, blob);
+      const repoId = await ensureRepo(dbClient, repoRoot, defaultBranch, repoPathCandidates);
+
+      // Incremental mode: only reindex files in changedPaths (empty array means no-op)
+      if (options.changedPaths) {
+        // First, reconcile deleted files (handle renames/deletions)
+        const deletedPaths = await reconcileDeletedFiles(dbClient, repoId, repoRoot);
+        if (deletedPaths.length > 0) {
+          console.info(`Removed ${deletedPaths.length} deleted file(s) from index.`);
+        }
+
+        const existingHashes = await getExistingFileHashes(dbClient, repoId);
+        const { blobs, files, embeddings, missingPaths } = await scanFilesInBatches(
+          repoRoot,
+          options.changedPaths
+        );
+
+        // Filter out files that haven't actually changed (same hash)
+        const changedFiles: FileRecord[] = [];
+        const changedBlobs = new Map<string, BlobRecord>();
+
+        for (const file of files) {
+          const existingHash = existingHashes.get(file.path);
+          if (existingHash !== file.blobHash) {
+            changedFiles.push(file);
+            const blob = blobs.get(file.blobHash);
+            if (blob) {
+              changedBlobs.set(blob.hash, blob);
+            }
           }
         }
-      }
 
-      if (changedFiles.length === 0) {
-        console.info(
-          `No actual changes detected in ${options.changedPaths.length} file(s). Skipping reindex.`
-        );
-        // Still update timestamp to indicate we checked
-        if (defaultBranch) {
-          await db.run(
-            "UPDATE repo SET indexed_at = CURRENT_TIMESTAMP, default_branch = ? WHERE id = ?",
-            [defaultBranch, repoId]
+        if (changedFiles.length === 0 && missingPaths.length === 0) {
+          console.info(
+            `No actual changes detected in ${options.changedPaths.length} file(s). Skipping reindex.`
           );
-        } else {
-          await db.run("UPDATE repo SET indexed_at = CURRENT_TIMESTAMP WHERE id = ?", [repoId]);
+
+          // Fix #3 & #4: If files were deleted (git or watch mode), still need to dirty FTS and rebuild
+          if (deletedPaths.length > 0) {
+            console.info(`${deletedPaths.length} file(s) deleted (git) - marking FTS dirty`);
+
+            if (defaultBranch) {
+              await dbClient.run(
+                "UPDATE repo SET indexed_at = CURRENT_TIMESTAMP, default_branch = ?, fts_dirty = true, fts_generation = fts_generation + 1 WHERE id = ?",
+                [defaultBranch, repoId]
+              );
+            } else {
+              await dbClient.run(
+                "UPDATE repo SET indexed_at = CURRENT_TIMESTAMP, fts_dirty = true, fts_generation = fts_generation + 1 WHERE id = ?",
+                [repoId]
+              );
+            }
+
+            await rebuildFTSIfNeeded(dbClient, repoId);
+          } else {
+            // No deletions either - just update timestamp
+            if (defaultBranch) {
+              await dbClient.run(
+                "UPDATE repo SET indexed_at = CURRENT_TIMESTAMP, default_branch = ? WHERE id = ?",
+                [defaultBranch, repoId]
+              );
+            } else {
+              await dbClient.run("UPDATE repo SET indexed_at = CURRENT_TIMESTAMP WHERE id = ?", [
+                repoId,
+              ]);
+            }
+          }
+
+          return;
         }
+
+        const existingFileRows = await dbClient.all<{ path: string }>(
+          "SELECT path FROM file WHERE repo_id = ?",
+          [repoId]
+        );
+        const repoFileSet = new Set(existingFileRows.map((row) => row.path));
+        for (const file of files) {
+          repoFileSet.add(file.path);
+        }
+        const structuredByFile = extractStructuredData(changedFiles, changedBlobs, repoFileSet);
+
+        // Process all changed files in a single transaction for atomicity
+        const fileSet = new Set<string>(files.map((f) => f.path));
+        const embeddingMap = new Map<string, EmbeddingRow>();
+        for (const embedding of embeddings) {
+          embeddingMap.set(embedding.path, embedding);
+        }
+        let processedCount = 0;
+
+        await dbClient.transaction(async () => {
+          // Fix #5: Handle deleted files from watch mode (uncommitted deletions) INSIDE transaction
+          // This ensures deletion + FTS dirty flag update are atomic
+          if (missingPaths.length > 0) {
+            // Loop through each missing file and delete with headCommit
+            for (const path of missingPaths) {
+              await deleteFileRecords(dbClient, repoId, headCommit, path);
+            }
+            console.info(
+              `Removed ${missingPaths.length} missing file(s) from index (watch mode deletion).`
+            );
+          }
+
+          // Process changed files
+          for (const file of changedFiles) {
+            const blob = changedBlobs.get(file.blobHash);
+            if (!blob) continue;
+
+            try {
+              // Build code intelligence for this file
+              const fileSymbols: SymbolRow[] = [];
+              const fileSnippets: SnippetRow[] = [];
+              const fileDependencies: DependencyRow[] = [];
+
+              if (!file.isBinary && blob.content) {
+                const analysis = await analyzeSource(
+                  file.path,
+                  file.lang,
+                  blob.content,
+                  fileSet,
+                  repoRoot
+                );
+                for (const symbol of analysis.symbols) {
+                  fileSymbols.push({
+                    path: file.path,
+                    symbolId: symbol.symbolId,
+                    name: symbol.name,
+                    kind: symbol.kind,
+                    rangeStartLine: symbol.rangeStartLine,
+                    rangeEndLine: symbol.rangeEndLine,
+                    signature: symbol.signature,
+                    doc: symbol.doc,
+                  });
+                }
+                for (const snippet of analysis.snippets) {
+                  fileSnippets.push({
+                    path: file.path,
+                    snippetId: snippet.startLine,
+                    startLine: snippet.startLine,
+                    endLine: snippet.endLine,
+                    symbolId: snippet.symbolId,
+                  });
+                }
+                for (const dep of analysis.dependencies) {
+                  fileDependencies.push({
+                    srcPath: file.path,
+                    dstKind: dep.dstKind,
+                    dst: dep.dst,
+                    rel: dep.rel,
+                  });
+                }
+              } else {
+                // Binary or no content: add fallback snippet
+                const fallback = buildFallbackSnippet(blob.lineCount ?? 1);
+                fileSnippets.push({
+                  path: file.path,
+                  snippetId: fallback.startLine,
+                  startLine: fallback.startLine,
+                  endLine: fallback.endLine,
+                  symbolId: fallback.symbolId,
+                });
+              }
+
+              const fileEmbedding = embeddingMap.get(file.path) ?? null;
+
+              // Delete old records for this file (within main transaction)
+              await deleteFileRecords(dbClient, repoId, headCommit, file.path);
+
+              // Insert new records (within main transaction)
+              await persistBlobs(dbClient, new Map([[blob.hash, blob]]));
+              await persistTrees(dbClient, repoId, headCommit, [file]);
+              await persistFiles(dbClient, repoId, [file]);
+              await persistSymbols(dbClient, repoId, fileSymbols);
+              await persistSnippets(dbClient, repoId, fileSnippets);
+              await persistDependencies(dbClient, repoId, fileDependencies);
+              const structured = structuredByFile.get(file.path);
+              if (structured) {
+                await persistDocumentMetadata(dbClient, repoId, structured.metadataRecords);
+                await persistMetadataPairs(dbClient, repoId, structured.metadataPairs);
+                await persistMarkdownLinks(dbClient, repoId, structured.links);
+              }
+              if (fileEmbedding) {
+                await persistEmbeddings(dbClient, repoId, [fileEmbedding]);
+              }
+
+              processedCount++;
+            } catch (error) {
+              console.error(
+                `Failed to process file ${file.path}, transaction will rollback:`,
+                error instanceof Error ? error.message : String(error)
+              );
+              throw error; // Re-throw to rollback the transaction
+            }
+          }
+
+          // Update timestamp and mark FTS dirty inside transaction for atomicity
+          // Fix: Increment fts_generation to prevent lost updates during concurrent rebuilds
+          if (defaultBranch) {
+            await dbClient.run(
+              "UPDATE repo SET indexed_at = CURRENT_TIMESTAMP, default_branch = ?, fts_dirty = true, fts_generation = fts_generation + 1 WHERE id = ?",
+              [defaultBranch, repoId]
+            );
+          } else {
+            await dbClient.run(
+              "UPDATE repo SET indexed_at = CURRENT_TIMESTAMP, fts_dirty = true, fts_generation = fts_generation + 1 WHERE id = ?",
+              [repoId]
+            );
+          }
+        });
+
+        console.info(
+          `Incrementally indexed ${processedCount} changed file(s) for repo ${repoRoot} at ${databasePath} (commit ${headCommit.slice(0, 12)})`
+        );
+
+        // Phase 2+3: Rebuild FTS index after incremental updates (dirty=true triggers rebuild)
+        await rebuildFTSIfNeeded(dbClient, repoId);
+
+        // Phase 3.2: Incremental graph metrics update (only if files were actually changed)
+        if (processedCount > 0) {
+          const changedFilePaths = changedFiles.map((f) => f.path);
+          await incrementalGraphUpdate(dbClient, repoId, changedFilePaths);
+        }
+
+        // Phase 4: Incremental co-change update (check for new commits)
+        if (!options.skipCochange) {
+          await incrementalCochangeUpdate(dbClient, repoId, repoRoot);
+        }
+
         return;
       }
 
-      // Process all changed files in a single transaction for atomicity
-      const fileSet = new Set<string>(files.map((f) => f.path));
-      let processedCount = 0;
-
-      await db.transaction(async () => {
-        for (const file of changedFiles) {
-          const blob = changedBlobs.get(file.blobHash);
-          if (!blob) continue;
-
-          // Build code intelligence for this file
-          const fileSymbols: SymbolRow[] = [];
-          const fileSnippets: SnippetRow[] = [];
-          const fileDependencies: DependencyRow[] = [];
-
-          if (!file.isBinary && blob.content) {
-            const analysis = await analyzeSource(
-              file.path,
-              file.lang,
-              blob.content,
-              fileSet,
-              repoRoot
-            );
-            for (const symbol of analysis.symbols) {
-              fileSymbols.push({
-                path: file.path,
-                symbolId: symbol.symbolId,
-                name: symbol.name,
-                kind: symbol.kind,
-                rangeStartLine: symbol.rangeStartLine,
-                rangeEndLine: symbol.rangeEndLine,
-                signature: symbol.signature,
-                doc: symbol.doc,
-              });
-            }
-            for (const snippet of analysis.snippets) {
-              fileSnippets.push({
-                path: file.path,
-                snippetId: snippet.startLine,
-                startLine: snippet.startLine,
-                endLine: snippet.endLine,
-                symbolId: snippet.symbolId,
-              });
-            }
-            for (const dep of analysis.dependencies) {
-              fileDependencies.push({
-                srcPath: file.path,
-                dstKind: dep.dstKind,
-                dst: dep.dst,
-                rel: dep.rel,
-              });
-            }
-          } else {
-            // Binary or no content: add fallback snippet
-            const fallback = buildFallbackSnippet(blob.lineCount ?? 1);
-            fileSnippets.push({
-              path: file.path,
-              snippetId: fallback.startLine,
-              startLine: fallback.startLine,
-              endLine: fallback.endLine,
-              symbolId: fallback.symbolId,
-            });
-          }
-
-          const fileEmbedding = embeddings.find((e) => e.path === file.path) ?? null;
-
-          // Delete old records for this file (within main transaction)
-          await deleteFileRecords(db, repoId, headCommit, file.path);
-
-          // Insert new records (within main transaction)
-          await persistBlobs(db, new Map([[blob.hash, blob]]));
-          await persistTrees(db, repoId, headCommit, [file]);
-          await persistFiles(db, repoId, [file]);
-          await persistSymbols(db, repoId, fileSymbols);
-          await persistSnippets(db, repoId, fileSnippets);
-          await persistDependencies(db, repoId, fileDependencies);
-          if (fileEmbedding) {
-            await persistEmbeddings(db, repoId, [fileEmbedding]);
-          }
-
-          processedCount++;
+      // Full mode: reindex entire repository
+      let paths = await gitLsFiles(repoRoot);
+      if (paths.length === 0) {
+        const fallbackPaths = await collectPlainDocsPaths(repoRoot);
+        if (fallbackPaths.length > 0) {
+          console.warn(
+            `git ls-files returned 0 paths for ${repoRoot}. Falling back to filesystem scan (${fallbackPaths.length} files).`
+          );
+          paths = fallbackPaths;
         }
+      }
+      const { blobs, files, embeddings, missingPaths } = await scanFilesInBatches(repoRoot, paths);
 
-        // Update timestamp inside main transaction
+      // In full mode, missingPaths should be rare (git ls-files returns existing files)
+      // But log them if they occur (race condition: file deleted between ls-files and scan)
+      if (missingPaths.length > 0) {
+        console.warn(
+          `${missingPaths.length} file(s) disappeared during full reindex (race condition)`
+        );
+      }
+
+      const codeIntel = await buildCodeIntel(files, blobs, repoRoot);
+      const repoFileSetFull = new Set(files.map((file) => file.path));
+      const structuredMap = extractStructuredData(files, blobs, repoFileSetFull);
+      const aggregatedStructured = aggregateStructuredData(structuredMap);
+
+      await dbClient.transaction(async () => {
+        await dbClient.run("DELETE FROM tree WHERE repo_id = ?", [repoId]);
+        await dbClient.run("DELETE FROM file WHERE repo_id = ?", [repoId]);
+        await dbClient.run("DELETE FROM symbol WHERE repo_id = ?", [repoId]);
+        await dbClient.run("DELETE FROM snippet WHERE repo_id = ?", [repoId]);
+        await dbClient.run("DELETE FROM dependency WHERE repo_id = ?", [repoId]);
+        await dbClient.run("DELETE FROM file_embedding WHERE repo_id = ?", [repoId]);
+        await dbClient.run("DELETE FROM document_metadata WHERE repo_id = ?", [repoId]);
+        await dbClient.run("DELETE FROM document_metadata_kv WHERE repo_id = ?", [repoId]);
+        await dbClient.run("DELETE FROM markdown_link WHERE repo_id = ?", [repoId]);
+        await persistBlobs(dbClient, blobs);
+        await persistTrees(dbClient, repoId, headCommit, files);
+        await persistFiles(dbClient, repoId, files);
+        await persistSymbols(dbClient, repoId, codeIntel.symbols);
+        await persistSnippets(dbClient, repoId, codeIntel.snippets);
+        await persistDependencies(dbClient, repoId, codeIntel.dependencies);
+        await persistEmbeddings(dbClient, repoId, embeddings);
+        await persistDocumentMetadata(dbClient, repoId, aggregatedStructured.metadataRecords);
+        await persistMetadataPairs(dbClient, repoId, aggregatedStructured.metadataPairs);
+        await persistMarkdownLinks(dbClient, repoId, aggregatedStructured.links);
+
+        // Update timestamp and mark FTS dirty inside transaction to ensure atomicity
+        // Fix: Increment fts_generation to prevent lost updates during concurrent rebuilds
         if (defaultBranch) {
-          await db.run(
-            "UPDATE repo SET indexed_at = CURRENT_TIMESTAMP, default_branch = ? WHERE id = ?",
+          await dbClient.run(
+            "UPDATE repo SET indexed_at = CURRENT_TIMESTAMP, default_branch = ?, fts_dirty = true, fts_generation = fts_generation + 1 WHERE id = ?",
             [defaultBranch, repoId]
           );
         } else {
-          await db.run("UPDATE repo SET indexed_at = CURRENT_TIMESTAMP WHERE id = ?", [repoId]);
+          await dbClient.run(
+            "UPDATE repo SET indexed_at = CURRENT_TIMESTAMP, fts_dirty = true, fts_generation = fts_generation + 1 WHERE id = ?",
+            [repoId]
+          );
         }
       });
 
       console.info(
-        `Incrementally indexed ${processedCount} changed file(s) for repo ${repoRoot} at ${databasePath} (commit ${headCommit.slice(0, 12)})`
+        `Indexed ${files.length} files for repo ${repoRoot} at ${databasePath} (commit ${headCommit.slice(0, 12)})`
       );
-      return;
-    }
 
-    // Full mode: reindex entire repository
-    const paths = await gitLsFiles(repoRoot);
-    const { blobs, files, embeddings } = await scanFilesInBatches(repoRoot, paths);
-    const codeIntel = await buildCodeIntel(files, blobs, repoRoot);
+      // Phase 2+3: Force rebuild FTS index after full reindex
+      await rebuildFTSIfNeeded(dbClient, repoId, true);
 
-    await db.transaction(async () => {
-      await db.run("DELETE FROM tree WHERE repo_id = ?", [repoId]);
-      await db.run("DELETE FROM file WHERE repo_id = ?", [repoId]);
-      await db.run("DELETE FROM symbol WHERE repo_id = ?", [repoId]);
-      await db.run("DELETE FROM snippet WHERE repo_id = ?", [repoId]);
-      await db.run("DELETE FROM dependency WHERE repo_id = ?", [repoId]);
-      await db.run("DELETE FROM file_embedding WHERE repo_id = ?", [repoId]);
-      await persistBlobs(db, blobs);
-      await persistTrees(db, repoId, headCommit, files);
-      await persistFiles(db, repoId, files);
-      await persistSymbols(db, repoId, codeIntel.symbols);
-      await persistSnippets(db, repoId, codeIntel.snippets);
-      await persistDependencies(db, repoId, codeIntel.dependencies);
-      await persistEmbeddings(db, repoId, embeddings);
+      // Phase 3.2: Compute graph metrics (PageRank, inbound closure) after dependencies are persisted
+      await computeGraphMetrics(dbClient, repoId);
 
-      // Update timestamp inside transaction to ensure atomicity
-      if (defaultBranch) {
-        await db.run(
-          "UPDATE repo SET indexed_at = CURRENT_TIMESTAMP, default_branch = ? WHERE id = ?",
-          [defaultBranch, repoId]
-        );
-      } else {
-        await db.run("UPDATE repo SET indexed_at = CURRENT_TIMESTAMP WHERE id = ?", [repoId]);
+      // Phase 4: Compute co-change graph from git history
+      if (!options.skipCochange) {
+        await computeCochangeGraph(dbClient, repoId, repoRoot);
       }
-    });
 
-    console.info(
-      `Indexed ${files.length} files for repo ${repoRoot} at ${databasePath} (commit ${headCommit.slice(0, 12)})`
-    );
-  } finally {
-    await db.close();
-  }
+      // Garbage collect orphaned blobs after full reindex
+      await garbageCollectBlobs(dbClient);
+    } finally {
+      // Fix #2: Ensure lock is released even if DB connection fails
+      if (db) {
+        await db.close();
+      }
+      if (lockAcquired) {
+        releaseLock(lockfilePath);
+      }
+    }
+  });
 }
 
 function parseArg(flag: string): string | undefined {
@@ -808,39 +1930,59 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   const since = parseArg("--since");
   const watch = process.argv.includes("--watch");
   const debounceMs = parseInt(parseArg("--debounce") ?? "500", 10);
+  const skipCochange = process.argv.includes("--no-cochange");
 
-  const options: IndexerOptions = { repoRoot, databasePath, full: full || !since };
-  if (since) {
-    options.since = since;
-  }
+  const options: IndexerOptions = { repoRoot, databasePath, full: full || !since, skipCochange };
 
-  // Run initial indexing
-  runIndexer(options)
-    .then(async () => {
-      if (watch) {
-        // Start watch mode after initial indexing completes
-        const abortController = new AbortController();
-        const watcher = new IndexWatcher({
-          repoRoot,
-          databasePath,
-          debounceMs,
-          signal: abortController.signal,
-        });
+  const main = async (): Promise<void> => {
+    if (since) {
+      options.since = since;
+      if (!options.full) {
+        const diffPaths = await gitDiffNameOnly(repoRoot, since);
+        options.changedPaths = diffPaths;
 
-        // Handle graceful shutdown on SIGINT/SIGTERM
-        const shutdownHandler = () => {
-          process.stderr.write("\n🛑 Received shutdown signal. Stopping watch mode...\n");
-          abortController.abort();
-        };
-        process.on("SIGINT", shutdownHandler);
-        process.on("SIGTERM", shutdownHandler);
-
-        await watcher.start();
+        if (diffPaths.length === 0) {
+          console.info(`No tracked changes since ${since}. Skipping incremental scan.`);
+        }
       }
-    })
-    .catch((error) => {
-      console.error("Failed to index repository. Retry after resolving the logged error.");
-      console.error(error);
-      process.exitCode = 1;
-    });
+    }
+
+    const dbMissing = !existsSync(databasePath);
+    const shouldIndex =
+      options.full || !options.changedPaths || options.changedPaths.length > 0 || dbMissing;
+
+    if (shouldIndex) {
+      await runIndexer(options);
+    } else {
+      // No diff results and not running full indexing: keep metadata fresh without DB writes
+      console.info("No files to reindex. Database remains unchanged.");
+    }
+
+    if (watch) {
+      // Start watch mode after initial indexing completes
+      const abortController = new AbortController();
+      const watcher = new IndexWatcher({
+        repoRoot,
+        databasePath,
+        debounceMs,
+        signal: abortController.signal,
+      });
+
+      // Handle graceful shutdown on SIGINT/SIGTERM
+      const shutdownHandler = () => {
+        process.stderr.write("\n🛑 Received shutdown signal. Stopping watch mode...\n");
+        abortController.abort();
+      };
+      process.on("SIGINT", shutdownHandler);
+      process.on("SIGTERM", shutdownHandler);
+
+      await watcher.start();
+    }
+  };
+
+  main().catch((error) => {
+    console.error("Failed to index repository. Retry after resolving the logged error.");
+    console.error(error);
+    process.exitCode = 1;
+  });
 }

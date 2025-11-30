@@ -10,10 +10,18 @@ import {
   createRpcHandler,
   type JsonRpcRequest,
   type JsonRpcSuccess,
+  type RpcHandleResult,
 } from "../../src/server/rpc.js";
 import { createServerRuntime } from "../../src/server/runtime.js";
 import { loadSecurityConfig, updateSecurityLock } from "../../src/shared/security/config.js";
 import { createTempRepo } from "../helpers/test-repo.js";
+
+const ensureResponse = (result: RpcHandleResult | null): RpcHandleResult => {
+  if (result === null) {
+    throw new Error("Expected RPC handler to return a response");
+  }
+  return result;
+};
 
 interface CleanupTarget {
   dispose: () => Promise<void>;
@@ -53,7 +61,7 @@ describe("MCP標準エンドポイント", () => {
 
     const handler = createRpcHandler(runtime);
     const request: JsonRpcRequest = { jsonrpc: "2.0", id: 1, method: "initialize" };
-    const response = await handler(request);
+    const response = ensureResponse(await handler(request));
 
     expect(response.statusCode).toBe(200);
     const payload = response.response as JsonRpcSuccess;
@@ -91,7 +99,7 @@ describe("MCP標準エンドポイント", () => {
 
     const handler = createRpcHandler(runtime);
     const request: JsonRpcRequest = { jsonrpc: "2.0", id: 2, method: "tools/list" };
-    const response = await handler(request);
+    const response = ensureResponse(await handler(request));
 
     expect(response.statusCode).toBe(200);
     const payload = response.response as JsonRpcSuccess;
@@ -104,6 +112,111 @@ describe("MCP標準エンドポイント", () => {
       .filter((name): name is string => typeof name === "string");
     expect(toolNames).toContain("context_bundle");
     expect(toolNames).toContain("files_search");
+  });
+
+  it("tools/list で files_search の inputSchema に top-level anyOf/oneOf/allOf が含まれない", async () => {
+    const repo = await createTempRepo({
+      "src/app.ts": "export const app = () => 1;\n",
+    });
+    cleanupTargets.push({ dispose: repo.cleanup });
+
+    const dbDir = await mkdtemp(join(tmpdir(), "kiri-mcp-tools-schema-"));
+    cleanupTargets.push({ dispose: async () => await rm(dbDir, { recursive: true, force: true }) });
+
+    const dbPath = join(dbDir, "index.duckdb");
+    const lockPath = join(dbDir, "security.lock");
+    const { hash } = loadSecurityConfig();
+    updateSecurityLock(hash, lockPath);
+
+    await runIndexer({ repoRoot: repo.path, databasePath: dbPath, full: true });
+
+    const runtime = await createServerRuntime({
+      repoRoot: repo.path,
+      databasePath: dbPath,
+      securityLockPath: lockPath,
+    });
+    cleanupTargets.push({ dispose: async () => await runtime.close() });
+
+    const handler = createRpcHandler(runtime);
+    const request: JsonRpcRequest = { jsonrpc: "2.0", id: 3, method: "tools/list" };
+    const response = ensureResponse(await handler(request));
+
+    expect(response.statusCode).toBe(200);
+    const payload = response.response as JsonRpcSuccess;
+    const tools = (payload.result as Record<string, unknown>).tools as unknown[];
+    expect(Array.isArray(tools)).toBe(true);
+
+    const filesSearch = tools.find(
+      (tool) =>
+        tool &&
+        typeof tool === "object" &&
+        (tool as Record<string, unknown>).name === "files_search"
+    ) as Record<string, unknown> | undefined;
+
+    expect(filesSearch).toBeDefined();
+    const schema = filesSearch?.inputSchema as Record<string, unknown> | undefined;
+    expect(schema && typeof schema === "object").toBe(true);
+
+    const invalidKeys = ["anyOf", "oneOf", "allOf"].filter(
+      (key) => schema !== undefined && Object.prototype.hasOwnProperty.call(schema, key)
+    );
+    expect(invalidKeys).toHaveLength(0);
+  });
+
+  it("tools/list の全ツールの inputSchema に top-level anyOf/oneOf/allOf が含まれない", async () => {
+    const repo = await createTempRepo({
+      "src/app.ts": "export const app = () => 1;\n",
+    });
+    cleanupTargets.push({ dispose: repo.cleanup });
+
+    const dbDir = await mkdtemp(join(tmpdir(), "kiri-mcp-all-tools-schema-"));
+    cleanupTargets.push({ dispose: async () => await rm(dbDir, { recursive: true, force: true }) });
+
+    const dbPath = join(dbDir, "index.duckdb");
+    const lockPath = join(dbDir, "security.lock");
+    const { hash } = loadSecurityConfig();
+    updateSecurityLock(hash, lockPath);
+
+    await runIndexer({ repoRoot: repo.path, databasePath: dbPath, full: true });
+
+    const runtime = await createServerRuntime({
+      repoRoot: repo.path,
+      databasePath: dbPath,
+      securityLockPath: lockPath,
+    });
+    cleanupTargets.push({ dispose: async () => await runtime.close() });
+
+    const handler = createRpcHandler(runtime);
+    const request: JsonRpcRequest = { jsonrpc: "2.0", id: 4, method: "tools/list" };
+    const response = ensureResponse(await handler(request));
+
+    expect(response.statusCode).toBe(200);
+    const payload = response.response as JsonRpcSuccess;
+    const tools = (payload.result as Record<string, unknown>).tools as unknown[];
+    expect(Array.isArray(tools)).toBe(true);
+
+    // 全ツールのスキーマを検証
+    const invalidSchemaKeywords = ["anyOf", "oneOf", "allOf"];
+    const toolsWithInvalidSchema: string[] = [];
+
+    for (const tool of tools) {
+      if (!tool || typeof tool !== "object") continue;
+      const toolObj = tool as Record<string, unknown>;
+      const toolName = toolObj.name as string;
+      const schema = toolObj.inputSchema as Record<string, unknown> | undefined;
+
+      if (schema && typeof schema === "object") {
+        const foundInvalidKeys = invalidSchemaKeywords.filter((key) =>
+          Object.prototype.hasOwnProperty.call(schema, key)
+        );
+        if (foundInvalidKeys.length > 0) {
+          toolsWithInvalidSchema.push(`${toolName}: ${foundInvalidKeys.join(", ")}`);
+        }
+      }
+    }
+
+    // エラーメッセージで問題のあるツールを特定できるようにする
+    expect(toolsWithInvalidSchema).toEqual([]);
   });
 
   it("resources/list が空配列を返しクライアント互換性を保つ", async () => {
@@ -131,7 +244,7 @@ describe("MCP標準エンドポイント", () => {
 
     const handler = createRpcHandler(runtime);
     const request: JsonRpcRequest = { jsonrpc: "2.0", id: 3, method: "resources/list" };
-    const response = await handler(request);
+    const response = ensureResponse(await handler(request));
 
     expect(response.statusCode).toBe(200);
     const payload = response.response as JsonRpcSuccess;
@@ -176,7 +289,7 @@ describe("MCP標準エンドポイント", () => {
         },
       },
     };
-    const response = await handler(request);
+    const response = ensureResponse(await handler(request));
 
     expect(response.statusCode).toBe(200);
     const payload = response.response as JsonRpcSuccess;
@@ -242,7 +355,7 @@ describe("MCP標準エンドポイント", () => {
       },
     };
 
-    const response = await handler(request);
+    const response = ensureResponse(await handler(request));
     expect(response.statusCode).toBe(200);
     const payload = response.response as JsonRpcSuccess;
     const result = payload.result as Record<string, unknown>;
@@ -297,7 +410,7 @@ describe("MCP標準エンドポイント", () => {
         arguments: {},
       },
     };
-    const response = await handler(request);
+    const response = ensureResponse(await handler(request));
 
     expect(response.statusCode).toBe(200);
     const payload = response.response as JsonRpcSuccess;
@@ -348,7 +461,7 @@ describe("MCP標準エンドポイント", () => {
         arguments: {},
       },
     };
-    const response = await handler(request);
+    const response = ensureResponse(await handler(request));
 
     expect(response.statusCode).toBe(400);
     const payload = response.response;
@@ -436,7 +549,7 @@ describe("MCP標準エンドポイント", () => {
         },
       };
 
-      const response = await handler(request);
+      const response = ensureResponse(await handler(request));
       expect(response.statusCode).toBe(200);
 
       const payload = response.response as JsonRpcSuccess;
@@ -490,7 +603,7 @@ describe("MCP標準エンドポイント", () => {
         },
       };
 
-      const response = await handler(request);
+      const response = ensureResponse(await handler(request));
       expect(response.statusCode).toBe(200);
 
       const payload = response.response as JsonRpcSuccess;
@@ -545,7 +658,7 @@ describe("MCP標準エンドポイント", () => {
         },
       };
 
-      const response = await handler(request);
+      const response = ensureResponse(await handler(request));
       expect(response.statusCode).toBe(200);
 
       const payload = response.response as JsonRpcSuccess;

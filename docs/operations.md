@@ -1,4 +1,16 @@
+---
+title: "運用と可観測性"
+category: "operations"
+tags:
+  - operations
+  - observability
+  - docs
+service: "kiri"
+---
+
 # 運用と可観測性
+
+> 関連: [KIRI 概要](./overview.md#kiri-概要) / [運用 Runbook](./runbook.md#運用-runbook) / [セキュリティとコンプライアンス](./security.md#セキュリティとコンプライアンス)
 
 ## SLO とメトリクス
 
@@ -17,6 +29,17 @@
 - **DuckDB ロック衝突**: 読み込みは許可し、書き込みはステージング→バッチに統一して再試行。
 - **依存解決不能**: `dst_kind="package"` として保持し、パス近接の重み付けを増やす。
 - **blame 計算コスト増**: 差分のみ逐次更新し、巨大ファイルは週次フル再計算に限定する。
+
+## ヒント辞書の運用
+
+ユーザーが `artifacts.hints` を指定しない抽象クエリでも確実に実装へ到達させるため、`hint_expansion` / `hint_dictionary` を定期的に更新する。
+
+1. **ログ計測**: 影響を調べたい間だけ `KIRI_HINT_LOG=1` を付けて `pnpm run eval:golden` などを実行すると、`hint_expansion` テーブルに展開履歴が残る（通常運用では書き込みコストを避けるため OFF）。
+2. **ログ確認**: `pnpm exec tsx scripts/diag/dump-hints.ts --db var/index.duckdb --repo . --limit 200` で直近の展開を確認できる。
+3. **辞書再構築**: 新しいログを基に `pnpm exec tsx scripts/diag/build-hint-dictionary.ts --db var/index.duckdb --repo . --min-freq 2` を実行すると、頻出ヒント→パスのマッピングが更新される。
+4. **TTL 清掃**: 長期間のログは `pnpm exec tsx scripts/diag/cleanup-hints.ts --db var/index.duckdb --days 14` で破棄し、DuckDB サイズ膨張を防ぐ。
+
+> メモ: 辞書は substring ヒントを入力に path ヒントへ昇格させるため、`context_bundle` は `dictionary:hint:<path>` という why タグを返す。Metadata だけでヒットしないドキュメントが増えてきたら辞書の更新を検討する。
 
 ## npm 公開フロー
 

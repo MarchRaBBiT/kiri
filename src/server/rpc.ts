@@ -1,8 +1,14 @@
+import path from "node:path";
+
 import packageJson from "../../package.json" with { type: "json" };
+import {
+  ADAPTIVE_K_CATEGORIES,
+  ADAPTIVE_K_CATEGORY_ALIASES,
+  ADAPTIVE_K_CATEGORY_SET,
+} from "../shared/adaptive-k-categories.js";
 import { maskValue } from "../shared/security/masker.js";
 
-const RESPONSE_MASK_SKIP_KEYS = ["path"];
-
+import { isValidBoostProfile, BOOST_PROFILES } from "./boost-profiles.js";
 import { ServerContext } from "./context.js";
 import { DegradeController } from "./fallbacks/degradeController.js";
 import {
@@ -11,6 +17,7 @@ import {
   FilesSearchParams,
   SemanticRerankParams,
   SnippetsGetParams,
+  SnippetsGetView,
   contextBundle,
   depsClosure,
   filesSearch,
@@ -19,6 +26,9 @@ import {
 } from "./handlers.js";
 import { MetricsRegistry } from "./observability/metrics.js";
 import { withSpan } from "./observability/tracing.js";
+import { selectProfileFromQuery } from "./profile-selector.js";
+
+const RESPONSE_MASK_SKIP_KEYS = ["path"];
 
 /**
  * WarningManager - 警告メッセージの表示を管理するクラス
@@ -206,7 +216,18 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       "- Keep generic errors or narration minimal; if you need them, append short suffixes or parentheses after the identifiers.\n" +
       "- Attach conditions or context as concise trailing phrases (e.g., 'conditional hook calls').\n\n" +
       "Before: 'Find where pagination breaks in React hooks error'\n" +
-      "After: 'useOrdersPagination src/orders/pagination.ts offByOne (React hooks error)'.",
+      "After: 'useOrdersPagination src/orders/pagination.ts offByOne (React hooks error)'.\n\n" +
+      "boost_profile options:\n" +
+      "- 'default': Prioritizes implementation files (src/app/, src/components/) over docs\n" +
+      "- 'docs': Prioritizes documentation (.md, .yaml) over implementation  \n" +
+      "- 'balanced': Equal weight for both docs and implementation\n" +
+      "- 'none': No file type boosting, pure BM25/keyword scoring\n\n" +
+      "Example: context_bundle({goal: 'state management design', boost_profile: 'balanced'})\n\n" +
+      "Metadata filtering:\n" +
+      "- Inline goal tokens such as `tag:observability`, `category:operations`, or `service:kiri` are stripped from the goal and applied as metadata hints so related docs surface alongside nearby implementation.\n" +
+      "- Provide an explicit `metadata_filters` object (e.g., { tags: ['observability'], 'docmeta.category': 'operations' }) to enforce structured filters; string or string[] values are accepted.\n" +
+      "- Supported prefixes include meta., metadata., docmeta., frontmatter., fm., yaml., and json., plus built-in aliases (tag/tags, category, service). `meta.*` behaves as a hint, while `docmeta.*`/`metadata.*` are strict doc-only filters.\n" +
+      "- Metadata filters refine and prioritize candidates but still require a concise goal; use `docmeta.*` when you need docs-only matches and `meta.*` to keep surrounding implementation eligible.",
     inputSchema: {
       type: "object",
       required: ["goal"],
@@ -244,9 +265,15 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         },
         boost_profile: {
           type: "string",
-          enum: ["default", "docs", "none"],
+          enum: ["default", "docs", "balanced", "none", "code"],
           description:
-            'File type boosting mode: "default" prioritizes implementation files (src/app/, src/components/), "docs" prioritizes documentation (*.md), "none" disables boosting. Default is "default".',
+            'File type boosting mode: "default" prioritizes implementation files (src/app/, src/components/), "code" strongly deprioritizes documentation and config files (95% penalty), "docs" prioritizes documentation (*.md), "balanced" applies equal weight to both docs and implementation, "none" disables boosting. Default is "default".',
+        },
+        path_prefix: {
+          type: "string",
+          pattern: "^(?!.*\\.\\.)[A-Za-z0-9_./\\-]+/?$",
+          description:
+            "Filter by path prefix (e.g., 'docs/', 'src/server/'). Path traversal ('..') is not allowed.",
         },
         artifacts: {
           type: "object",
@@ -268,6 +295,18 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
               description: "Recent diff content. Useful for understanding current changes.",
             },
           },
+        },
+        metadata_filters: {
+          type: "object",
+          additionalProperties: true,
+          description:
+            "Structured metadata filters applied in addition to the goal text. Keys may use prefixes (meta./metadata./docmeta./frontmatter./fm./yaml./json.) or aliases (tag/tags, category, service). Values can be strings or string arrays. Example: { tags: ['observability'], 'docmeta.category': 'operations' }.",
+        },
+        category: {
+          type: "string",
+          enum: [...ADAPTIVE_K_CATEGORIES],
+          description:
+            "Query category for adaptive K-value selection. Valid values: bugfix, testfail, debug, api, docs, feature, integration, performance. When provided, the system adjusts the number of results (K) based on typical needs for that category.",
         },
       },
     },
@@ -305,11 +344,15 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     name: "files_search",
     description:
       "Token-aware substring search for precise identifiers, error messages, or import fragments. Prefer this tool when you already know the exact string you need to locate; use `context_bundle` for exploratory work.\n\n" +
-      "Returns an array of `{path, matchLine, lang, ext, score}` objects with optional `preview`; the tool never mutates the repo. Set `compact: true` to omit previews entirely for maximum token savings. Empty queries raise an MCP error prompting you to provide a concrete keyword. If DuckDB is unavailable but the server runs with `--allow-degrade`, the same array shape is returned using filesystem-based fallbacks (with `lang`/`ext` set to null).\n\n" +
-      'Example: files_search({query: "AuthenticationError", path_prefix: "src/auth/"}) narrows to auth handlers. Invalid: files_search({query: ""}) reports that the query must be non-empty.',
+      "Returns an array of `{path, matchLine, lang, ext, score}` objects with optional `preview`; the tool never mutates the repo. Set `compact: true` to omit previews entirely for maximum token savings. Empty queries raise an MCP error unless `metadata_filters` are provided. If DuckDB is unavailable but the server runs with `--allow-degrade`, the same array shape is returned using filesystem-based fallbacks (with `lang`/`ext` set to null).\n\n" +
+      'Example: files_search({query: "", metadata_filters: { "docmeta.category": "operations" }}) lists runbooks for the operations category. Invalid: files_search({}) reports that either query or metadata_filters must be supplied.\n\n' +
+      "Metadata filtering:\n" +
+      "- Inline `tag:` / `category:` / `service:` tokens are parsed out of the query and treated as metadata hints, so docs and neighboring implementation stay ranked together.\n" +
+      "- The `metadata_filters` object accepts string or string[] values and supports the same prefixes/aliases as context_bundle (meta., metadata., docmeta., frontmatter., fm., yaml., json.). Use `docmeta.*` when you need doc-only matches; `meta.*` keeps implementations eligible.\n" +
+      '- Either a textual query or `metadata_filters` (or both) is required. Metadata-only searches are supported (tests cover `query:""` + filters) and are ideal when discovering runbooks by tag/category.',
     inputSchema: {
       type: "object",
-      required: ["query"],
+      required: [],
       additionalProperties: true,
       properties: {
         query: {
@@ -341,14 +384,20 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         },
         boost_profile: {
           type: "string",
-          enum: ["default", "docs", "none"],
+          enum: ["default", "docs", "balanced", "none", "code"],
           description:
-            'File type boosting mode: "default" prioritizes implementation files (src/app/, src/components/), "docs" prioritizes documentation (*.md), "none" disables boosting. Default is "default".',
+            'File type boosting mode: "default" prioritizes implementation files (src/app/, src/components/), "code" strongly deprioritizes documentation and config files (95% penalty), "docs" prioritizes documentation (*.md), "balanced" applies equal weight to both docs and implementation, "none" disables boosting. Default is "default".',
         },
         compact: {
           type: "boolean",
           description:
             "If true, omits previews to minimize response tokens. Pair with snippets_get for detail-on-demand workflows.",
+        },
+        metadata_filters: {
+          type: "object",
+          additionalProperties: true,
+          description:
+            "Structured metadata filters targeting YAML front matter or JSON docs. Keys may use meta./metadata./docmeta./frontmatter./fm./yaml./json. prefixes or aliases (tag/tags, category, service). Values accept strings or arrays. Example: { tags: ['observability'], 'docmeta.id': 'runbook-002' }.",
         },
       },
     },
@@ -358,7 +407,12 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     description:
       "Focused snippet retrieval by file path. The tool uses recorded symbol boundaries to return the smallest readable span, or falls back to the requested line window.\n\n" +
       "Returns {path, startLine, endLine, totalLines, symbolName, symbolKind} with optional `content`. Set `compact: true` to omit content, or `include_line_numbers: true` to prefix each line with its number; this is a read-only lookup. Missing `path`, binary files, or absent index entries raise an MCP error with guidance to re-run the indexer.\n\n" +
-      "Example: snippets_get({path: 'src/auth/login.ts'}) surfaces the enclosing function. Invalid: snippets_get({path: 'assets/logo.png'}) reports that binary snippets are unsupported.",
+      "Use the `view` parameter to control retrieval strategy:\n" +
+      "- 'auto' (default): Uses symbol boundaries if available, falls back to line window\n" +
+      "- 'symbol': Forces symbol-based snippets\n" +
+      "- 'lines': Uses line-based retrieval (respects start_line/end_line, ignores symbols)\n" +
+      "- 'full': Returns entire file from line 1 (start_line is ignored). Safety limit: 500 lines. If truncated, response includes `truncated: true`.\n\n" +
+      "Example: snippets_get({path: 'src/auth/login.ts'}) surfaces the enclosing function. snippets_get({path: 'src/config.ts', view: 'full'}) returns entire file. Invalid: snippets_get({path: 'assets/logo.png'}) reports that binary snippets are unsupported.",
     inputSchema: {
       type: "object",
       required: ["path"],
@@ -379,6 +433,12 @@ const TOOL_DESCRIPTORS: ToolDescriptor[] = [
           type: "boolean",
           description:
             "If true, prefixes each returned line with its line number (ignored when compact is true).",
+        },
+        view: {
+          type: "string",
+          enum: ["auto", "symbol", "lines", "full"],
+          description:
+            'Retrieval strategy: "auto" (default) uses symbol boundaries if available, "symbol" forces symbol-based snippets, "lines" uses line-based retrieval ignoring symbols, "full" returns entire file (up to 500 lines).',
         },
       },
     },
@@ -452,14 +512,31 @@ function parseFilesSearchParams(input: unknown): FilesSearchParams {
     params.limit = limit;
   }
 
-  // Parse boost_profile parameter
+  // Parse boost_profile parameter with dynamic selection support
   const boostProfile = record.boost_profile;
-  if (boostProfile === "default" || boostProfile === "docs" || boostProfile === "none") {
-    params.boost_profile = boostProfile;
+  const autoSelect = record.auto_select_profile === true;
+
+  if (typeof boostProfile === "string") {
+    // Explicit profile specified
+    if (isValidBoostProfile(boostProfile)) {
+      params.boost_profile = boostProfile;
+    } else {
+      throw new Error(
+        `Invalid boost_profile: "${boostProfile}". ` +
+          `Valid profiles are: ${Object.keys(BOOST_PROFILES).join(", ")}`
+      );
+    }
+  } else if (autoSelect && typeof params.query === "string") {
+    // Auto-select profile based on query text (for FilesSearch)
+    params.boost_profile = selectProfileFromQuery(params.query, "default");
   }
 
   if (typeof record.compact === "boolean") {
     params.compact = record.compact;
+  }
+
+  if (record.metadata_filters && typeof record.metadata_filters === "object") {
+    params.metadata_filters = record.metadata_filters as Record<string, string | string[]>;
   }
 
   return params;
@@ -491,6 +568,15 @@ function parseSnippetsGetParams(input: unknown): SnippetsGetParams {
   const includeLineNumbersValue = record.includeLineNumbers ?? record.include_line_numbers;
   if (typeof includeLineNumbersValue === "boolean") {
     params.includeLineNumbers = includeLineNumbersValue;
+  }
+  // Parse view parameter with validation
+  const validViews: SnippetsGetView[] = ["auto", "symbol", "lines", "full"];
+  if (typeof record.view === "string") {
+    if (validViews.includes(record.view as SnippetsGetView)) {
+      params.view = record.view as SnippetsGetView;
+    } else {
+      throw new Error(`Invalid view: "${record.view}". Valid values are: ${validViews.join(", ")}`);
+    }
   }
   return params;
 }
@@ -572,7 +658,20 @@ function parseContextBundleParams(input: unknown, context: ServerContext): Conte
     if (typeof artifactsRecord.last_diff === "string") {
       artifacts.last_diff = artifactsRecord.last_diff;
     }
-    if (artifacts.editing_path || artifacts.failing_tests || artifacts.last_diff) {
+    if (Array.isArray(artifactsRecord.hints)) {
+      const hints = artifactsRecord.hints
+        .map((value) => (typeof value === "string" ? value.trim() : ""))
+        .filter((value): value is string => value.length > 0);
+      if (hints.length > 0) {
+        artifacts.hints = hints;
+      }
+    }
+    if (
+      artifacts.editing_path ||
+      artifacts.failing_tests ||
+      artifacts.last_diff ||
+      (artifacts.hints && artifacts.hints.length > 0)
+    ) {
       params.artifacts = artifacts;
     }
   }
@@ -583,8 +682,25 @@ function parseContextBundleParams(input: unknown, context: ServerContext): Conte
 
   // Parse boost_profile parameter
   const boostProfile = record.boost_profile;
-  if (boostProfile === "default" || boostProfile === "docs" || boostProfile === "none") {
-    params.boost_profile = boostProfile;
+  if (typeof boostProfile === "string") {
+    if (isValidBoostProfile(boostProfile)) {
+      params.boost_profile = boostProfile;
+    } else {
+      throw new Error(
+        `Invalid boost_profile: "${boostProfile}". ` +
+          `Valid profiles are: ${Object.keys(BOOST_PROFILES).join(", ")}`
+      );
+    }
+  }
+
+  if (typeof record.path_prefix === "string") {
+    if (record.path_prefix.includes("..")) {
+      throw new Error("path_prefix cannot contain '..' (path traversal not allowed)");
+    }
+    const normalizedPrefix = path.posix
+      .normalize(record.path_prefix.replace(/\\/g, "/"))
+      .replace(/^\/+/, "");
+    params.path_prefix = normalizedPrefix;
   }
 
   // Parse compact parameter (default: true for token efficiency)
@@ -607,6 +723,28 @@ function parseContextBundleParams(input: unknown, context: ServerContext): Conte
   const includeTokensEstimate = record.includeTokensEstimate ?? record.include_tokens_estimate;
   if (typeof includeTokensEstimate === "boolean") {
     params.includeTokensEstimate = includeTokensEstimate;
+  }
+
+  if (record.metadata_filters && typeof record.metadata_filters === "object") {
+    params.metadata_filters = record.metadata_filters as Record<string, string | string[]>;
+  }
+
+  // Parse category parameter for AdaptiveK
+  if (typeof record.category === "string") {
+    const trimmedCategory = record.category.trim();
+    if (trimmedCategory.length > 0) {
+      const normalizedCategory = ADAPTIVE_K_CATEGORY_ALIASES[trimmedCategory] ?? trimmedCategory;
+      if (ADAPTIVE_K_CATEGORY_SET.has(normalizedCategory)) {
+        params.category = normalizedCategory;
+      } else {
+        context.warningManager.warnForRequest(
+          "category-invalid",
+          `category "${trimmedCategory}" is not supported. Valid values: ${ADAPTIVE_K_CATEGORIES.join(
+            ", "
+          )}. The value was ignored.`
+        );
+      }
+    }
   }
 
   return params;
@@ -772,6 +910,8 @@ export function createRpcHandler(
             serverInfo: SERVER_INFO,
             pid: process.pid,
             uptime: process.uptime(),
+            db: context.databasePath ? path.resolve(context.databasePath) : undefined,
+            repo: context.repoPath ? path.resolve(context.repoPath) : undefined,
           };
           break;
         }
@@ -861,13 +1001,18 @@ export function createRpcHandler(
         // Legacy direct method invocation (backward compatibility)
         case "context_bundle": {
           const scopedContext = buildRequestContext();
-          result = await executeToolByName(
-            "context_bundle",
-            payload.params,
-            scopedContext,
-            degrade,
-            allowDegrade
-          );
+          try {
+            result = await executeToolByName(
+              "context_bundle",
+              payload.params,
+              scopedContext,
+              degrade,
+              allowDegrade
+            );
+          } catch (error) {
+            console.error("context_bundle execution error:", error);
+            throw error;
+          }
           break;
         }
         case "semantic_rerank": {

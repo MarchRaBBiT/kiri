@@ -1,57 +1,182 @@
-# Scoring weight profiles for context_bundle
-# Each profile defines weights for different ranking signals
-
 default:
-  textMatch: 1.0 # Text/keyword match weight (increased to prioritize literal matches)
-  pathMatch: 1.5 # Path-based match weight (new - prioritizes files with keywords in paths)
-  editingPath: 2.0 # Currently editing file weight
-  dependency: 0.6 # Dependency relationship weight (increased to prioritize connected implementation files)
-  proximity: 0.25 # Same directory weight
-  structural: 0.6 # Structural similarity weight (reduced to prevent false positives from similar structure)
-  docPenaltyMultiplier: 0.5 # Multiplicative penalty for docs (0.5 = 50% reduction)
-  configPenaltyMultiplier: 0.05 # Multiplicative penalty for config files (0.05 = 95% reduction)
-  implBoostMultiplier: 1.3 # Multiplicative boost for implementation files (1.3 = 30% boost)
-
+  textMatch: 1.0
+  pathMatch: 1.2
+  editingPath: 1.8
+  dependency: 1.0
+  proximity: 0.3
+  structural: 0.9
+  docPenaltyMultiplier: 0.6
+  configPenaltyMultiplier: 0.05
+  implBoostMultiplier: 1.5
+  blacklistPenaltyMultiplier: 0.01
+  testPenaltyMultiplier: 0.02
+  lockPenaltyMultiplier: 0.01
+  # Graph Layer parameters (Phase 3.2)
+  graphInbound: 0.5 # Inbound dependency boost
+  graphImportance: 0.3 # PageRank-like importance score
+  graphDecay: 0.5 # Depth decay factor (score / (depth + 1)^decay)
+  graphMaxDepth: 3 # Maximum BFS depth
+  cochange: 3.0 # Co-change boost (enabled by default)
+feature:
+  textMatch: 1.0
+  pathMatch: 1.4
+  editingPath: 1.8
+  dependency: 1.1
+  proximity: 0.35
+  structural: 0.95
+  docPenaltyMultiplier: 0.5
+  configPenaltyMultiplier: 0.05
+  implBoostMultiplier: 1.5
+  blacklistPenaltyMultiplier: 0.01
+  testPenaltyMultiplier: 0.02
+  lockPenaltyMultiplier: 0.01
+  graphInbound: 0.5
+  graphImportance: 0.35
+  graphDecay: 0.5
+  graphMaxDepth: 3
+  cochange: 0.0
 bugfix:
+  textMatch: 1.0
+  pathMatch: 1.3
+  editingPath: 1.6
+  dependency: 1.2
+  proximity: 0.3
+  structural: 0.85
+  docPenaltyMultiplier: 0.5
+  configPenaltyMultiplier: 0.05
+  implBoostMultiplier: 1.4
+  blacklistPenaltyMultiplier: 0.01
+  testPenaltyMultiplier: 0.02
+  lockPenaltyMultiplier: 0.01
+  graphInbound: 0.6
+  graphImportance: 0.4
+  graphDecay: 0.5
+  graphMaxDepth: 3
+  cochange: 0.0
+debug:
+  textMatch: 1.0
+  pathMatch: 1.3
+  editingPath: 1.7
+  dependency: 1.2
+  proximity: 0.35
+  structural: 0.9
+  docPenaltyMultiplier: 0.5
+  configPenaltyMultiplier: 0.05
+  implBoostMultiplier: 1.45
+  blacklistPenaltyMultiplier: 0.01
+  testPenaltyMultiplier: 0.02
+  lockPenaltyMultiplier: 0.01
+  graphInbound: 0.55
+  graphImportance: 0.35
+  graphDecay: 0.5
+  graphMaxDepth: 3
+  cochange: 0.0
+api:
   textMatch: 1.0
   pathMatch: 1.5
   editingPath: 1.8
-  dependency: 0.7 # Higher: bugs often in dependencies
-  proximity: 0.35
-  structural: 0.7 # Reduced: prevent canvas-agent matching when searching page-agent
-  docPenaltyMultiplier: 0.5
+  dependency: 1.0
+  proximity: 0.3
+  structural: 0.95
+  docPenaltyMultiplier: 0.55
   configPenaltyMultiplier: 0.05
-  implBoostMultiplier: 1.3
-
+  implBoostMultiplier: 1.4
+  blacklistPenaltyMultiplier: 0.01
+  testPenaltyMultiplier: 0.02
+  lockPenaltyMultiplier: 0.01
+  graphInbound: 0.5
+  graphImportance: 0.3
+  graphDecay: 0.5
+  graphMaxDepth: 3
+  cochange: 0.0
+editor:
+  textMatch: 1.0
+  pathMatch: 1.4
+  editingPath: 1.9
+  dependency: 1.0
+  proximity: 0.4
+  structural: 0.9
+  docPenaltyMultiplier: 0.6
+  configPenaltyMultiplier: 0.05
+  implBoostMultiplier: 1.4
+  blacklistPenaltyMultiplier: 0.01
+  testPenaltyMultiplier: 0.02
+  lockPenaltyMultiplier: 0.01
+  graphInbound: 0.45
+  graphImportance: 0.25
+  graphDecay: 0.5
+  graphMaxDepth: 3
+  cochange: 0.0
 testfail:
   textMatch: 1.0
   pathMatch: 1.5
   editingPath: 1.6
-  dependency: 0.85 # Very high: failed tests reveal dependencies
+  dependency: 0.85
   proximity: 0.3
-  structural: 0.7 # Reduced: focus on actual test dependencies
+  structural: 0.8
   docPenaltyMultiplier: 0.5
   configPenaltyMultiplier: 0.05
   implBoostMultiplier: 1.3
-
+  blacklistPenaltyMultiplier: 0.01
+  testPenaltyMultiplier: 0.2 # testfailではテストファイルへのペナルティを緩和（80%削減、他は98%削減）
+  lockPenaltyMultiplier: 0.01
+  graphInbound: 0.4
+  graphImportance: 0.3
+  graphDecay: 0.5
+  graphMaxDepth: 3
+  cochange: 0.0
 typeerror:
   textMatch: 1.0
   pathMatch: 1.5
   editingPath: 1.4
   dependency: 0.6
-  proximity: 0.4 # Higher: type errors cluster in modules
-  structural: 0.6 # Already balanced for type analysis
+  proximity: 0.4
+  structural: 0.6
   docPenaltyMultiplier: 0.5
   configPenaltyMultiplier: 0.05
   implBoostMultiplier: 1.3
-
-feature:
+  blacklistPenaltyMultiplier: 0.01
+  testPenaltyMultiplier: 0.02
+  lockPenaltyMultiplier: 0.01
+  graphInbound: 0.35
+  graphImportance: 0.25
+  graphDecay: 0.5
+  graphMaxDepth: 3
+  cochange: 0.0
+# Graph Layer A/B comparison profiles
+graph-off:
   textMatch: 1.0
-  pathMatch: 1.5
-  editingPath: 1.5
-  dependency: 0.45 # Lower: new features less dependent
-  proximity: 0.5 # Higher: features cluster spatially
-  structural: 0.6 # Reduced: focus on actual feature files
-  docPenaltyMultiplier: 0.5
+  pathMatch: 1.2
+  editingPath: 1.8
+  dependency: 1.0
+  proximity: 0.3
+  structural: 0.9
+  docPenaltyMultiplier: 0.6
   configPenaltyMultiplier: 0.05
-  implBoostMultiplier: 1.3
+  implBoostMultiplier: 1.5
+  blacklistPenaltyMultiplier: 0.01
+  testPenaltyMultiplier: 0.02
+  lockPenaltyMultiplier: 0.01
+  graphInbound: 0.0
+  graphImportance: 0.0
+  graphDecay: 0.5
+  graphMaxDepth: 3
+  cochange: 0.0
+graph-on:
+  textMatch: 1.0
+  pathMatch: 1.2
+  editingPath: 1.8
+  dependency: 1.0
+  proximity: 0.3
+  structural: 0.9
+  docPenaltyMultiplier: 0.6
+  configPenaltyMultiplier: 0.05
+  implBoostMultiplier: 1.5
+  blacklistPenaltyMultiplier: 0.01
+  testPenaltyMultiplier: 0.02
+  lockPenaltyMultiplier: 0.01
+  graphInbound: 0.5
+  graphImportance: 0.3
+  graphDecay: 0.5
+  graphMaxDepth: 3
+  cochange: 3.0 # 2.0 → 3.0: further increase to strengthen co-change signal

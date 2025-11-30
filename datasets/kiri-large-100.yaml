@@ -1,0 +1,1146 @@
+# Large-scale dataset for Issue #77 - 100 queries with Japanese support
+schemaVersion: "1.0.0"
+name: "kiri-large-100"
+datasetId: "kiri-large"
+description: "Large-scale dataset (100 queries) for profile optimization with Japanese/English support."
+version: "v2025-11-17"
+
+defaultParams:
+  k: 10
+  timeoutMs: 30000
+
+queries:
+  # ========== Test Failure Queries (15) ==========
+  - id: "q-testfail-01"
+    text: "test failed in authentication module"
+    goal: "Find test files for authentication"
+    metadata:
+      category: "testfail"
+      expected:
+        - "external/assay-kit/tests/runner/index.spec.ts"
+
+  - id: "q-testfail-02"
+    text: "テストが失敗しています"
+    goal: "Find failing test implementation"
+    metadata:
+      category: "testfail"
+      expected:
+        - "external/assay-kit/tests/stats/mann-whitney.spec.ts"
+
+  - id: "q-testfail-03"
+    text: "unit test broken after refactor"
+    goal: "Locate broken unit tests"
+    metadata:
+      category: "testfail"
+      expected:
+        - "external/assay-kit/tests/metrics/ranking.spec.ts"
+
+  - id: "q-testfail-04"
+    text: "integration test timeout issue"
+    goal: "Find integration test timeout"
+    metadata:
+      category: "testfail"
+      expected:
+        - "external/assay-kit/tests/runner/comparison.spec.ts"
+
+  - id: "q-testfail-05"
+    text: "テストスイートのエラー修正"
+    goal: "Fix test suite errors"
+    metadata:
+      category: "testfail"
+      expected:
+        - "external/assay-kit/tests/cli/commands/evaluate.spec.ts"
+
+  - id: "q-testfail-06"
+    text: "spec file failing consistently"
+    goal: "Find failing spec file"
+    metadata:
+      category: "testfail"
+      expected:
+        - "external/assay-kit/tests/dataset/loader.spec.ts"
+
+  - id: "q-testfail-07"
+    text: "mock adapter test case broken"
+    goal: "Fix mock adapter tests"
+    metadata:
+      category: "testfail"
+      expected:
+        - "external/assay-kit/tests/adapters/mock.spec.ts"
+
+  - id: "q-testfail-08"
+    text: "test coverage dropped below threshold"
+    goal: "Find uncovered code paths"
+    metadata:
+      category: "testfail"
+      expected:
+        - "external/assay-kit/src/runner/index.ts"
+
+  - id: "q-testfail-09"
+    text: "テストケースがタイムアウト"
+    goal: "Fix test timeout"
+    metadata:
+      category: "testfail"
+      expected:
+        - "external/assay-kit/tests/runner/orchestrator.spec.ts"
+
+  - id: "q-testfail-10"
+    text: "flaky test needs stabilization"
+    goal: "Stabilize flaky tests"
+    metadata:
+      category: "testfail"
+      expected:
+        - "external/assay-kit/tests/stats/paired-t.spec.ts"
+
+  - id: "q-testfail-11"
+    text: "test assertion failed unexpectedly"
+    goal: "Debug failed assertion"
+    metadata:
+      category: "testfail"
+      expected:
+        - "external/assay-kit/tests/metrics/precision.spec.ts"
+
+  - id: "q-testfail-12"
+    text: "snapshot test mismatch"
+    goal: "Update snapshot tests"
+    metadata:
+      category: "testfail"
+      expected:
+        - "external/assay-kit/tests/reporting/markdown.spec.ts"
+
+  - id: "q-testfail-13"
+    text: "e2e test failing in CI"
+    goal: "Fix CI test failures"
+    metadata:
+      category: "testfail"
+      expected:
+        - "external/assay-kit/tests/e2e/full-workflow.spec.ts"
+
+  - id: "q-testfail-14"
+    text: "ユニットテストのモックエラー"
+    goal: "Fix mock errors in unit tests"
+    metadata:
+      category: "testfail"
+      expected:
+        - "external/assay-kit/tests/adapters/search.spec.ts"
+
+  - id: "q-testfail-15"
+    text: "test suite setup failure"
+    goal: "Fix test suite setup"
+    metadata:
+      category: "testfail"
+      expected:
+        - "external/assay-kit/tests/setup.ts"
+
+  # ========== Type Error Queries (15) ==========
+  - id: "q-typeerror-01"
+    text: "type error cannot assign string to number"
+    goal: "Fix type assignment error"
+    metadata:
+      category: "typeerror"
+      expected:
+        - "external/assay-kit/src/types/metrics.ts"
+
+  - id: "q-typeerror-02"
+    text: "TypeScriptエラー: プロパティが存在しません"
+    goal: "Fix missing property error"
+    metadata:
+      category: "typeerror"
+      expected:
+        - "external/assay-kit/src/types/adapters.ts"
+
+  - id: "q-typeerror-03"
+    text: "property does not exist on type Query"
+    goal: "Fix Query type definition"
+    metadata:
+      category: "typeerror"
+      expected:
+        - "external/assay-kit/src/types/query.ts"
+
+  - id: "q-typeerror-04"
+    text: "interface implementation missing method"
+    goal: "Implement missing interface method"
+    metadata:
+      category: "typeerror"
+      expected:
+        - "external/assay-kit/src/types/adapters.ts"
+
+  - id: "q-typeerror-05"
+    text: "型定義の不一致を修正"
+    goal: "Fix type mismatch"
+    metadata:
+      category: "typeerror"
+      expected:
+        - "external/assay-kit/src/types/dataset.ts"
+
+  - id: "q-typeerror-06"
+    text: "typescript error in generic type parameter"
+    goal: "Fix generic type issue"
+    metadata:
+      category: "typeerror"
+      expected:
+        - "external/assay-kit/src/runner/types.ts"
+
+  - id: "q-typeerror-07"
+    text: "type annotation required for variable"
+    goal: "Add type annotation"
+    metadata:
+      category: "typeerror"
+      expected:
+        - "external/assay-kit/src/runner/index.ts"
+
+  - id: "q-typeerror-08"
+    text: "union type discrimination error"
+    goal: "Fix union type handling"
+    metadata:
+      category: "typeerror"
+      expected:
+        - "external/assay-kit/src/types/result.ts"
+
+  - id: "q-typeerror-09"
+    text: "型推論が失敗しています"
+    goal: "Fix type inference"
+    metadata:
+      category: "typeerror"
+      expected:
+        - "external/assay-kit/src/metrics/index.ts"
+
+  - id: "q-typeerror-10"
+    text: "cannot find module type declaration"
+    goal: "Add missing type declaration"
+    metadata:
+      category: "typeerror"
+      expected:
+        - "external/assay-kit/src/types/index.ts"
+
+  - id: "q-typeerror-11"
+    text: "type guard not working correctly"
+    goal: "Fix type guard implementation"
+    metadata:
+      category: "typeerror"
+      expected:
+        - "external/assay-kit/src/utils/type-guards.ts"
+
+  - id: "q-typeerror-12"
+    text: "返り値の型が一致しません"
+    goal: "Fix return type mismatch"
+    metadata:
+      category: "typeerror"
+      expected:
+        - "external/assay-kit/src/runner/comparison.ts"
+
+  - id: "q-typeerror-13"
+    text: "optional property type error"
+    goal: "Fix optional property handling"
+    metadata:
+      category: "typeerror"
+      expected:
+        - "external/assay-kit/src/types/config.ts"
+
+  - id: "q-typeerror-14"
+    text: "async function return type mismatch"
+    goal: "Fix async return type"
+    metadata:
+      category: "typeerror"
+      expected:
+        - "external/assay-kit/src/runner/orchestrator.ts"
+
+  - id: "q-typeerror-15"
+    text: "ジェネリック型の制約エラー"
+    goal: "Fix generic constraint"
+    metadata:
+      category: "typeerror"
+      expected:
+        - "external/assay-kit/src/types/generics.ts"
+
+  # ========== Bug Fix Queries (15) ==========
+  - id: "q-bugfix-01"
+    text: "fix crash in dataset loader"
+    goal: "Fix dataset loader crash"
+    metadata:
+      category: "bugfix"
+      expected:
+        - "external/assay-kit/src/dataset/loader.ts"
+
+  - id: "q-bugfix-02"
+    text: "認証バグの修正が必要"
+    goal: "Fix authentication bug"
+    metadata:
+      category: "bugfix"
+      expected:
+        - "external/assay-kit/src/runner/index.ts"
+
+  - id: "q-bugfix-03"
+    text: "resolve memory leak in runner"
+    goal: "Fix memory leak"
+    metadata:
+      category: "bugfix"
+      expected:
+        - "external/assay-kit/src/runner/orchestrator.ts"
+
+  - id: "q-bugfix-04"
+    text: "app crashes on invalid input"
+    goal: "Fix crash on invalid input"
+    metadata:
+      category: "bugfix"
+      expected:
+        - "external/assay-kit/src/dataset/validator.ts"
+
+  - id: "q-bugfix-05"
+    text: "リグレッションバグの調査"
+    goal: "Investigate regression bug"
+    metadata:
+      category: "bugfix"
+      expected:
+        - "external/assay-kit/src/runner/comparison.ts"
+
+  - id: "q-bugfix-06"
+    text: "broken error handling in CLI"
+    goal: "Fix CLI error handling"
+    metadata:
+      category: "bugfix"
+      expected:
+        - "external/assay-kit/src/cli/commands/evaluate.ts"
+
+  - id: "q-bugfix-07"
+    text: "race condition in worker pool"
+    goal: "Fix race condition"
+    metadata:
+      category: "bugfix"
+      expected:
+        - "external/assay-kit/src/runtime/worker-pool.ts"
+
+  - id: "q-bugfix-08"
+    text: "null pointer exception in stats"
+    goal: "Fix null pointer"
+    metadata:
+      category: "bugfix"
+      expected:
+        - "external/assay-kit/src/stats/mann-whitney.ts"
+
+  - id: "q-bugfix-09"
+    text: "バリデーションエラーが発生"
+    goal: "Fix validation error"
+    metadata:
+      category: "bugfix"
+      expected:
+        - "external/assay-kit/src/dataset/schemas/dataset.schema.ts"
+
+  - id: "q-bugfix-10"
+    text: "incorrect metric calculation bug"
+    goal: "Fix metric calculation"
+    metadata:
+      category: "bugfix"
+      expected:
+        - "external/assay-kit/src/metrics/ranking.ts"
+
+  - id: "q-bugfix-11"
+    text: "plugin initialization error"
+    goal: "Fix plugin init error"
+    metadata:
+      category: "bugfix"
+      expected:
+        - "external/assay-kit/src/plugins/registry.ts"
+
+  - id: "q-bugfix-12"
+    text: "データ破損の修正"
+    goal: "Fix data corruption"
+    metadata:
+      category: "bugfix"
+      expected:
+        - "external/assay-kit/src/dataset/loader.ts"
+
+  - id: "q-bugfix-13"
+    text: "comparison results not saved"
+    goal: "Fix result saving bug"
+    metadata:
+      category: "bugfix"
+      expected:
+        - "external/assay-kit/src/reporting/json.ts"
+
+  - id: "q-bugfix-14"
+    text: "configuration not loading correctly"
+    goal: "Fix config loading"
+    metadata:
+      category: "bugfix"
+      expected:
+        - "external/assay-kit/src/config/loader.ts"
+
+  - id: "q-bugfix-15"
+    text: "出力フォーマットが壊れている"
+    goal: "Fix output format"
+    metadata:
+      category: "bugfix"
+      expected:
+        - "external/assay-kit/src/reporting/markdown.ts"
+
+  # ========== Debug Queries (10) ==========
+  - id: "q-debug-01"
+    text: "debug runner execution flow"
+    goal: "Trace runner execution"
+    metadata:
+      category: "debug"
+      expected:
+        - "external/assay-kit/src/runner/index.ts"
+
+  - id: "q-debug-02"
+    text: "デバッグログを追加したい"
+    goal: "Add debug logging"
+    metadata:
+      category: "debug"
+      expected:
+        - "external/assay-kit/src/plugins/logger.ts"
+
+  - id: "q-debug-03"
+    text: "trace statistical analysis steps"
+    goal: "Trace stats analysis"
+    metadata:
+      category: "debug"
+      expected:
+        - "external/assay-kit/src/runner/statistical-analyzer.ts"
+
+  - id: "q-debug-04"
+    text: "inspect worker pool scheduling"
+    goal: "Debug worker scheduling"
+    metadata:
+      category: "debug"
+      expected:
+        - "external/assay-kit/src/runtime/worker-pool.ts"
+
+  - id: "q-debug-05"
+    text: "パフォーマンス問題のトラブルシューティング"
+    goal: "Troubleshoot performance"
+    metadata:
+      category: "debug"
+      expected:
+        - "external/assay-kit/src/tuning/orchestrator.ts"
+
+  - id: "q-debug-06"
+    text: "console log missing in adapter"
+    goal: "Add console logging"
+    metadata:
+      category: "debug"
+      expected:
+        - "external/assay-kit/src/adapters/mock.ts"
+
+  - id: "q-debug-07"
+    text: "診断情報の出力方法"
+    goal: "Output diagnostic info"
+    metadata:
+      category: "debug"
+      expected:
+        - "external/assay-kit/src/reporting/index.ts"
+
+  - id: "q-debug-08"
+    text: "troubleshoot pairing policy issue"
+    goal: "Debug pairing policy"
+    metadata:
+      category: "debug"
+      expected:
+        - "external/assay-kit/src/runner/comparison.ts"
+
+  - id: "q-debug-09"
+    text: "debugger breakpoint locations"
+    goal: "Find debug entry points"
+    metadata:
+      category: "debug"
+      expected:
+        - "external/assay-kit/src/cli/main.ts"
+
+  - id: "q-debug-10"
+    text: "実行トレースの確認"
+    goal: "Check execution trace"
+    metadata:
+      category: "debug"
+      expected:
+        - "external/assay-kit/src/runner/orchestrator.ts"
+
+  # ========== API Queries (10) ==========
+  - id: "q-api-01"
+    text: "add new REST API endpoint"
+    goal: "Implement new endpoint"
+    metadata:
+      category: "api"
+      expected:
+        - "external/assay-kit/src/cli/commands/evaluate.ts"
+
+  - id: "q-api-02"
+    text: "APIエンドポイントの実装"
+    goal: "Implement API endpoint"
+    metadata:
+      category: "api"
+      expected:
+        - "external/assay-kit/src/runner/index.ts"
+
+  - id: "q-api-03"
+    text: "GraphQL resolver implementation"
+    goal: "Add GraphQL resolver"
+    metadata:
+      category: "api"
+      expected:
+        - "external/assay-kit/src/types/adapters.ts"
+
+  - id: "q-api-04"
+    text: "HTTP request handler logic"
+    goal: "Implement request handler"
+    metadata:
+      category: "api"
+      expected:
+        - "external/assay-kit/src/cli/commands/compare.ts"
+
+  - id: "q-api-05"
+    text: "レスポンスフォーマットの変更"
+    goal: "Change response format"
+    metadata:
+      category: "api"
+      expected:
+        - "external/assay-kit/src/reporting/json.ts"
+
+  - id: "q-api-06"
+    text: "API route controller implementation"
+    goal: "Implement route controller"
+    metadata:
+      category: "api"
+      expected:
+        - "external/assay-kit/src/cli/commands/types.ts"
+
+  - id: "q-api-07"
+    text: "request validation middleware"
+    goal: "Add validation middleware"
+    metadata:
+      category: "api"
+      expected:
+        - "external/assay-kit/src/dataset/validator.ts"
+
+  - id: "q-api-08"
+    text: "エンドポイントのエラーハンドリング"
+    goal: "Add error handling"
+    metadata:
+      category: "api"
+      expected:
+        - "external/assay-kit/src/errors/index.ts"
+
+  - id: "q-api-09"
+    text: "API response schema definition"
+    goal: "Define response schema"
+    metadata:
+      category: "api"
+      expected:
+        - "external/assay-kit/src/types/result.ts"
+
+  - id: "q-api-10"
+    text: "JSONレスポンスの構造"
+    goal: "Review JSON response structure"
+    metadata:
+      category: "api"
+      expected:
+        - "external/assay-kit/src/reporting/json.ts"
+
+  # ========== Editor/UI Queries (10) ==========
+  - id: "q-editor-01"
+    text: "fix component rendering issue"
+    goal: "Fix render bug"
+    metadata:
+      category: "editor"
+      expected:
+        - "external/assay-kit/src/reporting/markdown.ts"
+
+  - id: "q-editor-02"
+    text: "UI表示の問題を修正"
+    goal: "Fix UI display issue"
+    metadata:
+      category: "editor"
+      expected:
+        - "external/assay-kit/src/reporting/index.ts"
+
+  - id: "q-editor-03"
+    text: "layout component structure"
+    goal: "Review layout component"
+    metadata:
+      category: "editor"
+      expected:
+        - "external/assay-kit/src/reporting/markdown.ts"
+
+  - id: "q-editor-04"
+    text: "view rendering performance"
+    goal: "Optimize view rendering"
+    metadata:
+      category: "editor"
+      expected:
+        - "external/assay-kit/src/reporting/json.ts"
+
+  - id: "q-editor-05"
+    text: "コンポーネントのスタイル調整"
+    goal: "Adjust component styles"
+    metadata:
+      category: "editor"
+      expected:
+        - "external/assay-kit/src/reporting/markdown.ts"
+
+  - id: "q-editor-06"
+    text: "display formatter implementation"
+    goal: "Implement display formatter"
+    metadata:
+      category: "editor"
+      expected:
+        - "external/assay-kit/src/reporting/formatters.ts"
+
+  - id: "q-editor-07"
+    text: "editor state management"
+    goal: "Manage editor state"
+    metadata:
+      category: "editor"
+      expected:
+        - "external/assay-kit/src/cli/state.ts"
+
+  - id: "q-editor-08"
+    text: "UIコンポーネントの統合"
+    goal: "Integrate UI components"
+    metadata:
+      category: "editor"
+      expected:
+        - "external/assay-kit/src/reporting/index.ts"
+
+  - id: "q-editor-09"
+    text: "render output to console"
+    goal: "Render console output"
+    metadata:
+      category: "editor"
+      expected:
+        - "external/assay-kit/src/reporting/console.ts"
+
+  - id: "q-editor-10"
+    text: "レイアウトの最適化"
+    goal: "Optimize layout"
+    metadata:
+      category: "editor"
+      expected:
+        - "external/assay-kit/src/reporting/markdown.ts"
+
+  # ========== Feature Development Queries (15) ==========
+  - id: "q-feature-01"
+    text: "add new feature for baseline comparison"
+    goal: "Implement baseline comparison"
+    metadata:
+      category: "feature"
+      expected:
+        - "external/assay-kit/src/baseline/filesystem.ts"
+
+  - id: "q-feature-02"
+    text: "新機能: プラグインシステム"
+    goal: "Implement plugin system"
+    metadata:
+      category: "feature"
+      expected:
+        - "external/assay-kit/src/plugins/registry.ts"
+
+  - id: "q-feature-03"
+    text: "implement statistical test support"
+    goal: "Add statistical tests"
+    metadata:
+      category: "feature"
+      expected:
+        - "external/assay-kit/src/stats/mann-whitney.ts"
+
+  - id: "q-feature-04"
+    text: "create new reporting format"
+    goal: "Add new report format"
+    metadata:
+      category: "feature"
+      expected:
+        - "external/assay-kit/src/reporting/markdown.ts"
+
+  - id: "q-feature-05"
+    text: "メトリクス計算機能の追加"
+    goal: "Add metrics calculation"
+    metadata:
+      category: "feature"
+      expected:
+        - "external/assay-kit/src/metrics/index.ts"
+
+  - id: "q-feature-06"
+    text: "build orchestrator tuning system"
+    goal: "Build tuning system"
+    metadata:
+      category: "feature"
+      expected:
+        - "external/assay-kit/src/tuning/orchestrator.ts"
+
+  - id: "q-feature-07"
+    text: "develop comparison runner"
+    goal: "Implement comparison runner"
+    metadata:
+      category: "feature"
+      expected:
+        - "external/assay-kit/src/runner/comparison.ts"
+
+  - id: "q-feature-08"
+    text: "新しいアダプターの実装"
+    goal: "Implement new adapter"
+    metadata:
+      category: "feature"
+      expected:
+        - "external/assay-kit/src/adapters/mock.ts"
+
+  - id: "q-feature-09"
+    text: "create dataset validation feature"
+    goal: "Add dataset validation"
+    metadata:
+      category: "feature"
+      expected:
+        - "external/assay-kit/src/dataset/validator.ts"
+
+  - id: "q-feature-10"
+    text: "implement CLI command framework"
+    goal: "Build CLI framework"
+    metadata:
+      category: "feature"
+      expected:
+        - "external/assay-kit/src/cli/main.ts"
+
+  - id: "q-feature-11"
+    text: "依存関係解決機能の実装"
+    goal: "Implement dependency resolution"
+    metadata:
+      category: "feature"
+      expected:
+        - "external/assay-kit/src/plugins/dependencies.ts"
+
+  - id: "q-feature-12"
+    text: "add worker pool concurrency"
+    goal: "Add concurrency control"
+    metadata:
+      category: "feature"
+      expected:
+        - "external/assay-kit/src/runtime/worker-pool.ts"
+
+  - id: "q-feature-13"
+    text: "develop summary builder"
+    goal: "Build summary generator"
+    metadata:
+      category: "feature"
+      expected:
+        - "external/assay-kit/src/runner/summary.ts"
+
+  - id: "q-feature-14"
+    text: "ランキングメトリクスの開発"
+    goal: "Develop ranking metrics"
+    metadata:
+      category: "feature"
+      expected:
+        - "external/assay-kit/src/metrics/ranking.ts"
+
+  - id: "q-feature-15"
+    text: "implement effect size calculation"
+    goal: "Add effect size metrics"
+    metadata:
+      category: "feature"
+      expected:
+        - "external/assay-kit/src/stats/rank-biserial.ts"
+
+  # ========== Performance Queries (10) ==========
+  - id: "q-performance-01"
+    text: "slow orchestrator execution"
+    goal: "Optimize orchestrator"
+    metadata:
+      category: "performance"
+      expected:
+        - "external/assay-kit/src/tuning/orchestrator.ts"
+
+  - id: "q-performance-02"
+    text: "パフォーマンス最適化が必要"
+    goal: "Optimize performance"
+    metadata:
+      category: "performance"
+      expected:
+        - "external/assay-kit/src/runner/index.ts"
+
+  - id: "q-performance-03"
+    text: "latency bottleneck in metrics"
+    goal: "Fix metrics bottleneck"
+    metadata:
+      category: "performance"
+      expected:
+        - "external/assay-kit/src/metrics/latency.ts"
+
+  - id: "q-performance-04"
+    text: "worker pool scheduling overhead"
+    goal: "Reduce scheduling overhead"
+    metadata:
+      category: "performance"
+      expected:
+        - "external/assay-kit/src/runtime/worker-pool.ts"
+
+  - id: "q-performance-05"
+    text: "メモリ使用量の削減"
+    goal: "Reduce memory usage"
+    metadata:
+      category: "performance"
+      expected:
+        - "external/assay-kit/src/runner/orchestrator.ts"
+
+  - id: "q-performance-06"
+    text: "optimize comparison algorithm"
+    goal: "Optimize comparison"
+    metadata:
+      category: "performance"
+      expected:
+        - "external/assay-kit/src/runner/comparison.ts"
+
+  - id: "q-performance-07"
+    text: "dataset loading is slow"
+    goal: "Speed up dataset loading"
+    metadata:
+      category: "performance"
+      expected:
+        - "external/assay-kit/src/dataset/loader.ts"
+
+  - id: "q-performance-08"
+    text: "レポート生成の高速化"
+    goal: "Speed up report generation"
+    metadata:
+      category: "performance"
+      expected:
+        - "external/assay-kit/src/reporting/markdown.ts"
+
+  - id: "q-performance-09"
+    text: "reduce statistical test computation time"
+    goal: "Optimize statistical tests"
+    metadata:
+      category: "performance"
+      expected:
+        - "external/assay-kit/src/stats/mann-whitney.ts"
+
+  - id: "q-performance-10"
+    text: "並列実行の最適化"
+    goal: "Optimize parallel execution"
+    metadata:
+      category: "performance"
+      expected:
+        - "external/assay-kit/src/runtime/worker-pool.ts"
+
+  # ========== Metrics & Analysis Queries (10) ==========
+  - id: "q-metrics-01"
+    text: "precision recall calculation"
+    goal: "Calculate precision/recall"
+    metadata:
+      category: "metrics"
+      expected:
+        - "external/assay-kit/src/metrics/index.ts"
+
+  - id: "q-metrics-02"
+    text: "メトリクスの計算方法"
+    goal: "Review metrics calculation"
+    metadata:
+      category: "metrics"
+      expected:
+        - "external/assay-kit/src/metrics/ranking.ts"
+
+  - id: "q-metrics-03"
+    text: "NDCG score implementation"
+    goal: "Implement NDCG"
+    metadata:
+      category: "metrics"
+      expected:
+        - "external/assay-kit/src/metrics/ranking.ts"
+
+  - id: "q-metrics-04"
+    text: "latency percentile computation"
+    goal: "Compute latency percentiles"
+    metadata:
+      category: "metrics"
+      expected:
+        - "external/assay-kit/src/metrics/latency.ts"
+
+  - id: "q-metrics-05"
+    text: "統計分析の実装"
+    goal: "Implement statistical analysis"
+    metadata:
+      category: "metrics"
+      expected:
+        - "external/assay-kit/src/runner/statistical-analyzer.ts"
+
+  - id: "q-metrics-06"
+    text: "effect size calculation methods"
+    goal: "Calculate effect sizes"
+    metadata:
+      category: "metrics"
+      expected:
+        - "external/assay-kit/src/stats/rank-biserial.ts"
+
+  - id: "q-metrics-07"
+    text: "combined metrics aggregation"
+    goal: "Aggregate combined metrics"
+    metadata:
+      category: "metrics"
+      expected:
+        - "external/assay-kit/src/metrics/combined.ts"
+
+  - id: "q-metrics-08"
+    text: "評価指標の定義"
+    goal: "Define evaluation metrics"
+    metadata:
+      category: "metrics"
+      expected:
+        - "external/assay-kit/src/types/metrics.ts"
+
+  - id: "q-metrics-09"
+    text: "F1 score calculation logic"
+    goal: "Implement F1 score"
+    metadata:
+      category: "metrics"
+      expected:
+        - "external/assay-kit/src/metrics/index.ts"
+
+  - id: "q-metrics-10"
+    text: "ランキング評価の方法"
+    goal: "Evaluate rankings"
+    metadata:
+      category: "metrics"
+      expected:
+        - "external/assay-kit/src/metrics/ranking.ts"
+
+  # ========== Adapter & Integration Queries (10) ==========
+  - id: "q-adapter-01"
+    text: "search adapter interface definition"
+    goal: "Review adapter interface"
+    metadata:
+      category: "adapter"
+      expected:
+        - "external/assay-kit/src/types/adapters.ts"
+
+  - id: "q-adapter-02"
+    text: "アダプターの実装方法"
+    goal: "Implement adapter"
+    metadata:
+      category: "adapter"
+      expected:
+        - "external/assay-kit/src/adapters/mock.ts"
+
+  - id: "q-adapter-03"
+    text: "mock adapter for testing"
+    goal: "Use mock adapter"
+    metadata:
+      category: "adapter"
+      expected:
+        - "external/assay-kit/src/adapters/mock.ts"
+
+  - id: "q-adapter-04"
+    text: "adapter warmup and initialization"
+    goal: "Initialize adapter"
+    metadata:
+      category: "adapter"
+      expected:
+        - "external/assay-kit/src/runner/index.ts"
+
+  - id: "q-adapter-05"
+    text: "統合テストの設定"
+    goal: "Configure integration tests"
+    metadata:
+      category: "adapter"
+      expected:
+        - "external/assay-kit/tests/e2e/full-workflow.spec.ts"
+
+  - id: "q-adapter-06"
+    text: "adapter query execution flow"
+    goal: "Trace adapter execution"
+    metadata:
+      category: "adapter"
+      expected:
+        - "external/assay-kit/src/runner/index.ts"
+
+  - id: "q-adapter-07"
+    text: "retry mechanism in adapter"
+    goal: "Implement retry logic"
+    metadata:
+      category: "adapter"
+      expected:
+        - "external/assay-kit/src/runner/types.ts"
+
+  - id: "q-adapter-08"
+    text: "アダプターのエラーハンドリング"
+    goal: "Handle adapter errors"
+    metadata:
+      category: "adapter"
+      expected:
+        - "external/assay-kit/src/errors/index.ts"
+
+  - id: "q-adapter-09"
+    text: "adapter timeout configuration"
+    goal: "Configure adapter timeout"
+    metadata:
+      category: "adapter"
+      expected:
+        - "external/assay-kit/src/errors/timeout-error.ts"
+
+  - id: "q-adapter-10"
+    text: "検索アダプターの切り替え"
+    goal: "Switch search adapters"
+    metadata:
+      category: "adapter"
+      expected:
+        - "external/assay-kit/src/types/adapters.ts"
+
+  # ========== CLI & Commands Queries (10) ==========
+  - id: "q-cli-01"
+    text: "CLI command registration"
+    goal: "Register CLI commands"
+    metadata:
+      category: "cli"
+      expected:
+        - "external/assay-kit/src/cli/main.ts"
+
+  - id: "q-cli-02"
+    text: "コマンドラインオプションの追加"
+    goal: "Add CLI options"
+    metadata:
+      category: "cli"
+      expected:
+        - "external/assay-kit/src/cli/commands/evaluate.ts"
+
+  - id: "q-cli-03"
+    text: "compare command implementation"
+    goal: "Implement compare command"
+    metadata:
+      category: "cli"
+      expected:
+        - "external/assay-kit/src/cli/commands/compare.ts"
+
+  - id: "q-cli-04"
+    text: "validate command error handling"
+    goal: "Handle validate errors"
+    metadata:
+      category: "cli"
+      expected:
+        - "external/assay-kit/src/cli/commands/validate.ts"
+
+  - id: "q-cli-05"
+    text: "CLIの引数パース処理"
+    goal: "Parse CLI arguments"
+    metadata:
+      category: "cli"
+      expected:
+        - "external/assay-kit/src/cli/main.ts"
+
+  - id: "q-cli-06"
+    text: "command help text generation"
+    goal: "Generate help text"
+    metadata:
+      category: "cli"
+      expected:
+        - "external/assay-kit/src/cli/commands/types.ts"
+
+  - id: "q-cli-07"
+    text: "evaluate command runner logic"
+    goal: "Run evaluate command"
+    metadata:
+      category: "cli"
+      expected:
+        - "external/assay-kit/src/cli/commands/evaluate.ts"
+
+  - id: "q-cli-08"
+    text: "コマンド実行のエラー処理"
+    goal: "Handle command errors"
+    metadata:
+      category: "cli"
+      expected:
+        - "external/assay-kit/src/cli/main.ts"
+
+  - id: "q-cli-09"
+    text: "CLI output formatting"
+    goal: "Format CLI output"
+    metadata:
+      category: "cli"
+      expected:
+        - "external/assay-kit/src/reporting/console.ts"
+
+  - id: "q-cli-10"
+    text: "コマンドのバリデーション"
+    goal: "Validate commands"
+    metadata:
+      category: "cli"
+      expected:
+        - "external/assay-kit/src/cli/commands/validate.ts"
+
+  # ========== Remaining from original (24) ==========
+  - id: "q-original-01"
+    text: "plugin dependency resolver validation"
+    goal: "Validate plugin dependencies"
+    metadata:
+      category: "plugins"
+      expected:
+        - "external/assay-kit/src/plugins/dependencies.ts"
+
+  - id: "q-original-02"
+    text: "プラグインライフサイクル管理"
+    goal: "Manage plugin lifecycle"
+    metadata:
+      category: "plugins"
+      expected:
+        - "external/assay-kit/src/plugins/logger.ts"
+
+  - id: "q-original-03"
+    text: "comparison summary builder"
+    goal: "Build comparison summary"
+    metadata:
+      category: "runner"
+      expected:
+        - "external/assay-kit/src/runner/summary.ts"
+
+  - id: "q-original-04"
+    text: "pairing policy configuration"
+    goal: "Configure pairing policy"
+    metadata:
+      category: "runner"
+      expected:
+        - "external/assay-kit/src/runner/comparison.ts"
+
+  - id: "q-original-05"
+    text: "統計的有意性の検出"
+    goal: "Detect statistical significance"
+    metadata:
+      category: "runner"
+      expected:
+        - "external/assay-kit/src/runner/statistical-analyzer.ts"
+
+  - id: "q-original-06"
+    text: "baseline snapshot loading"
+    goal: "Load baseline snapshots"
+    metadata:
+      category: "baseline"
+      expected:
+        - "external/assay-kit/src/baseline/filesystem.ts"
+
+  - id: "q-original-07"
+    text: "glob pattern matching utility"
+    goal: "Match glob patterns"
+    metadata:
+      category: "utils"
+      expected:
+        - "external/assay-kit/src/utils/glob.ts"
+
+  - id: "q-original-08"
+    text: "エラーハンドリングの仕組み"
+    goal: "Review error handling"
+    metadata:
+      category: "errors"
+      expected:
+        - "external/assay-kit/src/errors/index.ts"
+
+  - id: "q-original-09"
+    text: "timeout error classification"
+    goal: "Classify timeout errors"
+    metadata:
+      category: "errors"
+      expected:
+        - "external/assay-kit/src/errors/timeout-error.ts"
+
+  - id: "q-original-10"
+    text: "query metadata structure"
+    goal: "Review query metadata"
+    metadata:
+      category: "types"
+      expected:
+        - "external/assay-kit/src/types/query.ts"
+
+expected:
+  # Note: simplified expected section - in real usage, each query should have specific paths

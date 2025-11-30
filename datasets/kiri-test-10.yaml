@@ -1,0 +1,123 @@
+# Test dataset for Issue #77 - 10 queries sample
+schemaVersion: "1.0.0"
+name: "kiri-test-10"
+datasetId: "kiri-test"
+description: "Small test dataset (10 queries) for profile validation."
+version: "v2025-11-17"
+
+defaultParams:
+  k: 10
+  timeoutMs: 30000
+
+queries:
+  - id: "q-testfail-01"
+    text: "test failed in authentication module"
+    goal: "Find test files for authentication"
+    metadata:
+      category: "testfail"
+
+  - id: "q-testfail-02"
+    text: "テストが失敗しています"
+    goal: "Find failing test implementation"
+    metadata:
+      category: "testfail"
+
+  - id: "q-typeerror-01"
+    text: "type error cannot assign string to number"
+    goal: "Fix type assignment error"
+    metadata:
+      category: "typeerror"
+
+  - id: "q-typeerror-02"
+    text: "TypeScriptエラー: プロパティが存在しません"
+    goal: "Fix missing property error"
+    metadata:
+      category: "typeerror"
+
+  - id: "q-bugfix-01"
+    text: "fix crash in dataset loader"
+    goal: "Fix dataset loader crash"
+    metadata:
+      category: "bugfix"
+
+  - id: "q-bugfix-02"
+    text: "認証バグの修正が必要"
+    goal: "Fix authentication bug"
+    metadata:
+      category: "bugfix"
+
+  - id: "q-feature-01"
+    text: "add new feature for baseline comparison"
+    goal: "Implement baseline comparison"
+    metadata:
+      category: "feature"
+
+  - id: "q-feature-02"
+    text: "新機能: プラグインシステム"
+    goal: "Implement plugin system"
+    metadata:
+      category: "feature"
+
+  - id: "q-api-01"
+    text: "add new REST API endpoint"
+    goal: "Implement new endpoint"
+    metadata:
+      category: "api"
+
+  - id: "q-api-02"
+    text: "APIエンドポイントの実装"
+    goal: "Implement API endpoint"
+    metadata:
+      category: "api"
+
+expected:
+  - id: "q-testfail-01"
+    reference:
+      paths:
+        - "external/assay-kit/tests/runner/index.spec.ts"
+        - "external/assay-kit/tests/runner/comparison.spec.ts"
+  - id: "q-testfail-02"
+    reference:
+      paths:
+        - "external/assay-kit/tests/stats/mann-whitney.spec.ts"
+        - "external/assay-kit/tests/metrics/ranking.spec.ts"
+  - id: "q-typeerror-01"
+    reference:
+      paths:
+        - "external/assay-kit/src/types/metrics.ts"
+        - "external/assay-kit/src/types/adapters.ts"
+  - id: "q-typeerror-02"
+    reference:
+      paths:
+        - "external/assay-kit/src/types/adapters.ts"
+        - "external/assay-kit/src/types/query.ts"
+  - id: "q-bugfix-01"
+    reference:
+      paths:
+        - "external/assay-kit/src/dataset/loader.ts"
+        - "external/assay-kit/src/dataset/validator.ts"
+  - id: "q-bugfix-02"
+    reference:
+      paths:
+        - "external/assay-kit/src/runner/index.ts"
+        - "external/assay-kit/src/runner/comparison.ts"
+  - id: "q-feature-01"
+    reference:
+      paths:
+        - "external/assay-kit/src/baseline/filesystem.ts"
+        - "external/assay-kit/src/baseline/index.ts"
+  - id: "q-feature-02"
+    reference:
+      paths:
+        - "external/assay-kit/src/plugins/registry.ts"
+        - "external/assay-kit/src/plugins/types.ts"
+  - id: "q-api-01"
+    reference:
+      paths:
+        - "external/assay-kit/src/cli/commands/evaluate.ts"
+        - "external/assay-kit/src/runner/index.ts"
+  - id: "q-api-02"
+    reference:
+      paths:
+        - "external/assay-kit/src/types/adapters.ts"
+        - "external/assay-kit/src/cli/commands/compare.ts"

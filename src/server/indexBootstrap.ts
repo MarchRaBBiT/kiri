@@ -3,7 +3,51 @@ import { access, constants, mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
 import { runIndexer } from "../indexer/cli.js";
+import { isDocumentMetadataEmpty } from "../indexer/schema.js";
+import { DuckDBClient } from "../shared/duckdb.js";
 import { acquireLock, releaseLock, getLockOwner, LockfileError } from "../shared/utils/lockfile.js";
+import { ensureDbParentDir, normalizeDbPath } from "../shared/utils/path.js";
+
+/**
+ * Check if migration requires a full reindex
+ * Returns true if:
+ * - file table has records (existing indexed files)
+ * - document_metadata table is empty (migration just ran)
+ *
+ * @param databasePath - Absolute path to database
+ * @returns true if reindex is needed, false if not needed or error occurred
+ */
+async function needsMigrationReindex(databasePath: string): Promise<boolean> {
+  let db: DuckDBClient | null = null;
+  try {
+    db = await DuckDBClient.connect({ databasePath });
+
+    // Check if file table has any records
+    const filesExist = await db.all<{ count: number }>(`SELECT COUNT(*) as count FROM file`);
+
+    // Defensive: check array element exists and has valid count
+    const firstRow = filesExist[0];
+    if (!firstRow || typeof firstRow.count !== "number") {
+      return false;
+    }
+
+    const hasFiles = firstRow.count > 0;
+
+    // Check if document_metadata table is empty
+    const metadataEmpty = await isDocumentMetadataEmpty(db);
+
+    // Migration needed if files exist but metadata is empty
+    return hasFiles && metadataEmpty;
+  } catch {
+    // On any error (corrupt DB, missing table, etc.), assume no migration needed
+    // The subsequent indexing attempt will surface the real error
+    return false;
+  } finally {
+    if (db) {
+      await db.close();
+    }
+  }
+}
 
 /**
  * Ensures the database is indexed before server startup.
@@ -22,10 +66,17 @@ export async function ensureDatabaseIndexed(
   allowDegrade: boolean,
   forceReindex: boolean
 ): Promise<boolean> {
-  const absoluteDatabasePath = resolve(databasePath);
+  await ensureDbParentDir(databasePath);
+  const absoluteDatabasePath = normalizeDbPath(databasePath);
   const absoluteRepoRoot = resolve(repoRoot);
   const lockfilePath = `${absoluteDatabasePath}.lock`;
-  const shouldIndex = !existsSync(absoluteDatabasePath) || forceReindex;
+
+  // Check if migration requires reindex
+  const migrationNeeded = existsSync(absoluteDatabasePath)
+    ? await needsMigrationReindex(absoluteDatabasePath)
+    : false;
+
+  const shouldIndex = !existsSync(absoluteDatabasePath) || forceReindex || migrationNeeded;
 
   if (!shouldIndex) {
     // Database exists and no reindex requested
@@ -64,13 +115,18 @@ export async function ensureDatabaseIndexed(
     }
 
     // Run indexer
-    const reason = forceReindex ? "Manual reindex requested" : "Database not found";
+    const reason = migrationNeeded
+      ? "Document metadata migration detected"
+      : forceReindex
+        ? "Manual reindex requested"
+        : "Database not found";
     process.stderr.write(`⚠️  ${reason}. Running indexer for ${absoluteRepoRoot}...\n`);
 
     await runIndexer({
       repoRoot: absoluteRepoRoot,
       databasePath: absoluteDatabasePath,
       full: true,
+      skipLocking: true,
     });
 
     process.stderr.write(`✅ Indexing complete. Database created at ${absoluteDatabasePath}\n`);

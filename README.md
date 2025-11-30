@@ -2,7 +2,7 @@
 
 > Intelligent code context extraction for LLMs via Model Context Protocol
 
-[![Version](https://img.shields.io/badge/version-0.9.6-blue.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-0.17.0-blue.svg)](package.json)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.6-blue.svg)](https://www.typescriptlang.org/)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
@@ -18,6 +18,24 @@
 - **👁️ Auto-Sync**: Watch mode automatically re-indexes when files change
 - **🛡️ Reliable**: Degrade-first architecture works without optional extensions
 - **📝 Phrase-Aware**: Recognizes compound terms (kebab-case, snake_case) for precise matching
+- **🔒 Concurrency-Safe** _(v0.9.7+)_: Per-database queues, canonicalized DuckDB paths, and bootstrap-safe locking prevent FTS rebuild conflicts and keep locks consistent across symlinks—even on first run
+
+## 🆕 What's New in v0.17.0
+
+### ✨ New Features
+
+- **`code` boost_profile**: New boost profile that strongly deprioritizes documentation and config files (95% penalty) to focus search results on actual implementation code
+  - Use `boost_profile: "code"` when you want to find implementation files only
+
+### 🐛 Bug Fixes
+
+- **Graph metrics retry logic**: Added retry logic for transient DuckDB errors during graph metrics computation
+
+### Previous Releases
+
+- **v0.16.1**: Graceful degradation for graph layer tables
+- **v0.16.0**: DuckDB client migration to `@duckdb/node-api`
+- **v0.15.0**: `snippets_get` view parameter, co-change scoring, stop words & IDF weighting
 
 ## ⚙️ Prerequisites
 
@@ -36,6 +54,27 @@ npm --version   # Should be >= v9.0.0
 git --version   # Should be >= v2.0
 ```
 
+## ⚠️ Troubleshooting
+
+### Migration or Database Issues
+
+If you encounter issues after upgrading (database corruption, migration failures, etc.), the simplest solution is to delete the database and let KIRI recreate it:
+
+```bash
+# For MCP users (Claude Code, Codex CLI, etc.)
+# 1. Restart your MCP client to stop the KIRI server
+# 2. Delete the database
+rm -rf .kiri/
+# 3. Restart your MCP client - KIRI will automatically reindex
+
+# For CLI/Daemon users
+pkill -f "kiri.*daemon"  # Stop daemon if running
+rm -rf .kiri/            # Delete database
+kiri --repo . --db .kiri/index.duckdb --full  # Reindex
+```
+
+> **Note**: Deleting the database is safe - it only removes the index, not your source code. KIRI will automatically rebuild the index on next startup. For MCP users, no manual reindexing is needed.
+
 ## 🚀 Quick Start for MCP Users
 
 ### Step 1: Install KIRI
@@ -47,6 +86,11 @@ Choose one of the following methods:
 ```bash
 npm install -g kiri-mcp-server
 ```
+
+## 📚 Documentation
+
+- [Authoring Docs for KIRI Search](docs/documentation-best-practices.md) – best practices for writing metadata-rich, link-aware documentation so that `context_bundle` and the docs vs. docs-plain benchmark maintain high precision. Includes guidance on querying custom front-matter keys via `meta.<key>:<value>` (for example, `meta.id:runbook-001`).
+- [Path Penalties (User Guide)](docs/user/path-penalties.md) – `.kiri/config.yaml` と環境変数でパス倍率を設定する手順、優先順位、正規化ルール、適用タイミングをまとめたユーザー向けガイド。
 
 > **Note**: This installs the `kiri` command globally. You can verify with `kiri --version`.
 
@@ -104,9 +148,12 @@ For very large repositories (10,000+ files), you may need to increase the timeou
 
 > **Note**: The example shows `480` seconds (8 minutes) for very large repositories (>20,000 files). The default `240` seconds (4 minutes) is sufficient for most projects with <10,000 files.
 
-| Variable                    | Default | Description                                                                    |
-| --------------------------- | ------- | ------------------------------------------------------------------------------ |
-| `KIRI_DAEMON_READY_TIMEOUT` | `240`   | Daemon initialization timeout in seconds. Increase for very large repositories |
+| Variable                    | Default          | Description                                                                                                           |
+| --------------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `KIRI_DAEMON_READY_TIMEOUT` | `240`            | Daemon initialization timeout in seconds. Increase for very large repositories                                        |
+| `KIRI_SOCKET_DIR`           | OS tmp directory | Directory for Unix socket fallback when repo paths are too long (e.g., `/var/run/kiri`). Keeps worktree sockets short |
+
+> **Tip**: If you encounter `listen EINVAL` on deep worktrees, set `export KIRI_SOCKET_DIR=/var/run/kiri` (or any short 0700 directory) before launching `kiri`. This fallback ships in v0.9.9+, and an explicit path keeps logs and cleanup predictable.
 
 **Dart Analysis Server Configuration:**
 
@@ -178,6 +225,8 @@ The most powerful tool for getting started with unfamiliar code. Provide a task 
 
 Tip: Avoid leading command words like `find` or `show`; instead list concrete modules, files, and observed symptoms to keep rankings sharp.
 
+> **Docs search tip:** Set `boost_profile: "docs"` and include metadata filters when the target lives under `docs/`. Front matter keys are queryable via `meta.<key>:<value>` or `frontmatter.<key>:<value>` — e.g., `meta.id:runbook-001`, `tag:degrade`, `category:operations`. Use `docmeta.<key>:<value>` (or legacy `metadata.<key>`) when you want strict doc-only filtering. See the [Metadata alias reference](docs/documentation-best-practices.md#metadata-aliases--filters) for the full list. This keeps `context_bundle` aligned with the docs vs docs-plain benchmark expectations.
+
 **v0.8.0 improvements:**
 
 - **⚡ Compact mode default (BREAKING)**: `compact: true` is now default, reducing token usage by ~95% (55K → 2.5K tokens). Set `compact: false` to restore full preview mode.
@@ -213,12 +262,12 @@ Tip: Avoid leading command words like `find` or `show`; instead list concrete mo
 
 **Parameters:**
 
-| Parameter       | Type    | Required | Description                                                                                                                                                  |
-| --------------- | ------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `goal`          | string  | Yes      | Task description or question about the code                                                                                                                  |
-| `limit`         | number  | No       | Max snippets to return (default: 12, max: 20)                                                                                                                |
-| `compact`       | boolean | No       | Return only metadata without preview (default: **true** in v0.8.0+, false in v0.7)                                                                           |
-| `boost_profile` | string  | No       | File type boosting: `"default"` (prioritizes src/, blacklists docs/), `"docs"` **(prioritizes .md/.yaml, includes docs/ directory)**, `"none"` (no boosting) |
+| Parameter       | Type    | Required | Description                                                                                                                                                                                                                                                         |
+| --------------- | ------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `goal`          | string  | Yes      | Task description or question about the code                                                                                                                                                                                                                         |
+| `limit`         | number  | No       | Max snippets to return (default: 12, max: 20)                                                                                                                                                                                                                       |
+| `compact`       | boolean | No       | Return only metadata without preview (default: **true** in v0.8.0+, false in v0.7)                                                                                                                                                                                  |
+| `boost_profile` | string  | No       | File type boosting: `"default"` (prioritizes src/, blacklists docs/), `"code"` (strongly deprioritizes docs/config, 95% penalty), `"docs"` (prioritizes .md/.yaml, includes docs/ directory), `"balanced"` (equal weight for docs and impl), `"none"` (no boosting) |
 
 ### 2. files_search
 
@@ -249,17 +298,20 @@ Fast search across all indexed files. Supports multi-word queries, hyphenated te
 - Multi-word: `"tools call implementation"` → Finds files containing ANY word
 - Hyphenated: `"MCP-server-handler"` → Splits on hyphens and searches each part
 - Single word: `"DuckDB"` → Exact match
+- Metadata filter: `meta.<key>:<value>` / `frontmatter.<key>:<value>` matches front matter (e.g., `meta.id:runbook-001`); `tag:<value>` / `category:<value>` remain shorthand aliases for those standard keys. Use `docmeta.<key>:<value>` (or `metadata.<key>`) when you need strict doc-only filtering.
+
+> **Docs search tip:** Combine `boost_profile: "docs"` (either by parameter or CLI flag) with metadata filters for Markdown corpora. Refer to the [Metadata alias reference](docs/documentation-best-practices.md#metadata-aliases--filters) when issuing `files_search` requests so the same filters you use in benchmarks carry over to ad-hoc queries, and switch to `docmeta.*` when you want docs only.
 
 **Parameters:**
 
-| Parameter       | Type   | Required | Description                                                                                                                                                  |
-| --------------- | ------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `query`         | string | Yes      | Search keywords or phrase                                                                                                                                    |
-| `limit`         | number | No       | Max results to return (default: 50, max: 200)                                                                                                                |
-| `lang`          | string | No       | Filter by language (e.g., "typescript", "python")                                                                                                            |
-| `ext`           | string | No       | Filter by extension (e.g., ".ts", ".md")                                                                                                                     |
-| `path_prefix`   | string | No       | Filter by path prefix (e.g., "src/auth/")                                                                                                                    |
-| `boost_profile` | string | No       | File type boosting: `"default"` (prioritizes src/, blacklists docs/), `"docs"` **(prioritizes .md/.yaml, includes docs/ directory)**, `"none"` (no boosting) |
+| Parameter       | Type   | Required | Description                                                                                                                                                                                                                                           |
+| --------------- | ------ | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `query`         | string | Yes      | Search keywords or phrase                                                                                                                                                                                                                             |
+| `limit`         | number | No       | Max results to return (default: 50, max: 200)                                                                                                                                                                                                         |
+| `lang`          | string | No       | Filter by language (e.g., "typescript", "python")                                                                                                                                                                                                     |
+| `ext`           | string | No       | Filter by extension (e.g., ".ts", ".md")                                                                                                                                                                                                              |
+| `path_prefix`   | string | No       | Filter by path prefix (e.g., "src/auth/")                                                                                                                                                                                                             |
+| `boost_profile` | string | No       | File type boosting: `"default"` (prioritizes src/, blacklists docs/), `"code"` (strongly deprioritizes docs/config, 95% penalty), `"docs"` **(prioritizes .md/.yaml, includes docs/ directory)**, `"balanced"` (equal weight), `"none"` (no boosting) |
 
 ### 3. snippets_get
 
@@ -497,15 +549,35 @@ const db = await DuckDBClient.connect({
 Control search ranking behavior with the `boost_profile` parameter:
 
 - **`"default"`** (default): Prioritizes implementation files (`src/*.ts`) over documentation
+  - Implementation files get 30% boost, documentation files get 50% penalty
+  - Config files heavily penalized (95% reduction)
+  - `docs/` directory is blacklisted
+- **`"code"`** (NEW in v0.17.0): Strongly prioritizes implementation code only
+  - Documentation and config files get 95% penalty
+  - Best for finding actual implementation when you don't want docs in results
+  - `docs/` directory is blacklisted
 - **`"docs"`**: Prioritizes documentation files (`*.md`) over implementation
+  - Documentation files get 50% boost, implementation files get 50% penalty
+  - `docs/` directory is included in search results
+- **`"balanced"`** (NEW in v0.9.10): Equal weight for docs and implementation
+  - Both documentation and implementation files: no penalty/boost (1.0x)
+  - Config files: relaxed penalty (0.3x, compared to 0.05x in default)
+  - `docs/` directory is included in search results
+  - No path-specific multipliers (treats all `src/` equally)
 - **`"none"`**: Pure BM25 scoring without file type adjustments
 
 ```typescript
 // Find implementation files (default behavior)
 files_search({ query: "authentication", boost_profile: "default" });
 
+// Find only implementation code (no docs/config in results)
+files_search({ query: "authentication", boost_profile: "code" });
+
 // Find documentation
 files_search({ query: "setup guide", boost_profile: "docs" });
+
+// Balanced search (docs and code equally weighted)
+files_search({ query: "authentication design", boost_profile: "balanced" });
 
 // Pure BM25 ranking without boosting
 files_search({ query: "API", boost_profile: "none" });
@@ -613,6 +685,110 @@ KIRI automatically filters sensitive files and masks sensitive values:
    - Medium project (1,000-10,000 files): 10-100 MB
    - Large project (>10,000 files): 100-500 MB
 
+#### DuckDB Native Binding Errors
+
+**Problem**: Error message like `Cannot find module '.../duckdb.node'` when running from a cloned repository
+
+**Root Cause**: Using `npm link` with pnpm-installed packages causes native module path resolution issues
+
+**Solutions**:
+
+1. **Use pnpm link instead of npm link**:
+
+   ```bash
+   # Remove existing npm link (if any)
+   npm unlink -g kiri-mcp-server 2>/dev/null || true
+
+   # Clean and reinstall
+   rm -rf node_modules pnpm-lock.yaml
+   pnpm install --frozen-lockfile
+
+   # Verify native binding exists
+   ls -la node_modules/.pnpm/duckdb@*/node_modules/duckdb/lib/binding/duckdb.node
+
+   # If missing, rebuild DuckDB
+   pnpm rebuild duckdb
+
+   # Build and link (use pnpm, not npm!)
+   pnpm run build
+   pnpm link --global
+   ```
+
+2. **Prerequisites for building DuckDB**:
+   - **macOS**: Install Xcode Command Line Tools: `xcode-select --install`
+   - **Node.js**: Version 20 or higher: `node -v`
+   - **Network**: Access to `npm.duckdb.org` for prebuilt binaries
+
+3. **Unlink when done**:
+   ```bash
+   pnpm unlink --global kiri-mcp-server
+   ```
+
+#### Stale Lock File
+
+**Problem**: Daemon fails to start with error `Lock file already exists. Another process is indexing.`
+
+**Root Cause**: A previous daemon process crashed or was killed without proper cleanup, leaving a stale lock file.
+
+**Solution**:
+
+```bash
+# Remove the stale lock file
+rm -f .kiri/index.duckdb.sock.lock
+
+# Optionally, also remove the socket file
+rm -f .kiri/index.duckdb.sock
+
+# Restart the MCP server
+```
+
+#### Version Mismatch After Upgrade
+
+**Problem**: After upgrading KIRI, connection fails with `Version mismatch: client X.Y.Z is incompatible with daemon A.B.C`
+
+**Root Cause**: An old daemon process is still running after upgrading to a new version.
+
+**Solutions**:
+
+1. **Kill old daemon processes**:
+
+   ```bash
+   pkill -f "kiri.*daemon"
+   ```
+
+2. **Clear npx cache** (if using npx):
+
+   ```bash
+   npx clear-npx-cache
+   ```
+
+3. **Restart the MCP connection**
+
+#### Schema Mismatch After Upgrade (Degrade Mode)
+
+**Problem**: After upgrading KIRI, server shows `Server is running in degrade mode` and logs show errors like `Table with name graph_metrics does not exist`
+
+**Root Cause**: The existing index was created with an older schema version that doesn't include new tables (e.g., `graph_metrics`, `cochange`).
+
+**Solution**:
+
+1. **Stop the daemon**:
+
+   ```bash
+   pkill -f "kiri.*daemon"
+   rm -f .kiri/index.duckdb.sock.lock .kiri/index.duckdb.sock
+   ```
+
+2. **Rebuild index with full schema**:
+
+   ```bash
+   kiri --repo . --db .kiri/index.duckdb --full
+   ```
+
+3. **Restart your MCP client**
+
+> **Note**: The `--full` flag ensures all tables including `graph_metrics` and `cochange` are created. This is required when upgrading from versions prior to v0.15.0.
+
 ### Getting Help
 
 If you encounter issues not covered here:
@@ -689,11 +865,42 @@ See [docs/architecture.md](docs/architecture.md) for detailed technical informat
 
 ### Performance
 
-| Metric                        | Target | Current       |
-| ----------------------------- | ------ | ------------- |
-| **Time to First Result**      | ≤ 1.0s | ✅ 0.8s       |
-| **Precision @ 10**            | ≥ 0.7  | ✅ 0.75       |
-| **Token Reduction (compact)** | ≥ 90%  | ✅ 95% (v0.8) |
+| Metric                        | Target | Current                                                                                 |
+| ----------------------------- | ------ | --------------------------------------------------------------------------------------- |
+| **Time to First Result**      | ≤ 1.0s | ✅ 0.8s                                                                                 |
+| **Precision @ 10**            | ≥ 0.7  | ⚠️ 0.25 (2025-11-21, dataset v2025-11-docs-plain, K=10, see var/eval/2025-11-21-k10.md) |
+| **Token Reduction (compact)** | ≥ 90%  | ✅ 95% (v0.8)                                                                           |
+
+### Evaluation & Quality Assurance
+
+KIRI includes a **Golden Set Evaluation System** for tracking search accuracy over time using representative queries.
+
+**Metrics:**
+
+- **P@10** (Precision at K=10): Fraction of relevant results in top 10 (target: ≥0.70)
+- **TFFU** (Time To First Useful): Time until first relevant result appears (target: ≤1000ms)
+
+**For Developers:**
+
+```bash
+# Run benchmark evaluation (local only)
+pnpm run eval:golden
+
+# Verbose output
+pnpm run eval:golden:verbose
+```
+
+The benchmark system evaluates 5+ representative queries across categories (bugfix, feature, refactor, infra, docs) and outputs:
+
+- JSON: Detailed per-query results (`var/eval/latest.json`)
+- Markdown: Summary table (`var/eval/latest.md`)
+
+**Documentation:**
+
+- [Golden Set Guide](tests/eval/goldens/README.md) - Query format, categories, adding queries
+- [Results Recording](tests/eval/results/README.md) - Tracking improvements over time
+
+See [docs/testing.md](docs/testing.md) for complete testing and evaluation guidelines.
 
 ### Community
 
@@ -714,14 +921,23 @@ pnpm install
 # Build
 pnpm run build
 
-# Link globally for testing
-npm link
+# Link globally for testing (IMPORTANT: use pnpm link, not npm link)
+pnpm link --global
+
+# Verify DuckDB native binding is installed
+ls -la node_modules/.pnpm/duckdb@*/node_modules/duckdb/lib/binding/duckdb.node
+
+# If duckdb.node is missing, rebuild it
+pnpm rebuild duckdb
 
 # Run tests
 pnpm run test
 
 # Start in development mode (HTTP server on :8765)
 pnpm run dev
+
+# Unlink when done
+pnpm unlink --global kiri-mcp-server
 ```
 
 ### Commands Reference
@@ -772,8 +988,8 @@ Built with:
 
 ---
 
-**Status**: v0.8.0 (Beta) - Production-ready for MCP clients
+**Status**: v0.17.0 (Beta) - Production-ready for MCP clients
 
-**Breaking Changes in v0.8.0**: `compact` mode is now default. Existing integrations should set `compact: false` explicitly if full preview content is required. See [CHANGELOG.md](CHANGELOG.md) for migration guide.
+**New in v0.17.0**: `code` boost_profile for implementation-focused search. See [CHANGELOG.md](CHANGELOG.md) for details.
 
 For questions or support, please open a [GitHub issue](https://github.com/CAPHTECH/kiri/issues).

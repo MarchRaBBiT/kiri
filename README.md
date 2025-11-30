@@ -809,7 +809,6 @@ KIRI provides AST-based symbol extraction for the following languages:
 | **PHP**        | `.php`        | `class`, `interface`, `trait`, `function`, `method`, `property`, `constant`, `namespace`   | tree-sitter-php (pure & HTML-mixed) |
 | **Java**       | `.java`       | `class`, `interface`, `enum`, `annotation`, `method`, `constructor`, `field`               | tree-sitter-java                    |
 | **Dart**       | `.dart`       | `class`, `mixin`, `enum`, `extension`, `function`, `method`, `getter`, `setter`            | Dart Analysis Server                |
-| **Rust**       | `.rs`         | `struct`, `enum`, `trait`, `impl`, `fn`, `mod`, `const`, `static`, `macro`, `type`         | tree-sitter-rust                    |
 | **Python**     | `.py`         | `class`, `function`, `async function`, `property`, `staticmethod`, `classmethod`, `method` | tree-sitter-python                  |
 
 **Dart Integration Features:**

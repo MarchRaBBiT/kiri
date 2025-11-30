@@ -5,7 +5,7 @@
 1. **ワークツリー列挙**: `git ls-files --recurse-submodules` を用いつつ ignore を尊重し、サブモジュール配下も含めてファイルを取得する。
 2. **メタデータ推定**: 拡張子から言語判定し、サイズ・mtime・バイナリ判定（ヌルバイト/閾値）を取得する。
 3. **blob/tree 生成**: blob をハッシュで重複排除し、HEAD 時点の path→blob 対応を保持する。
-4. **シンボル抽出**: TypeScript (TypeScript Compiler API)、Swift (tree-sitter)、PHP (tree-sitter)、Rust (tree-sitter)、Python (tree-sitter) で定義・範囲・シグネチャを抽出する。
+4. **シンボル抽出**: TypeScript (TypeScript Compiler API)、Swift (tree-sitter)、PHP (tree-sitter)、Python (tree-sitter) で定義・範囲・シグネチャを抽出する。
    - **TypeScript**: `class`, `interface`, `enum`, `function`, `method`
    - **Swift**: `class`, `struct`, `protocol`, `enum`, `extension`, `func`, `init`, `property`
    - **PHP**: `class`, `interface`, `trait`, `function`, `method`, `property`, `constant`, `namespace` (pure PHPおよびHTML混在PHPの両方をサポート)

@@ -252,12 +252,14 @@ function collectDependencies(
         const dep = resolveImport(moduleSegments, level, pathInRepo, fileSet);
         if (dep) record(dep.kind, dep.target);
         for (const name of names) {
+          if (name === "*") continue;
           const segments = [...moduleSegments, ...name.split(".").filter(Boolean)];
           const nameDep = resolveImport(segments, level, pathInRepo, fileSet);
           if (nameDep) record(nameDep.kind, nameDep.target);
         }
       } else {
         for (const name of names) {
+          if (name === "*") continue;
           const segments = name.split(".").filter(Boolean);
           const dep = resolveImport(segments, Math.max(1, level), pathInRepo, fileSet);
           if (dep) record(dep.kind, dep.target);

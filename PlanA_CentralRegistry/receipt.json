@@ -1,0 +1,232 @@
+{
+  "commands": {
+    "showValidRegistry": {
+      "bitwidth": 4,
+      "expects": -1,
+      "maxprefix": -1,
+      "maxseq": -1,
+      "minprefix": -1,
+      "name": "showValidRegistry",
+      "overall": 5,
+      "scopes": ["exactly 1 Registry"],
+      "solution": [
+        {
+          "duration": 75,
+          "incremental": true,
+          "instances": [
+            {
+              "skolems": { "$showValidRegistry_r": { "arity": 1, "data": [["Registry$0"]] } },
+              "values": {
+                "0": {},
+                "1": {},
+                "2": {},
+                "3": {},
+                "4": {},
+                "Analyzer$2": {
+                  "capabilities": [["SymbolExtraction$0"], ["TypeInference$0"]],
+                  "language": [["Swift$0"]],
+                  "backend": [["TreeSitter$0"]]
+                },
+                "Analyzer$3": { "capabilities": [], "language": [], "backend": [] },
+                "Analyzer$4": { "capabilities": [], "language": [], "backend": [] },
+                "CompilerAPI$0": {},
+                "Dart$0": {},
+                "DocComment$0": {},
+                "File$3": { "path": [], "lockedBy": [], "lang": [] },
+                "File$4": { "path": [], "lockedBy": [], "lang": [] },
+                "Go$0": {},
+                "Java$0": {},
+                "LSP$0": {},
+                "PHP$0": {},
+                "Path$4": {},
+                "Python$0": {},
+                "Registry$0": {
+                  "analyzers": [["Analyzer$0"], ["Analyzer$1"], ["Analyzer$2"]],
+                  "languageMap": [["PHP$0", "Analyzer$0"]]
+                },
+                "Signature$0": {},
+                "Swift$0": {},
+                "SymbolExtraction$0": {},
+                "TreeSitter$0": {},
+                "TypeInference$0": {},
+                "TypeScript$0": {}
+              }
+            }
+          ],
+          "localtime": "2025-11-30T15:45:15.673624",
+          "timezone": "Asia/Tokyo",
+          "utctime": 1764485115673
+        }
+      ],
+      "source": "run showValidRegistry {\n    some r: Registry | #r.analyzers > 2\n} for 5 but exactly 1 Registry",
+      "type": "run"
+    },
+    "showFileLocking": {
+      "bitwidth": 4,
+      "expects": -1,
+      "maxprefix": -1,
+      "maxseq": -1,
+      "minprefix": -1,
+      "name": "showFileLocking",
+      "overall": 5,
+      "scopes": ["exactly 1 Registry"],
+      "solution": [
+        {
+          "duration": 21,
+          "incremental": true,
+          "instances": [
+            {
+              "skolems": { "$showFileLocking_f": { "arity": 1, "data": [["File$0"]] } },
+              "values": {
+                "0": {},
+                "1": {},
+                "2": {},
+                "3": {},
+                "4": {},
+                "Analyzer$4": { "capabilities": [], "language": [], "backend": [] },
+                "CompilerAPI$0": {},
+                "Dart$0": {},
+                "DocComment$0": {},
+                "File$4": { "path": [], "lockedBy": [], "lang": [] },
+                "Go$0": {},
+                "Java$0": {},
+                "LSP$0": {},
+                "PHP$0": {},
+                "Path$4": {},
+                "Python$0": {},
+                "Registry$0": {
+                  "analyzers": [["Analyzer$0"]],
+                  "languageMap": [["Python$0", "Analyzer$0"]]
+                },
+                "Signature$0": {},
+                "Swift$0": {},
+                "SymbolExtraction$0": {},
+                "TreeSitter$0": {},
+                "TypeInference$0": {},
+                "TypeScript$0": {}
+              }
+            }
+          ],
+          "localtime": "2025-11-30T15:45:15.731540",
+          "timezone": "Asia/Tokyo",
+          "utctime": 1764485115731
+        }
+      ],
+      "source": "run showFileLocking {\n    some f: File | some f.lockedBy\n} for 5 but exactly 1 Registry",
+      "type": "run"
+    },
+    "NoConflictingAnalyzers": {
+      "bitwidth": 4,
+      "expects": -1,
+      "maxprefix": -1,
+      "maxseq": -1,
+      "minprefix": -1,
+      "name": "NoConflictingAnalyzers",
+      "overall": 10,
+      "source": "check NoConflictingAnalyzers for 10",
+      "type": "check"
+    },
+    "DeterministicLookup": {
+      "bitwidth": 4,
+      "expects": -1,
+      "maxprefix": -1,
+      "maxseq": -1,
+      "minprefix": -1,
+      "name": "DeterministicLookup",
+      "overall": 10,
+      "source": "check DeterministicLookup for 10",
+      "type": "check"
+    },
+    "LockConsistency": {
+      "bitwidth": 4,
+      "expects": -1,
+      "maxprefix": -1,
+      "maxseq": -1,
+      "minprefix": -1,
+      "name": "LockConsistency",
+      "overall": 10,
+      "source": "check LockConsistency for 10",
+      "type": "check"
+    },
+    "NoDeadlock": {
+      "bitwidth": 4,
+      "expects": -1,
+      "maxprefix": -1,
+      "maxseq": -1,
+      "minprefix": -1,
+      "name": "NoDeadlock",
+      "overall": 10,
+      "source": "check NoDeadlock for 10",
+      "type": "check"
+    }
+  },
+  "coreMinimization": 2,
+  "inferPartialInstance": true,
+  "repeat": 1,
+  "sigs": {
+    "univ": { "builtin": true, "cardinality": "set", "name": "univ", "type": "{univ}" },
+    "Int": { "builtin": true, "cardinality": "set", "name": "Int", "type": "{Int}" },
+    "seq/Int": { "builtin": true, "cardinality": "set", "name": "seq/Int", "type": "{seq/Int}" },
+    "String": { "builtin": true, "cardinality": "set", "name": "String", "type": "{String}" },
+    "none": { "builtin": true, "cardinality": "set", "name": "none", "type": "{none}" },
+    "Language": { "cardinality": "none", "name": "Language", "type": "{Language}" },
+    "TypeScript": { "cardinality": "one", "name": "TypeScript", "type": "{TypeScript}" },
+    "Swift": { "cardinality": "one", "name": "Swift", "type": "{Swift}" },
+    "PHP": { "cardinality": "one", "name": "PHP", "type": "{PHP}" },
+    "Java": { "cardinality": "one", "name": "Java", "type": "{Java}" },
+    "Dart": { "cardinality": "one", "name": "Dart", "type": "{Dart}" },
+    "Python": { "cardinality": "one", "name": "Python", "type": "{Python}" },
+    "Go": { "cardinality": "one", "name": "Go", "type": "{Go}" },
+    "BackendType": { "cardinality": "none", "name": "BackendType", "type": "{BackendType}" },
+    "TreeSitter": { "cardinality": "one", "name": "TreeSitter", "type": "{TreeSitter}" },
+    "CompilerAPI": { "cardinality": "one", "name": "CompilerAPI", "type": "{CompilerAPI}" },
+    "LSP": { "cardinality": "one", "name": "LSP", "type": "{LSP}" },
+    "Analyzer": {
+      "cardinality": "set",
+      "fields": {
+        "language": { "arity": 2, "name": "language", "type": "{Analyzer->Language}" },
+        "backend": { "arity": 2, "name": "backend", "type": "{Analyzer->BackendType}" },
+        "capabilities": { "arity": 2, "name": "capabilities", "type": "{Analyzer->Capability}" }
+      },
+      "name": "Analyzer",
+      "type": "{Analyzer}"
+    },
+    "Capability": { "cardinality": "none", "name": "Capability", "type": "{Capability}" },
+    "SymbolExtraction": {
+      "cardinality": "one",
+      "name": "SymbolExtraction",
+      "type": "{SymbolExtraction}"
+    },
+    "TypeInference": { "cardinality": "one", "name": "TypeInference", "type": "{TypeInference}" },
+    "DocComment": { "cardinality": "one", "name": "DocComment", "type": "{DocComment}" },
+    "Signature": { "cardinality": "one", "name": "Signature", "type": "{Signature}" },
+    "Registry": {
+      "cardinality": "set",
+      "fields": {
+        "analyzers": { "arity": 2, "name": "analyzers", "type": "{Registry->Analyzer}" },
+        "languageMap": {
+          "arity": 3,
+          "name": "languageMap",
+          "type": "{Registry->Language->Analyzer}"
+        }
+      },
+      "name": "Registry",
+      "type": "{Registry}"
+    },
+    "File": {
+      "cardinality": "set",
+      "fields": {
+        "path": { "arity": 2, "name": "path", "type": "{File->Path}" },
+        "lang": { "arity": 2, "name": "lang", "type": "{File->Language}" },
+        "lockedBy": { "arity": 2, "name": "lockedBy", "type": "{File->Analyzer}" }
+      },
+      "name": "File",
+      "type": "{File}"
+    },
+    "Path": { "cardinality": "set", "name": "Path", "type": "{Path}" }
+  },
+  "solver": "sat4j",
+  "symmetry": 20,
+  "timestamp": 1764485115553,
+  "unrolls": -1
+}

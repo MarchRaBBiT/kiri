@@ -57,7 +57,7 @@ function getIdentifier(node: PyNode, content: string): string | null {
 
 function isDecorator(node: PyNode, name: string, content: string): boolean {
   const text = slice(content, node).replace(/^@/, "").trim();
-  return text.startsWith(name);
+  return text === name || text.startsWith(`${name}.`);
 }
 
 function hasDecorator(nodes: PyNode[], names: string[], content: string): boolean {
@@ -251,6 +251,11 @@ function collectDependencies(
       if (moduleSegments.length > 0) {
         const dep = resolveImport(moduleSegments, level, pathInRepo, fileSet);
         if (dep) record(dep.kind, dep.target);
+        for (const name of names) {
+          const segments = [...moduleSegments, ...name.split(".").filter(Boolean)];
+          const nameDep = resolveImport(segments, level, pathInRepo, fileSet);
+          if (nameDep) record(nameDep.kind, nameDep.target);
+        }
       } else {
         for (const name of names) {
           const segments = name.split(".").filter(Boolean);

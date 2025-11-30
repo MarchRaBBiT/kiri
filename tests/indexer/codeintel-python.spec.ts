@@ -50,6 +50,7 @@ import pkg.module as mod
 from . import utils
 from ..core import base, extra as ex
 from pkg.sub import thing
+from pkg import submodule, util
 `;
 
     const fileSet = new Set<string>([
@@ -58,6 +59,8 @@ from pkg.sub import thing
       "pkg/sub/__init__.py",
       "pkg/core.py",
       "pkg/module.py",
+      "pkg/submodule.py",
+      "pkg/util.py",
     ]);
 
     const result = await analyzeSource("pkg/sub/file.py", "Python", code, fileSet);
@@ -69,6 +72,8 @@ from pkg.sub import thing
         { dstKind: "path", dst: "pkg/sub/utils.py", rel: "import" },
         { dstKind: "path", dst: "pkg/core.py", rel: "import" },
         { dstKind: "path", dst: "pkg/sub/__init__.py", rel: "import" },
+        { dstKind: "path", dst: "pkg/submodule.py", rel: "import" },
+        { dstKind: "path", dst: "pkg/util.py", rel: "import" },
       ])
     );
   });

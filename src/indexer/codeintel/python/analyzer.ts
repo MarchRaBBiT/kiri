@@ -28,7 +28,7 @@ function slice(content: string, node: PyNode): string {
 
 function cleanDocstring(text: string): string {
   const trimmed = text.trim();
-  const match = trimmed.match(/^(?:[rbuRBUfF]{0,2})?(['\"]{3}|['\"])([\s\S]*?)\1$/);
+  const match = trimmed.match(/^(?:[rbuRBUfF]{0,2})?(['"]{3}|['"])([\s\S]*?)\1$/);
   if (!match) return trimmed;
   return match[2]?.trim() ?? trimmed;
 }
@@ -57,7 +57,7 @@ function getIdentifier(node: PyNode, content: string): string | null {
 
 function isDecorator(node: PyNode, name: string, content: string): boolean {
   const text = slice(content, node).replace(/^@/, "").trim();
-  return text === name || text.startsWith(`${name}.`);
+  return text === name || text.startsWith(`${name}.`) || text.endsWith(`.${name}`);
 }
 
 function hasDecorator(nodes: PyNode[], names: string[], content: string): boolean {
@@ -217,7 +217,7 @@ function parseImportFrom(
   names: string[];
 } | null {
   const text = slice(content, node);
-  const match = text.match(/^from\s+(\.*)([A-Za-z0-9_\.]*)\s+import\s+(.+)$/);
+  const match = text.match(/^from\s+(\.*)([A-Za-z0-9_.]*)\s+import\s+(.+)$/);
   if (!match) return null;
   const [, dots, modulePath, namesPart] = match;
   const level = dots.length || 0;

@@ -9,7 +9,7 @@ describe("analyzeSource with Python language", () => {
 class Foo:
     """Class doc"""
     def __init__(self):
-        \"\"\"Init doc\"\"\"
+        """Init doc"""
         pass
 
     async def run(self):
@@ -41,6 +41,31 @@ def helper():
     const helperDoc = result.symbols.find((s) => s.name === "helper");
     expect(classDoc?.doc).toBe("Class doc");
     expect(helperDoc?.doc).toBe("Helper doc");
+  });
+
+  it("classifies property setters and deleters as properties", async () => {
+    const code = `
+class Foo:
+    def __init__(self):
+        self._value = 0
+
+    @property
+    def value(self):
+        return self._value
+
+    @value.setter
+    def value(self, new):
+        self._value = new
+
+    @value.deleter
+    def value(self):
+        del self._value
+`;
+
+    const result = await analyzeSource("pkg/foo.py", "Python", code, new Set(["pkg/foo.py"]));
+
+    const valueKinds = result.symbols.filter((s) => s.name === "value").map((s) => s.kind);
+    expect(valueKinds).toEqual(["property", "property", "property"]);
   });
 
   it("collects dependencies from import statements", async () => {

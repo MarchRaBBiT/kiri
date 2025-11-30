@@ -1,0 +1,241 @@
+{
+  "commands": {
+    "showPooledSystem": {
+      "bitwidth": 4,
+      "expects": -1,
+      "maxprefix": -1,
+      "maxseq": -1,
+      "minprefix": -1,
+      "name": "showPooledSystem",
+      "overall": 6,
+      "solution": [
+        {
+          "duration": 103,
+          "incremental": true,
+          "instances": [
+            {
+              "skolems": {
+                "$showPooledSystem_f": { "arity": 1, "data": [["File$0"]] },
+                "$showPooledSystem_p": { "arity": 1, "data": [["Pool$0"]] }
+              },
+              "values": {
+                "0": {},
+                "1": {},
+                "2": {},
+                "3": {},
+                "4": {},
+                "5": {},
+                "Analyzer$3": { "language": [], "backend": [] },
+                "Analyzer$4": { "language": [], "backend": [] },
+                "Analyzer$5": { "language": [], "backend": [] },
+                "Available$0": {},
+                "Backend$2": { "backendType": [["CompilerAPI$0"]], "pool": [] },
+                "Backend$3": { "backendType": [["LSP$0"]], "pool": [["Pool$0"]] },
+                "Backend$4": { "backendType": [], "pool": [] },
+                "Backend$5": { "backendType": [], "pool": [] },
+                "Client$4": { "language": [], "state": [] },
+                "Client$5": { "language": [], "state": [] },
+                "CompilerAPI$0": {},
+                "Dart$0": {},
+                "Failed$0": {},
+                "File$5": { "lockedBy": [], "lang": [] },
+                "InUse$0": {},
+                "Initializing$0": {},
+                "Java$0": {},
+                "LSP$0": {},
+                "PHP$0": {},
+                "Pool$5": { "clients": [], "maxSize": [], "language": [] },
+                "Swift$0": {},
+                "TreeSitter$0": {},
+                "TypeScript$0": {}
+              }
+            }
+          ],
+          "localtime": "2025-11-30T15:44:32.916502",
+          "timezone": "Asia/Tokyo",
+          "utctime": 1764485072916
+        }
+      ],
+      "source": "run showPooledSystem {\n    some p: Pool | #p.clients >= 2\n    some f: File | some f.lockedBy\n} for 6",
+      "type": "run"
+    },
+    "showMultiplePools": {
+      "bitwidth": 4,
+      "expects": -1,
+      "maxprefix": -1,
+      "maxseq": -1,
+      "minprefix": -1,
+      "name": "showMultiplePools",
+      "overall": 8,
+      "solution": [
+        {
+          "duration": 58,
+          "incremental": true,
+          "instances": [
+            {
+              "values": {
+                "0": {},
+                "1": {},
+                "2": {},
+                "3": {},
+                "4": {},
+                "5": {},
+                "6": {},
+                "Analyzer$7": { "language": [], "backend": [] },
+                "Available$0": {},
+                "Backend$6": { "backendType": [], "pool": [] },
+                "Backend$7": { "backendType": [], "pool": [] },
+                "Client$4": { "language": [], "state": [] },
+                "Client$5": { "language": [], "state": [] },
+                "Client$6": { "language": [], "state": [] },
+                "Client$7": { "language": [], "state": [] },
+                "CompilerAPI$0": {},
+                "Dart$0": {},
+                "Failed$0": {},
+                "File$3": { "lockedBy": [["Client$3"]], "lang": [["TypeScript$0"]] },
+                "File$4": { "lockedBy": [["Client$3"]], "lang": [["TypeScript$0"]] },
+                "File$5": { "lockedBy": [], "lang": [] },
+                "File$6": { "lockedBy": [], "lang": [] },
+                "File$7": { "lockedBy": [], "lang": [] },
+                "InUse$0": {},
+                "Initializing$0": {},
+                "Java$0": {},
+                "LSP$0": {},
+                "PHP$0": {},
+                "Pool$6": { "clients": [], "maxSize": [], "language": [] },
+                "Pool$7": { "clients": [], "maxSize": [], "language": [] },
+                "Swift$0": {},
+                "TreeSitter$0": {},
+                "TypeScript$0": {}
+              }
+            }
+          ],
+          "localtime": "2025-11-30T15:44:33.023220",
+          "timezone": "Asia/Tokyo",
+          "utctime": 1764485073023
+        }
+      ],
+      "source": "run showMultiplePools {\n    #Pool > 1\n    all p: Pool | #p.clients > 0\n} for 8",
+      "type": "run"
+    },
+    "PoolNeverOverflows": {
+      "bitwidth": 4,
+      "expects": -1,
+      "maxprefix": -1,
+      "maxseq": -1,
+      "minprefix": -1,
+      "name": "PoolNeverOverflows",
+      "overall": 10,
+      "source": "check PoolNeverOverflows for 10",
+      "type": "check"
+    },
+    "AvailableClientsNoLocks": {
+      "bitwidth": 4,
+      "expects": -1,
+      "maxprefix": -1,
+      "maxseq": -1,
+      "minprefix": -1,
+      "name": "AvailableClientsNoLocks",
+      "overall": 10,
+      "source": "check AvailableClientsNoLocks for 10",
+      "type": "check"
+    },
+    "FileLockConsistent": {
+      "bitwidth": 4,
+      "expects": -1,
+      "maxprefix": -1,
+      "maxseq": -1,
+      "minprefix": -1,
+      "name": "FileLockConsistent",
+      "overall": 10,
+      "source": "check FileLockConsistent for 10",
+      "type": "check"
+    },
+    "ConcurrentProcessing": {
+      "bitwidth": 4,
+      "expects": -1,
+      "maxprefix": -1,
+      "maxseq": -1,
+      "minprefix": -1,
+      "name": "ConcurrentProcessing",
+      "overall": 8,
+      "source": "check ConcurrentProcessing for 8",
+      "type": "check"
+    }
+  },
+  "coreMinimization": 2,
+  "inferPartialInstance": true,
+  "repeat": 1,
+  "sigs": {
+    "univ": { "builtin": true, "cardinality": "set", "name": "univ", "type": "{univ}" },
+    "Int": { "builtin": true, "cardinality": "set", "name": "Int", "type": "{Int}" },
+    "seq/Int": { "builtin": true, "cardinality": "set", "name": "seq/Int", "type": "{seq/Int}" },
+    "String": { "builtin": true, "cardinality": "set", "name": "String", "type": "{String}" },
+    "none": { "builtin": true, "cardinality": "set", "name": "none", "type": "{none}" },
+    "Language": { "cardinality": "none", "name": "Language", "type": "{Language}" },
+    "TypeScript": { "cardinality": "one", "name": "TypeScript", "type": "{TypeScript}" },
+    "Swift": { "cardinality": "one", "name": "Swift", "type": "{Swift}" },
+    "PHP": { "cardinality": "one", "name": "PHP", "type": "{PHP}" },
+    "Java": { "cardinality": "one", "name": "Java", "type": "{Java}" },
+    "Dart": { "cardinality": "one", "name": "Dart", "type": "{Dart}" },
+    "BackendType": { "cardinality": "none", "name": "BackendType", "type": "{BackendType}" },
+    "TreeSitter": { "cardinality": "one", "name": "TreeSitter", "type": "{TreeSitter}" },
+    "CompilerAPI": { "cardinality": "one", "name": "CompilerAPI", "type": "{CompilerAPI}" },
+    "LSP": { "cardinality": "one", "name": "LSP", "type": "{LSP}" },
+    "PoolState": { "cardinality": "none", "name": "PoolState", "type": "{PoolState}" },
+    "Available": { "cardinality": "one", "name": "Available", "type": "{Available}" },
+    "InUse": { "cardinality": "one", "name": "InUse", "type": "{InUse}" },
+    "Initializing": { "cardinality": "one", "name": "Initializing", "type": "{Initializing}" },
+    "Failed": { "cardinality": "one", "name": "Failed", "type": "{Failed}" },
+    "Client": {
+      "cardinality": "set",
+      "fields": {
+        "state": { "arity": 2, "name": "state", "type": "{Client->PoolState}" },
+        "language": { "arity": 2, "name": "language", "type": "{Client->Language}" }
+      },
+      "name": "Client",
+      "type": "{Client}"
+    },
+    "Pool": {
+      "cardinality": "set",
+      "fields": {
+        "clients": { "arity": 2, "name": "clients", "type": "{Pool->Client}" },
+        "maxSize": { "arity": 2, "name": "maxSize", "type": "{Pool->Int}" },
+        "language": { "arity": 2, "name": "language", "type": "{Pool->Language}" }
+      },
+      "name": "Pool",
+      "type": "{Pool}"
+    },
+    "Backend": {
+      "cardinality": "set",
+      "fields": {
+        "backendType": { "arity": 2, "name": "backendType", "type": "{Backend->BackendType}" },
+        "pool": { "arity": 2, "name": "pool", "type": "{Backend->Pool}" }
+      },
+      "name": "Backend",
+      "type": "{Backend}"
+    },
+    "Analyzer": {
+      "cardinality": "set",
+      "fields": {
+        "language": { "arity": 2, "name": "language", "type": "{Analyzer->Language}" },
+        "backend": { "arity": 2, "name": "backend", "type": "{Analyzer->Backend}" }
+      },
+      "name": "Analyzer",
+      "type": "{Analyzer}"
+    },
+    "File": {
+      "cardinality": "set",
+      "fields": {
+        "lang": { "arity": 2, "name": "lang", "type": "{File->Language}" },
+        "lockedBy": { "arity": 2, "name": "lockedBy", "type": "{File->Client}" }
+      },
+      "name": "File",
+      "type": "{File}"
+    }
+  },
+  "solver": "sat4j",
+  "symmetry": 20,
+  "timestamp": 1764485072767,
+  "unrolls": -1
+}

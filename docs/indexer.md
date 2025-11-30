@@ -10,7 +10,9 @@
    - **Swift**: `class`, `struct`, `protocol`, `enum`, `extension`, `func`, `init`, `property`
    - **PHP**: `class`, `interface`, `trait`, `function`, `method`, `property`, `constant`, `namespace` (pure PHPおよびHTML混在PHPの両方をサポート)
    - **Python**: `class`, `function`, `async function`, `property`, `staticmethod`, `classmethod`, `method`
-5. **依存解決**: TypeScript プラグイン（`tsconfig` の paths/alias、`package.json` exports、`pnpm-workspace`）、Swift (`import` 文解析)、Rust (`use`/`extern crate`/`mod` 解決)、Python (`import`/`from` 文解析) を基準にし、他言語プラグインは後続拡張とする。
+5. **依存解決**: TypeScript プラグイン（`tsconfig` の paths/alias、`package.json` exports、`pnpm-workspace`）、Swift (`import` 文解析)、Python (`import`/`from` 文解析) を基準にし、他言語プラグインは後続拡張とする。
+   - Python の `from X import *` はモジュール `X` までを依存として記録し、個々のシンボルは展開しない（`__all__` や動的代入に依存するため静的に解決しない）。
+   - Python の `from . import *` のようにモジュール名を伴わない相対 star import は AST から解決できないため依存を記録しない。
 6. **snippet 切り出し**: 原則シンボル境界を用い、特定できない場合のみ 120–200 行のスライディングウィンドウを適用する。
 7. **埋め込み生成（任意）**: snippet 単位で埋め込みを計算し `snippet_embedding` テーブルへ格納する。
 8. **履歴・blame 更新**: 差分ファイルのみ更新し、フル再計算は週次などバッチで実施する。

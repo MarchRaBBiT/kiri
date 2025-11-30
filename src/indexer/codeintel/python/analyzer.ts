@@ -94,7 +94,10 @@ function createPythonSymbolRecords(tree: Parser.Tree, content: string): SymbolRe
       node.parent?.type === "decorated_definition" ? node.parent.namedChildren : [];
     const isClsMethod = hasDecorator(decorators, ["classmethod"], content);
     const isStatic = hasDecorator(decorators, ["staticmethod"], content);
-    const isProp = hasDecorator(decorators, ["property"], content) || name === "__get__";
+    const isProp =
+      hasDecorator(decorators, ["property"], content) ||
+      hasDecorator(decorators, ["setter", "deleter"], content) ||
+      name === "__get__";
 
     let kind = "function";
     if (isMethod(node)) {

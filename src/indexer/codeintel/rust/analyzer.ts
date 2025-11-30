@@ -154,6 +154,9 @@ function createRustSymbolRecords(tree: Parser.Tree, content: string): SymbolReco
         addSymbol(node, "trait", getNameFromNode(node, content));
         break;
       case "impl_item":
+        // NOTE: `impl Trait for Type` の場合も `impl Type` に単純化される。
+        // これはシンボル検索での利便性を優先した意図的な設計。
+        // 完全な impl 情報が必要な場合は signature フィールドを参照のこと。
         addSymbol(
           node,
           "impl",
@@ -226,11 +229,83 @@ function resolveModuleLikePath(
   return null;
 }
 
-function resolveTarget(
-  rawTarget: string,
-  pathInRepo: string,
+type ResolveResult = { kind: "path" | "package"; target: string } | null;
+
+/**
+ * crate:: プレフィックスのパスを解決
+ */
+function resolveFromCrate(
+  segments: string[],
+  crateRoot: string,
   fileSet: Set<string>
-): { kind: "path" | "package"; target: string } | null {
+): ResolveResult {
+  const pathSegments = segments.slice(1); // drop "crate"
+  if (pathSegments.length === 0) return null;
+
+  const resolved = resolveModuleLikePath(crateRoot, pathSegments, fileSet);
+  return resolved ? { kind: "path", target: resolved } : null;
+}
+
+/**
+ * self:: プレフィックスのパスを解決
+ */
+function resolveFromSelf(segments: string[], baseDir: string, fileSet: Set<string>): ResolveResult {
+  const pathSegments = segments.slice(1); // drop "self"
+  if (pathSegments.length === 0) return null;
+
+  const resolved = resolveModuleLikePath(baseDir, pathSegments, fileSet);
+  return resolved ? { kind: "path", target: resolved } : null;
+}
+
+/**
+ * super:: プレフィックスのパスを解決（連続する super:: もサポート）
+ */
+function resolveFromSuper(
+  segments: string[],
+  baseDir: string,
+  fileSet: Set<string>
+): ResolveResult {
+  const pathSegments = [...segments.slice(1)]; // drop initial "super", copy to avoid mutation
+  // 最初の super:: で1レベル上がる
+  let parentDir = path.posix.dirname(baseDir);
+
+  // 連続する super:: を処理（super::super:: など）
+  while (pathSegments.length > 0 && pathSegments[0] === "super") {
+    parentDir = path.posix.dirname(parentDir);
+    pathSegments.shift();
+  }
+
+  if (pathSegments.length === 0) return null;
+
+  const resolved = resolveModuleLikePath(parentDir, pathSegments, fileSet);
+  return resolved ? { kind: "path", target: resolved } : null;
+}
+
+/**
+ * 相対パスまたは外部パッケージとして解決
+ */
+function resolveRelativeOrPackage(
+  segments: string[],
+  baseDir: string,
+  fileSet: Set<string>,
+  fallbackName: string
+): ResolveResult {
+  const resolved = resolveModuleLikePath(baseDir, segments, fileSet);
+  if (resolved) {
+    return { kind: "path", target: resolved };
+  }
+
+  const packageName = segments[0] ?? fallbackName;
+  return packageName ? { kind: "package", target: packageName } : null;
+}
+
+/**
+ * use/extern crate のターゲットパスを解決
+ *
+ * crate::/self::/super:: プレフィックスを処理し、
+ * ファイルパスまたは外部パッケージ名を返す。
+ */
+function resolveTarget(rawTarget: string, pathInRepo: string, fileSet: Set<string>): ResolveResult {
   const normalized = rawTarget.replace(/^::/, "").trim();
   if (!normalized) return null;
 
@@ -243,54 +318,20 @@ function resolveTarget(
   const baseDir = path.posix.dirname(pathInRepo);
   const crateRoot = findCrateSrcRoot(pathInRepo);
 
+  // プレフィックスに基づいて適切な解決関数を選択
   if (normalized.startsWith("crate::")) {
-    const segments = segmentsWithoutWildcard.slice(1); // drop "crate"
-    if (segments.length === 0) {
-      return null;
-    }
-    const resolved = resolveModuleLikePath(crateRoot, segments, fileSet);
-    if (resolved) {
-      return { kind: "path", target: resolved };
-    }
-    return null;
+    return resolveFromCrate(segmentsWithoutWildcard, crateRoot, fileSet);
   }
 
   if (normalized.startsWith("self::")) {
-    const segments = segmentsWithoutWildcard.slice(1); // drop "self"
-    if (segments.length === 0) {
-      return null;
-    }
-    const resolved = resolveModuleLikePath(baseDir, segments, fileSet);
-    if (resolved) {
-      return { kind: "path", target: resolved };
-    }
-    return null;
+    return resolveFromSelf(segmentsWithoutWildcard, baseDir, fileSet);
   }
 
   if (normalized.startsWith("super::")) {
-    const segments = segmentsWithoutWildcard.slice(1); // drop initial "super"
-    let parentDir = baseDir;
-    while (segments.length > 0 && segments[0] === "super") {
-      parentDir = path.posix.dirname(parentDir);
-      segments.shift();
-    }
-    if (segments.length === 0) {
-      return null;
-    }
-    const resolved = resolveModuleLikePath(parentDir, segments, fileSet);
-    if (resolved) {
-      return { kind: "path", target: resolved };
-    }
-    return null;
+    return resolveFromSuper(segmentsWithoutWildcard, baseDir, fileSet);
   }
 
-  const resolved = resolveModuleLikePath(baseDir, segmentsWithoutWildcard, fileSet);
-  if (resolved) {
-    return { kind: "path", target: resolved };
-  }
-
-  const packageName = segmentsWithoutWildcard[0] ?? normalized;
-  return packageName ? { kind: "package", target: packageName } : null;
+  return resolveRelativeOrPackage(segmentsWithoutWildcard, baseDir, fileSet, normalized);
 }
 
 function extractUsePaths(node: RustNode, content: string): string[] {
@@ -365,7 +406,7 @@ function extractUsePaths(node: RustNode, content: string): string[] {
 function extractExternCrateName(node: RustNode, content: string): string | null {
   const rawText = sliceContent(content, node);
   const match = rawText.match(/extern\s+crate\s+([A-Za-z0-9_]+)/);
-  return match ? match[1] : null;
+  return match?.[1] ?? null;
 }
 
 function extractModName(node: RustNode, content: string): string | null {
